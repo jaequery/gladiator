@@ -31,7 +31,8 @@ import {
 import { createHud } from './hud.ts'
 import { createInputController } from './input.ts'
 import { advance, alphaOf } from './loop.ts'
-import { createNetClient, resolveServerUrl } from './net.ts'
+import { CLIENT_MAP, CLIENT_MAP_HASH } from './map.ts'
+import { createNetClient, mustHoldStill, resolveServerUrl } from './net.ts'
 import { createRenderer, type Renderer } from './render.ts'
 
 const BUILD = import.meta.env.VITE_BUILD ?? 'dev'
@@ -46,6 +47,8 @@ const BUILD = import.meta.env.VITE_BUILD ?? 'dev'
  */
 export type DebugSnapshot = {
   readonly build: string
+  readonly mapName: string
+  readonly mapHash: string
   readonly tick: number
   readonly origin: Vec3
   readonly velocity: Vec3
@@ -67,6 +70,12 @@ function protocolOverride(search: string): number | undefined {
   if (raw === null) return undefined
   const parsed = Number.parseInt(raw, 10)
   return Number.isInteger(parsed) ? parsed : undefined
+}
+
+/** `?map=deadbeef` forces a map mismatch, the same way `?protocol=` does. */
+function mapHashOverride(search: string): string | undefined {
+  const raw = new URLSearchParams(search).get('map')
+  return raw !== null && /^[0-9a-f]{8}$/.test(raw) ? raw : undefined
 }
 
 function lerp(a: number, b: number, t: number): number {
@@ -133,10 +142,13 @@ function boot(): void {
   window.addEventListener('resize', () => renderer.resize())
 
   const override = protocolOverride(window.location.search)
+  const mapOverride = mapHashOverride(window.location.search)
   const net = createNetClient({
     url: resolveServerUrl(import.meta.env.VITE_SERVER_URL, window.location),
     build: BUILD,
+    mapHash: CLIENT_MAP_HASH,
     ...(override === undefined ? {} : { protocolOverride: override }),
+    ...(mapOverride === undefined ? {} : { mapHashOverride: mapOverride }),
   })
   net.connect()
 
@@ -159,6 +171,8 @@ function boot(): void {
   window.__gladiator = {
     snapshot: () => ({
       build: BUILD,
+      mapName: CLIENT_MAP.source.name,
+      mapHash: CLIENT_MAP_HASH,
       tick: state.tick,
       origin: originOf(state),
       velocity: velocityOf(state),
@@ -183,9 +197,10 @@ function boot(): void {
     const cmd = input.sample()
     const status = net.snapshot().status
 
-    if (status === 'idle' || status === 'connecting') {
+    if (mustHoldStill(status)) {
       // Hold the world still until we know whether there is a server to agree
-      // with.
+      // with — and stop it again if we turn out to be holding a different map
+      // than the one it is authoritative over. See `mustHoldStill`.
       //
       // This is not politeness, it is the bug this ticket was built to catch:
       // a socket takes a handful of frames to open, and a client that
@@ -216,6 +231,7 @@ function boot(): void {
 
     hud.update({
       build: BUILD,
+      mapName: CLIENT_MAP.source.name,
       renderer: renderer.description,
       fps,
       tick: state.tick,

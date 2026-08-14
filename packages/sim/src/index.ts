@@ -66,6 +66,53 @@ export {
 export type { CommandSource, Kernel, TickInputs, TickObserver } from './kernel.ts'
 
 export {
+  createMapWorld,
+  mapBrushPlanes,
+  mapCollisionBrush,
+  mapCollisionBrushes,
+  rampAxis,
+  rampDrop,
+  rampLowHeight,
+  rampSlopePlane,
+} from './map/collide.ts'
+export type { RampAxis } from './map/collide.ts'
+
+export { mapGeometry } from './map/geometry.ts'
+export type { MapGeometry, SurfaceGroup } from './map/geometry.ts'
+
+export {
+  hashMapSource,
+  loadMap,
+  mapHashOf,
+  parseBakedMap,
+  parseMapSource,
+} from './map/load.ts'
+export type { LoadedMap } from './map/load.ts'
+
+export {
+  MAP_FORMAT_VERSION,
+  MIN_SPAWN_HEADROOM,
+  MIN_SPAWN_SEPARATION,
+  RAMP_SLOPES,
+} from './map/schema.ts'
+export type {
+  BakedMap,
+  MapBoxBrush,
+  MapBrush,
+  MapLight,
+  MapProp,
+  MapRampBrush,
+  MapSource,
+  MapSpawn,
+  MapSurface,
+  RampRise,
+  RampSlope,
+} from './map/schema.ts'
+
+export { formatDiagnostics, validateMap } from './map/validate.ts'
+export type { MapDiagnostic } from './map/validate.ts'
+
+export {
   addScaledVec3,
   angleVectors,
   copyVec3,
@@ -106,6 +153,7 @@ export {
   MAX_CMDS_PER_BATCH,
   PROTOCOL_VERSION,
   decodeCmd,
+  describeMapMismatch,
   describeVersionMismatch,
   encodeCmd,
   parseClientMessage,
@@ -117,6 +165,7 @@ export type {
   ClientMessage,
   ServerFault,
   ServerHash,
+  ServerMapMismatch,
   ServerMessage,
   ServerVersionMismatch,
   ServerWelcome,

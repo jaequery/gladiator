@@ -17,6 +17,7 @@ import {
   type ServerMessage,
   type UserCmd,
   type WireCmd,
+  describeMapMismatch,
   describeVersionMismatch,
   encodeCmd,
   parseServerMessage,
@@ -30,15 +31,38 @@ export type NetStatus =
   | 'connecting'
   | 'live'
   | 'version-mismatch'
+  | 'map-mismatch'
   | 'closed'
   | 'error'
   | 'unconfigured'
+
+/**
+ * Whether the simulation must not advance in this state.
+ *
+ * Two reasons, and they are the same reason twice. Before the socket has
+ * opened, ticks the server never received would offset the two tick counters
+ * for the rest of the session. And after a *map* mismatch, every tick would be
+ * simulated against different geometry from the authoritative one, so the
+ * player would run into walls that are not there and shoot through walls that
+ * are. Neither is recoverable without a reload, so the honest thing is to stop
+ * and say so rather than to play a game that is already wrong.
+ *
+ * `version-mismatch` deliberately does not stop the world: the page can still
+ * be looked at, and the banner already says nothing will connect.
+ */
+export function mustHoldStill(status: NetStatus): boolean {
+  return status === 'idle' || status === 'connecting' || status === 'map-mismatch'
+}
 
 export type NetSnapshot = {
   readonly status: NetStatus
   /** One line, already written for a human. The HUD prints it verbatim. */
   readonly message: string
   readonly serverBuild: string | null
+  /** The map hash this client actually sent — which `mapHashOverride` changes. */
+  readonly mapHash: string
+  /** The map the server is authoritative over, once it has said. */
+  readonly serverMapHash: string | null
   readonly serverTick: number | null
   readonly serverHash: number | null
   readonly clientHash: number | null
@@ -78,8 +102,12 @@ export type NetOptions = {
   readonly socketFactory?: (url: string) => WebSocket
   /** Overridden by the tests; `performance.now` in a browser. */
   readonly now?: () => number
+  /** The hash of the map this page loaded. `map.ts`. */
+  readonly mapHash: string
   /** Sent instead of {@link PROTOCOL_VERSION}, to prove the mismatch path. */
   readonly protocolOverride?: number
+  /** Sent instead of {@link NetOptions.mapHash}, to prove the mismatch path. */
+  readonly mapHashOverride?: string
 }
 
 /**
@@ -106,6 +134,7 @@ export function createNetClient(options: NetOptions): NetClient {
   const now = options.now ?? (() => performance.now())
   const socketFactory = options.socketFactory ?? ((url: string) => new WebSocket(url))
   const protocol = options.protocolOverride ?? PROTOCOL_VERSION
+  const mapHash = options.mapHashOverride ?? options.mapHash
 
   // Ring buffers, so a session that runs for an hour costs the same as one that
   // runs for a minute.
@@ -123,6 +152,7 @@ export function createNetClient(options: NetOptions): NetClient {
       ? 'VITE_SERVER_URL is not set for this deploy, so there is no server to talk to.'
       : 'not connected yet'
   let serverBuild: string | null = null
+  let serverMapHash: string | null = null
   let serverTick: number | null = null
   let serverHash: number | null = null
   let clientHash: number | null = null
@@ -147,8 +177,16 @@ export function createNetClient(options: NetOptions): NetClient {
 
     if (parsed.t === 'welcome') {
       serverBuild = parsed.build
+      serverMapHash = parsed.mapHash
       status = 'live'
-      message = `connected to build ${parsed.build}, protocol ${parsed.protocol}`
+      message = `connected to build ${parsed.build}, protocol ${parsed.protocol}, arena ${parsed.mapHash}`
+      return
+    }
+
+    if (parsed.t === 'map_mismatch') {
+      serverMapHash = parsed.serverMapHash
+      status = 'map-mismatch'
+      message = describeMapMismatch(parsed)
       return
     }
 
@@ -198,7 +236,7 @@ export function createNetClient(options: NetOptions): NetClient {
       }
 
       socket.addEventListener('open', () => {
-        socket?.send(JSON.stringify({ t: 'hello', protocol, build: options.build }))
+        socket?.send(JSON.stringify({ t: 'hello', protocol, build: options.build, mapHash }))
       })
       socket.addEventListener('message', (event: MessageEvent) => {
         if (typeof event.data === 'string') onServerMessage(event.data)
@@ -206,13 +244,13 @@ export function createNetClient(options: NetOptions): NetClient {
       socket.addEventListener('error', () => {
         // Browsers deliberately give no detail here, to avoid leaking whether a
         // host exists. Say what we can and let `close` add the code.
-        if (status === 'version-mismatch') return
+        if (status === 'version-mismatch' || status === 'map-mismatch') return
         status = 'error'
         message = `the connection to ${options.url} failed`
       })
       socket.addEventListener('close', (event: CloseEvent) => {
         // A mismatch closes the socket on purpose; keep the useful message.
-        if (status === 'version-mismatch') return
+        if (status === 'version-mismatch' || status === 'map-mismatch') return
         status = 'closed'
         message = `disconnected (code ${event.code}${event.reason === '' ? '' : `: ${event.reason}`})`
       })
@@ -255,6 +293,8 @@ export function createNetClient(options: NetOptions): NetClient {
       status,
       message,
       serverBuild,
+      mapHash,
+      serverMapHash,
       serverTick,
       serverHash,
       clientHash,

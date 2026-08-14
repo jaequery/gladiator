@@ -20,6 +20,7 @@ Vocabulary is in [`CONTEXT.md`](./CONTEXT.md). Physics numbers are in
 | `pnpm run test`      | Vitest, once                                           |
 | `pnpm run build`     | Vite (client) and esbuild (server)                     |
 | `pnpm run guardrails`| proves the simulation boundary rejects violations      |
+| `pnpm run map:bake`  | compiles `maps/*.ts` to `maps/baked/*.json` (`--check` verifies) |
 | `pnpm run ci`        | all five, in that order — what CI runs                 |
 | `pnpm run e2e`       | the browser smoke test — needs Chromium, own CI job    |
 
@@ -39,6 +40,12 @@ Vocabulary is in [`CONTEXT.md`](./CONTEXT.md). Physics numbers are in
 `sim` and `bot` are source-only. Their `exports` point straight at `./src/*.ts`
 and there is no `dist`, so there is exactly one resolution condition and nothing
 for `bundler` and `NodeNext` to disagree about.
+
+Two directories belong to no package and ship with neither build: `maps/` (the
+authored maps and their baked artifacts) and `tools/` (the baker). Both are
+typechecked by the root `tsconfig.json` and linted with Node globals; both may
+import `@gladiator/sim`, which is why it is a devDependency of the root
+`package.json`.
 
 ---
 
@@ -168,11 +175,12 @@ code that owns them — `GRAVITY`, `RUN_SPEED` and `JUMP_VELOCITY` in
 `pmove/index.ts`, friction's two in `pmove/friction.ts`, acceleration's four in
 `pmove/accelerate.ts`; the player bounding box is `bbox.ts`; the collision
 constants — `OVERCLIP`, `STEP_SIZE`, `MIN_WALK_NORMAL`, the trace epsilon — are
-`slidemove.ts` and `trace.ts`; angles are angle units, defined in `usercmd.ts`;
-sine and cosine are `trig.ts`. Everything else imports rather than restating.
-Two names for one number is the drift everything else in this file exists to
-prevent, so if you find yourself adding a `constants.ts`, put the constant next
-to the code that owns it instead.
+`slidemove.ts` and `trace.ts`; the map's rules — the ramp gradients, the spawn
+headroom and separation minima — are `map/schema.ts`; angles are angle units,
+defined in `usercmd.ts`; sine and cosine are `trig.ts`. Everything else imports
+rather than restating. Two names for one number is the drift everything else in
+this file exists to prevent, so if you find yourself adding a `constants.ts`,
+put the constant next to the code that owns it instead.
 
 There is exactly **one** world: `GameState`/`tick()`. The walking skeleton's
 `PlayerState`/`pmove(state, cmd)` stub is gone, and the deployed client and
@@ -201,14 +209,52 @@ and measured in `pmove/pmove.test.ts`.
 trace) and `slidemove.ts` (`SlideMove`, `StepSlideMove`, the ground trace) are
 the layer `pmove` stands on. `MoveBody` is the shape a body has to be to be
 moved and `CollisionWorld` is level data loaded once; nothing in there touches
-`GameState`. `arena.ts` holds the one placeholder world until a real map format
-lands. Numbers and reasoning: `docs/physics-spec.md` §2.
+`GameState`. `arena.ts` holds the world the kernel defaults to — see the note
+at the end of **Maps** for why that is not a baked map. Numbers and reasoning:
+`docs/physics-spec.md` §2.
 
 They mutate in place and reuse module-level scratch, for the same reason and
 under the same guarantee as `hashState` — single-threaded and synchronous, with
 `await` a lint error in this package. Two consequences worth knowing before you
 call them: a `TraceResult` may not alias a trace's `start` or `end`, and a trace
 may not be interleaved with another query on the same world.
+
+### Maps
+
+`packages/sim/src/map/`. Numbers and reasoning: `docs/physics-spec.md` §4.
+
+Maps are hand-authored TypeScript under `maps/`, compiled by `pnpm map:bake` to
+JSON in `maps/baked/`, and loaded by both the client and the server from the
+committed artifact — `maps/baked/*.json` is in the repository on purpose, so a
+build needs no bake step in front of it. A test re-bakes in memory and fails if
+what is committed is stale.
+
+**Visual geometry is derived from the collision brushes, never authored beside
+them.** One brush list, two consumers: `map/collide.ts` makes trace structures
+out of it and `map/geometry.ts` cuts render polygons out of the *same planes*.
+So what you can walk on is what you can see by construction, and the two named
+escape hatches — `nonSolid` (drawn, not collided) and `noRender` (collided, not
+drawn) — are the only way to separate them, both visible in a diff.
+
+If you are adding a rule about what a map may contain, it goes in
+`map/validate.ts`, inside the sim. A rule that lived in `tools/` would protect
+only maps that went through the baker.
+
+Client and server exchange `mapHash` in the handshake and refuse the session if
+it differs, because the client deploys to Vercel and the server to Fly and
+never at the same instant. `PROTOCOL_VERSION` covers the message shapes; the
+map hash covers the world they describe.
+
+**Nothing simulates a baked map yet, and that is staged rather than forgotten.**
+`packages/sim` cannot import `maps/` — `rootDir` is `./src`, and the package has
+no filesystem — so the kernel's default world is the hand-written brush world in
+`arena.ts`, which is also what the golden replay runs in and what the renderer
+draws. The client and the server load `testbed`, verify its hash and exchange
+it, and then tick `SKELETON_ARENA`. Wiring the loaded map through is one line in
+each once there is something that draws it: the renderer is GLAD-0IDR6J and the
+arena worth playing in is GLAD-B8DI4J. Until then, moving the simulation onto a
+map the renderer does not draw would trade a cosmetic gap for players walking
+into invisible walls.
 
 ### The golden replay
 

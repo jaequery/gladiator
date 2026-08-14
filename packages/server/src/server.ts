@@ -21,7 +21,8 @@ import { WebSocketServer, type WebSocket } from 'ws'
 import type { ServerConfig } from './config.ts'
 import { createJitterProbe, type JitterProbe } from './jitter.ts'
 import { createOriginPolicy } from './origin.ts'
-import { applyFrame, createSession, type SessionState } from './session.ts'
+import { SERVER_MAP, SERVER_MAP_HASH } from './map.ts'
+import { applyFrame, createSession, type ServerIdentity, type SessionState } from './session.ts'
 
 /** How often to ping an idle socket, to notice a peer that has gone away. */
 const HEARTBEAT_MS = 20_000
@@ -57,6 +58,10 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
   const log = options.log ?? ((line: string) => console.log(line))
   const jitter = options.jitter ?? createJitterProbe()
   const isOriginAllowed = createOriginPolicy(config)
+  // Which commit and which world. Both are fixed for the life of the process:
+  // the map is bundled, so a server cannot start holding one map and finish
+  // holding another.
+  const identity: ServerIdentity = { build: config.build, mapHash: SERVER_MAP_HASH }
   const startedAtMs = Date.now()
 
   const connections = new Map<WebSocket, Connection>()
@@ -67,6 +72,9 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
         ok: true,
         build: config.build,
         protocol: PROTOCOL_VERSION,
+        // Served so that "is the client on the right arena" is answerable with
+        // curl, without opening a socket and reading a welcome frame.
+        map: { name: SERVER_MAP.source.name, hash: SERVER_MAP_HASH },
         uptimeSeconds: Math.round((Date.now() - startedAtMs) / 1000),
         sessions: connections.size,
         // Served, not just logged: the p99 on the machine that is actually
@@ -133,7 +141,7 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
         socket.close(4002, 'binary frame')
         return
       }
-      const step = applyFrame(connection.session, String(data), config.build)
+      const step = applyFrame(connection.session, String(data), identity)
       connection.session = step.session
       for (const reply of step.replies) send(socket, reply)
       if (step.close !== undefined) socket.close(step.close.code, step.close.reason)

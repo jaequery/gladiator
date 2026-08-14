@@ -16,6 +16,7 @@ messages. Most of them are still to be written:
 | 1.x | `pmove`: friction, acceleration, snapping     | **below**    |
 | 2.x | Tracing: swept AABB, `SlideMove`, step-up     | **below**    |
 | 3.x | Weapons: rockets, splash, railgun             | GLAD-0QWRYK  |
+| 4.x | The map format, its baker and its validator   | **below**    |
 
 ---
 
@@ -659,3 +660,154 @@ impulses up to the clamp, and asserts after every tick that it is penetrating
 solid geometry by no more than **0.03 qu**. The geometry, the seed, the
 iteration count and the tolerance are all in the repository, because a fuzz test
 whose inputs are not committed is a different test every time it runs.
+
+---
+
+## §4 Maps
+
+The format level geometry is authored in, the tool that compiles it, and the
+rules that tool refuses to compile. The arena itself is GLAD-B8DI4J; this
+section is the machinery under it.
+
+Code: `packages/sim/src/map/` (schema, collision bridge, derived geometry,
+validator, loader), `maps/` (authoring helpers and the maps themselves),
+`tools/bake-map.ts` (the baker).
+
+### §4.1 The format
+
+A map is a list of **brushes** — axis-aligned boxes and constrained ramps —
+plus the spawns, surfaces, lights and props that hang off them. It is
+hand-authored in TypeScript under `maps/`, compiled to JSON by `pnpm map:bake`,
+and loaded identically by a browser and by a headless Node process.
+
+Quake frame, Quake units, **whole numbers**. Integers are exact in binary
+floating point, so every plane distance a brush produces is exact too and two
+peers derive identical planes by arithmetic rather than by both rounding the
+same way. It is also what every brush-based level editor since 1996 has snapped
+to. The bake rejects a fractional coordinate.
+
+A spawn's `origin` is the player origin, which is **at the feet** (§0.2), so a
+spawn standing on a floor whose top is at `z = 0` is written `z = 0`. Its `yaw`
+is in angle units; `maps/helpers.ts` takes degrees from the author and converts
+once, at authoring time.
+
+### §4.2 Visual geometry is derived, not authored
+
+**One brush list, two consumers.** The sim turns it into trace structures
+(`map/collide.ts`); the client turns it into merged render meshes
+(`map/geometry.ts`) — from the *same planes*, by clipping a large quadrilateral
+on each plane against all the others, which is Quake's winding algorithm.
+
+So what you can walk on is what you can see **by construction**. The bug where a
+wall looks solid and is not, or is solid and looks like air, is a shape the
+format cannot express.
+
+Two escape hatches exist, both named, both visible in a diff:
+
+| Flag       | Effect                                          |
+| ---------- | ----------------------------------------------- |
+| `nonSolid` | drawn, not collided — glass, a decorative grate  |
+| `noRender` | collided, not drawn — Quake's clip brush         |
+
+Decoration that must affect neither goes in `props[]`, a list of glTF references
+the sim never parses. That valve matters: the moment an author cannot add a
+torch bracket without also adding collision, they start reaching for `nonSolid`
+on real geometry, and the one brush list stops describing the world.
+
+Geometry comes out in the **Quake frame**, like everything else the sim
+produces; `QUAKE_TO_ENGINE` is applied once, by the renderer (§0.3). Its
+determinant is `+1`, so triangle winding survives the conversion.
+
+### §4.3 Ramps
+
+A ramp is an AABB with its top face replaced by one analytic sloped plane. The
+plane meets the box's top face at the **high** end of the run and descends from
+there; the box below it is the plinth, and it wants to be sunk into whatever the
+ramp stands on — a ramp that stops exactly at floor level has a zero-height
+vertical face at its foot, and a body running at it flush with the ground clips
+against *that* instead of walking up the slope.
+
+Exactly two gradients, written as `rise:run`:
+
+| Slope | Angle   | Unit normal `z`      | Why this one                              |
+| ----- | ------- | -------------------- | ----------------------------------------- |
+| `1:1` | 45°     | `1/√2` = 0.7071      | a hair over `MIN_WALK_NORMAL`: the steepest thing a player can walk up |
+| `1:2` | 26.57°  | `2/√5` = 0.8944      | the gentle ramp you take at full speed    |
+
+Both have integer normals before normalisation — `(-1, 0, 1)` and `(-1, 0, 2)` —
+so the unit normal is whatever `Math.sqrt` says it is on both peers rather than
+whatever a human rounded it to.
+
+Arbitrary angles are deliberately unavailable. Every one of them is a new
+interaction with step-up, with `clipVelocity` and with the walkable-normal
+threshold, and an author reaching for 31 degrees is reaching for a physics
+decision they cannot see the consequences of.
+
+The bake rejects a box too shallow to hold its own slope, with the arithmetic in
+the message.
+
+### §4.4 What the bake refuses
+
+| Constant | Value | Source |
+| -------- | ----- | ------ |
+| `MIN_SPAWN_HEADROOM` | 96 qu | `packages/sim/src/map/schema.ts` |
+| `MIN_SPAWN_SEPARATION` | 512 qu | |
+
+Every rule below is one that, unchecked, produces a bug that only shows up in a
+live round. Diagnostics carry a stable `code`, a path into the map and a
+sentence the author reads; the bake reports all of them at once rather than the
+first.
+
+| Code | Refused because |
+| ---- | --------------- |
+| `spawn-in-solid` | a player standing there is inside geometry — measured with `boxPenetration` and the real player box, not a point |
+| `spawn-headroom` | under `MIN_SPAWN_HEADROOM` of clear space above the feet: the 56-unit player plus 40 of ceiling, because everyone jumps on the first frame of a round |
+| `spawn-separation` | two spawns closer than `MIN_SPAWN_SEPARATION`, about two seconds of running |
+| `inverted-extents` | `maxs` not strictly greater than `mins` on some axis — a brush that is not there |
+| `unreferenced-surface` | a surface no brush uses; dead content is how a map file stops describing the map |
+| `unknown-surface` | a brush naming a surface that does not exist |
+| `ramp-too-shallow` | the slope runs out before the end of the box |
+| `off-grid` | a coordinate that is not a whole Quake unit (§4.1) |
+| `too-few-spawns` | fewer than two: it is a duel map |
+| `invisible-and-intangible` | both `nonSolid` and `noRender`, which does nothing at all |
+
+The validator lives in `packages/sim`, not in `tools/`, because it is the sim
+that has to survive the result. A rule enforced by the baker alone protects only
+maps that went through the baker.
+
+Two passes, and the order matters: structural rules first, then the geometric
+ones. `boxBrush` throws on inverted extents, and a stack trace out of the
+collision code is a much worse error message than
+`brushes[7]: maxs.x (64) is not greater than mins.x (128)`.
+
+### §4.5 The map hash
+
+`BakedMap.hash` is eight lowercase hex digits: FNV-1a over a canonical encoding
+of the map's content, raw IEEE 754 bytes, strings length-prefixed so that
+`["ab", "c"]` and `["a", "bc"]` cannot collide. `MAP_FORMAT_VERSION` is folded
+in first.
+
+It is **recomputed** at load and checked against what the artifact claims. A
+hash trusted from the file it describes proves nothing — it would agree with a
+hand-edited artifact, which is exactly the case worth catching.
+
+The client and the server exchange it in the handshake (`ClientHello.mapHash`,
+`ServerWelcome.mapHash`) and the server refuses the session with a
+`map_mismatch` frame and close code 4004 if they differ. `PROTOCOL_VERSION`
+covers the shape of the messages; this covers the world they describe, and a map
+can change without the protocol changing.
+
+The failure it exists for is a deploy race: the client ships to Vercel and the
+server to Fly, never at the same instant, so for a minute or two after every
+deploy a browser holding yesterday's bundle can open a socket to today's server.
+Without this check the two simulate different worlds from identical inputs, and
+every symptom of that — a player standing in a wall, a rocket that hits nothing,
+a state hash that will not settle — points at the netcode.
+
+### §4.6 The baked artifacts are committed
+
+`maps/baked/*.json` is in the repository, which is what lets `pnpm build` and a
+Vercel deploy work with no bake step in front of them. `tools/bake-map.test.ts`
+re-bakes every map in memory and fails if what is committed is stale, so the
+tree cannot hold a map nobody can reproduce. `pnpm map:bake --check` is the same
+question from the command line.

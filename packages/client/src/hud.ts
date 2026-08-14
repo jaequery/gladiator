@@ -15,6 +15,9 @@ import type { NetSnapshot } from './net.ts'
 
 export type HudModel = {
   readonly build: string
+  /** Which arena this page loaded. Its hash comes from {@link NetSnapshot}, so
+   *  the HUD shows the hash that was actually sent. */
+  readonly mapName: string
   readonly renderer: string
   readonly fps: number
   readonly tick: number
@@ -56,6 +59,7 @@ export function createHud(root: HTMLElement): Hud {
   panel.append(title)
 
   const buildValue = field(panel, 'build', 'build')
+  const mapValue = field(panel, 'map', 'arena')
   const rendererValue = field(panel, 'renderer', 'renderer')
   const rateValue = field(panel, 'rate', 'fps / tickrate')
   const tickValue = field(panel, 'tick', 'tick')
@@ -86,6 +90,14 @@ export function createHud(root: HTMLElement): Hud {
       clientValue.textContent = formatHash(model.clientHash)
 
       const { net } = model
+      // The server's arena beside ours, so "are we on the same map" is a
+      // question the page answers rather than one the console has to.
+      const ours = `${model.mapName} ${net.mapHash}`
+      mapValue.textContent =
+        net.serverMapHash === null || net.serverMapHash === net.mapHash
+          ? ours
+          : `${ours} · server has ${net.serverMapHash}`
+
       serverValue.textContent =
         net.serverHash === null ? '—' : `${formatHash(net.serverHash)} @ ${net.serverTick}`
 
@@ -103,10 +115,14 @@ export function createHud(root: HTMLElement): Hud {
       statusValue.textContent = net.message
       statusValue.dataset['state'] = net.status
 
-      // A version mismatch is the one thing worth interrupting the player for:
+      // A version or map mismatch is worth interrupting the player for:
       // nothing they do will work until they reload.
       const shout =
-        net.status === 'version-mismatch' || net.status === 'unconfigured' ? net.message : null
+        net.status === 'version-mismatch' ||
+        net.status === 'map-mismatch' ||
+        net.status === 'unconfigured'
+          ? net.message
+          : null
       banner.hidden = shout === null
       banner.textContent = shout ?? ''
 

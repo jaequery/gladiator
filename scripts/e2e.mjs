@@ -293,6 +293,30 @@ try {
     (bannerText ?? '').includes(`build ${BUILD}`) && (bannerText ?? '').includes('reload'),
     bannerText ?? '(empty)',
   )
+
+  // --- the map mismatch path ----------------------------------------------
+  // The deploy race: Vercel ships the client and Fly ships the server, and for
+  // a minute or two after either one, a page can be holding a different arena
+  // than the server is authoritative over. `?map=` forces that state.
+  await tab.goto(`${STATIC_ORIGIN}/?map=deadbeef`, { waitUntil: 'load' })
+  const mapShown = await waitFor('the map-mismatch banner', async () => {
+    const text = await banner.textContent()
+    return text !== null && text.includes('deadbeef')
+  })
+  const mapBanner = await banner.textContent()
+  check('a map mismatch puts a readable message on screen', mapShown, mapBanner ?? '(empty)')
+  check(
+    'the message names both arenas and says to reload',
+    (mapBanner ?? '').includes('deadbeef') && (mapBanner ?? '').includes('reload'),
+    mapBanner ?? '(empty)',
+  )
+
+  const refused = await tab.evaluate(() => window.__gladiator?.snapshot())
+  check(
+    'a refused client does not simulate a world nobody is authoritative over',
+    refused !== undefined && refused.net.status === 'map-mismatch' && refused.tick === 0,
+    `status ${refused?.net.status ?? '(none)'}, tick ${refused?.tick ?? '(none)'}`,
+  )
 } finally {
   await browser?.close()
   staticServer.close()

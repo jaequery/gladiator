@@ -1,0 +1,61 @@
+{
+  "format": 1,
+  "hash": "89890906",
+  "map": {
+    "name": "testbed",
+    "title": "Testbed",
+    "author": "Gladiator",
+    "surfaces": [
+      { "name": "floor", "material": "concrete", "tint": [0.32, 0.33, 0.35] },
+      { "name": "wall", "material": "concrete", "tint": [0.24, 0.25, 0.28] },
+      { "name": "metal", "material": "metal", "tint": [0.45, 0.42, 0.38] },
+      { "name": "glass", "material": "glass", "tint": [0.55, 0.7, 0.8] },
+      { "name": "clip", "material": "clip", "tint": [1, 0, 1] }
+    ],
+    "brushes": [
+      { "kind": "box", "surface": "floor", "mins": [-576, -576, -64], "maxs": [576, 576, 0] },
+      { "kind": "box", "surface": "wall", "mins": [-576, -576, 512], "maxs": [576, 576, 576] },
+      { "kind": "box", "surface": "wall", "mins": [512, -576, -64], "maxs": [576, 576, 576] },
+      { "kind": "box", "surface": "wall", "mins": [-576, -576, -64], "maxs": [-512, 576, 576] },
+      { "kind": "box", "surface": "wall", "mins": [-576, 512, -64], "maxs": [576, 576, 576] },
+      { "kind": "box", "surface": "wall", "mins": [-576, -576, -64], "maxs": [576, -512, 576] },
+      {
+        "kind": "ramp",
+        "surface": "metal",
+        "mins": [0, -192, -64],
+        "maxs": [128, -64, 128],
+        "rise": "+x",
+        "slope": "1:1"
+      },
+      {
+        "kind": "ramp",
+        "surface": "metal",
+        "mins": [-192, 0, -64],
+        "maxs": [-64, 192, 96],
+        "rise": "-y",
+        "slope": "1:2"
+      },
+      { "kind": "box", "surface": "wall", "mins": [-64, -64, 0], "maxs": [64, 64, 256] },
+      { "kind": "box", "surface": "floor", "mins": [256, 128, 0], "maxs": [320, 384, 16] },
+      { "kind": "box", "surface": "floor", "mins": [320, 128, 0], "maxs": [384, 384, 32] },
+      { "kind": "box", "surface": "floor", "mins": [384, 128, 0], "maxs": [448, 384, 48] },
+      {
+        "kind": "box",
+        "surface": "glass",
+        "mins": [200, -8, 0],
+        "maxs": [328, 8, 128],
+        "nonSolid": true
+      },
+      {
+        "kind": "box",
+        "surface": "clip",
+        "mins": [-328, -8, 0],
+        "maxs": [-200, 8, 192],
+        "noRender": true
+      }
+    ],
+    "spawns": [{ "origin": [-384, -384, 0], "yaw": 8192 }, { "origin": [384, 448, 0], "yaw": 40960 }],
+    "lights": [{ "origin": [0, 0, 448], "color": [1, 0.95, 0.85], "intensity": 1, "radius": 1200 }],
+    "props": [{ "model": "props/brazier.glb", "origin": [0, -448, 0], "yaw": 16384, "scale": 1 }]
+  }
+}

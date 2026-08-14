@@ -1,13 +1,21 @@
 /**
  * The arena the simulation runs in — a box with a floor and four walls.
  *
- * **A placeholder, and a deliberately small one.** Real level geometry arrives
- * as data: a map format and its baker (GLAD-G2M8QQ), then an actual duel arena
- * (GLAD-B8DI4J). What lives here is the walking skeleton's world expressed as
- * *brushes* rather than as the `Math.min`/`Math.max` clamp it used to be, so
- * that the movement code has real geometry to slide along, step up and land on
- * from the day it lands — and so that swapping in a baked map later is a
- * different `CollisionWorld`, not a different code path.
+ * **A placeholder, and a deliberately small one.** What lives here is the
+ * walking skeleton's world expressed as *brushes* rather than as the
+ * `Math.min`/`Math.max` clamp it used to be, so that the movement code has real
+ * geometry to slide along, step up and land on from the day it lands — and so
+ * that swapping in a baked map later is a different `CollisionWorld`, not a
+ * different code path.
+ *
+ * It survives the map format landing (GLAD-G2M8QQ) for two reasons. The narrow
+ * one: `packages/sim` cannot import `maps/` — `rootDir` is `./src` and the
+ * package has no filesystem — so the kernel's default world and the golden
+ * replay's world have to be written in source, here. The wider one: this is
+ * still what the renderer draws. The client and the server load `testbed` and
+ * exchange its hash, and tick this; moving the simulation onto a map nothing
+ * draws would trade a cosmetic gap for invisible walls. The renderer is
+ * GLAD-0IDR6J and the arena worth playing in is GLAD-B8DI4J.
  *
  * Sized to match what the renderer already draws: a 2048x2048 floor with its
  * surface at `z = 0`, walls tall enough that a jump cannot clear them.

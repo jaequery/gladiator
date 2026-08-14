@@ -16,6 +16,7 @@ import {
   type ServerMessage,
   type UserCmd,
   createSkeletonState,
+  describeMapMismatch,
   describeVersionMismatch,
   encodeCmd,
   findPlayer,
@@ -27,10 +28,26 @@ import { WebSocket } from 'ws'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { readConfig } from './config.ts'
+import { SERVER_MAP_HASH } from './map.ts'
 import { startServer, type GladiatorServer } from './server.ts'
-import { CLOSE_VERSION_MISMATCH } from './session.ts'
+import { CLOSE_MAP_MISMATCH, CLOSE_VERSION_MISMATCH } from './session.ts'
 
 const ALLOWED_ORIGIN = 'http://localhost:5173'
+
+/**
+ * The frame a real client opens with. The map hash comes from the server's own
+ * module, because a test that hard-coded it would go green on the day the two
+ * stopped agreeing.
+ */
+function helloFrame(over: Record<string, unknown> = {}): string {
+  return JSON.stringify({
+    t: 'hello',
+    protocol: PROTOCOL_VERSION,
+    build: 'test',
+    mapHash: SERVER_MAP_HASH,
+    ...over,
+  })
+}
 
 let running: GladiatorServer | null = null
 
@@ -132,7 +149,7 @@ describe('protocol version mismatch', () => {
     })
 
     socket.send(
-      JSON.stringify({ t: 'hello', protocol: PROTOCOL_VERSION + 1, build: 'a-stale-client' }),
+      helloFrame({ protocol: PROTOCOL_VERSION + 1, build: 'a-stale-client' }),
     )
     const code = await new Promise<number>((resolve) => socket.once('close', resolve))
 
@@ -145,6 +162,57 @@ describe('protocol version mismatch', () => {
     const text = describeVersionMismatch(mismatch)
     expect(text).toContain('server is on build dev')
     expect(text).toContain('reload')
+  })
+})
+
+describe('map mismatch', () => {
+  it('refuses to play with a client holding a different arena', async () => {
+    // The deploy race this exists for: Vercel ships the client and Fly ships
+    // the server, never at the same instant. A browser holding yesterday's map
+    // and a server holding today's would simulate different worlds from
+    // identical inputs — and every symptom of that points at the netcode.
+    const server = await start()
+    const socket = connect(server.port)
+    await new Promise((resolve) => socket.once('open', resolve))
+
+    const frames: ServerMessage[] = []
+    socket.on('message', (data) => {
+      const parsed = parseServerMessage(String(data))
+      if (parsed !== null) frames.push(parsed)
+    })
+
+    socket.send(helloFrame({ mapHash: '00000000' }))
+    const code = await new Promise<number>((resolve) => socket.once('close', resolve))
+
+    expect(code).toBe(CLOSE_MAP_MISMATCH)
+    const mismatch = frames.find((frame) => frame.t === 'map_mismatch')
+    if (mismatch?.t !== 'map_mismatch') throw new Error('expected a map_mismatch frame')
+    expect(mismatch.serverMapHash).toBe(SERVER_MAP_HASH)
+    expect(mismatch.clientMapHash).toBe('00000000')
+    expect(describeMapMismatch(mismatch)).toContain('reload')
+  })
+
+  it('welcomes a client on the same arena, and names it in the welcome', async () => {
+    const server = await start()
+    const socket = connect(server.port)
+    await new Promise((resolve) => socket.once('open', resolve))
+
+    const welcome = await new Promise<ServerMessage | null>((resolve) => {
+      socket.once('message', (data) => resolve(parseServerMessage(String(data))))
+      socket.send(helloFrame())
+    })
+    socket.close()
+
+    if (welcome?.t !== 'welcome') throw new Error('expected a welcome frame')
+    expect(welcome.mapHash).toBe(SERVER_MAP_HASH)
+  })
+
+  it('serves the map it is authoritative over on /healthz', async () => {
+    const server = await start()
+    const response = await fetch(`http://127.0.0.1:${server.port}/healthz`)
+    const body = (await response.json()) as { map?: { name?: string; hash?: string } }
+    expect(body.map?.name).toBe('testbed')
+    expect(body.map?.hash).toBe(SERVER_MAP_HASH)
   })
 })
 
@@ -188,7 +256,7 @@ describe('cross-environment hash agreement', () => {
         socket.on('close', () => reject(new Error('socket closed before the run finished')))
       })
 
-      socket.send(JSON.stringify({ t: 'hello', protocol: PROTOCOL_VERSION, build: 'test' }))
+      socket.send(helloFrame())
 
       // Simulate locally exactly as the browser does, and send the commands on
       // in frame-sized batches — the same shape of traffic a 60 Hz client makes.
@@ -246,9 +314,7 @@ describe('cross-environment hash agreement', () => {
               }
             })
             socket.once('open', () => {
-              socket.send(
-                JSON.stringify({ t: 'hello', protocol: PROTOCOL_VERSION, build: 'test' }),
-              )
+              socket.send(helloFrame())
               socket.send(
                 JSON.stringify({
                   t: 'cmds',
