@@ -281,6 +281,17 @@ If you are adding a rule about what a map may contain, it goes in
 `map/validate.ts`, inside the sim. A rule that lived in `tools/` would protect
 only maps that went through the baker.
 
+The biggest of those rules is **reachability**: every surface a player can stand
+on has to be one they can get to from a spawn, by walking or by one of the four
+climbs the movement makes — 18 stepped, 48 jumped, 166 rocket-jumped, 395 with a
+jump and a rocket. `map/reachability.ts` samples the map with the real player
+box and the real trace and works out which; `docs/physics-spec.md` §5 is where
+the numbers come from and what the analysis does and does not prove. Two things
+about it are load-bearing and non-obvious: a sample is *dropped* on to a surface
+rather than placed on it, because a box rests on its uphill edge on a slope; and
+falling does not count as reaching, because a ledge you can only drop on to is a
+ledge you can only leave.
+
 Client and server exchange `mapHash` in the handshake and refuse the session if
 it differs, because the client deploys to Vercel and the server to Fly and
 never at the same instant. `PROTOCOL_VERSION` covers the message shapes; the
@@ -298,6 +309,13 @@ peers waiting to disagree about it.
 `rootDir` is `./src`, and the package has no filesystem — so the kernel's
 default world and the golden replay's world are still the hand-written brush
 world there. Nothing that ships ticks it.
+
+The arena to play on is `maps/arena1.ts` — "Crucible", GLAD-B8DI4J. It bakes, it
+is asserted against the movement in `maps/arena1.test.ts`, and the two
+`import baked from '.../testbed.json'` lines in `packages/client/src/map.ts` and
+`packages/server/src/map.ts` are what point the game at it. They still say
+`testbed`, because which map a room plays on is a choice with an owner
+(room-to-map assignment) and a reference screenshot behind it.
 
 ### The golden replay
 

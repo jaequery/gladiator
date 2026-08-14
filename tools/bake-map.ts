@@ -28,9 +28,11 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import {
   MAP_FORMAT_VERSION,
+  TECHNIQUES,
   type BakedMap,
   type MapDiagnostic,
   type MapSource,
+  analyzeReachability,
   formatDiagnostics,
   mapHashOf,
   parseMapSource,
@@ -234,9 +236,26 @@ export async function main(argv: readonly string[]): Promise<number> {
     }
 
     console.log(`${report.changed ? '✓' : '·'} ${report.name} — ${summary}`)
+    console.log(`    ${ledgeSummary(baked.map)}`)
   }
 
   return failed ? 1 : 0
+}
+
+/**
+ * How a player gets around this map, in one line.
+ *
+ * `validateMap` has already refused anything unreachable, so this is not a
+ * check — it is the level design, printed. A map whose line says every ledge is
+ * a step is a flat box, and a map that grows a jump-plus-rocket nobody meant to
+ * author says so in a diff of the bake output.
+ */
+function ledgeSummary(map: MapSource): string {
+  const analysis = analyzeReachability(map)
+  const counted = TECHNIQUES.slice(1)
+    .map((t) => `${analysis.ledges.filter((l) => l.technique === t.key).length} x ${t.label}`)
+    .join(', ')
+  return `ledges: ${counted}; tallest step ${Math.round(analysis.tallestStep)}`
 }
 
 // Only when run as a program. `tools/bake-map.test.ts` imports the functions

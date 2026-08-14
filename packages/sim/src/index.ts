@@ -91,6 +91,26 @@ export {
 export type { LoadedMap } from './map/load.ts'
 
 export {
+  MAX_CLIMB,
+  ROCKET_JUMP_LAUNCH,
+  SAMPLE_SPACING,
+  TECHNIQUES,
+  analyzeReachability,
+  apexOf,
+  buildReachabilityGraph,
+  horizontalReachOf,
+  walkRouteLength,
+} from './map/reachability.ts'
+export type {
+  Ledge,
+  ReachabilityGraph,
+  ReachabilityReport,
+  StandCell,
+  Technique,
+  TechniqueKey,
+} from './map/reachability.ts'
+
+export {
   MAP_FORMAT_VERSION,
   MIN_SPAWN_HEADROOM,
   MIN_SPAWN_SEPARATION,
@@ -132,6 +152,7 @@ export type { MutVec3 } from './math.ts'
 export {
   AIR_CONTROL,
   AIR_STOP_ACCELERATE,
+  FELT_GRAVITY,
   GRAVITY,
   JUMP_VELOCITY,
   PM_ACCELERATE,
