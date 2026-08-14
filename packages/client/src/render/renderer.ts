@@ -83,15 +83,6 @@ export type Renderer = {
   render(view: RenderView, intervalMs: number): void
   resize(): void
   dispose(): void
-  /**
-   * Resolves when every shader is compiled and every texture is loaded —
-   * Babylon's `scene.isReady(true)`.
-   *
-   * This is the real loading gate. Without it the first rocket explosion
-   * compiles its material mid-fight and stalls for a few hundred milliseconds,
-   * which is a lost duel.
-   */
-  whenReady(): Promise<void>
   /** A copy of the last frame, scaled. For the reference screenshot. */
   capture(width: number, height: number): HTMLCanvasElement
   frameStats(): FrameStats
@@ -105,6 +96,15 @@ export type Renderer = {
   resetFrameStats(): void
   readonly backend: Backend
   readonly description: string
+  /**
+   * `scene.isReady(true)` has resolved: every shader compiled, every texture
+   * loaded.
+   *
+   * This is the real loading gate. Without it the first rocket explosion
+   * compiles its material mid-fight and stalls for a few hundred milliseconds,
+   * which is a lost duel. The loading screen that waits on it is GLAD-NPCTU8's;
+   * the compile is kicked off at construction either way.
+   */
   readonly ready: boolean
   readonly frames: number
   readonly pixelRatio: number
@@ -132,7 +132,7 @@ export async function createRenderer(options: RendererOptions): Promise<Renderer
   // The whole point of the pre-warm: force every shader to compile now, behind
   // the loading screen, rather than the first time something is drawn.
   let ready = false
-  const readiness = scene.whenReadyAsync(true).then(() => {
+  void scene.whenReadyAsync(true).then(() => {
     // Only now: freezing a material that has not compiled yet freezes it
     // broken. See `MapMesh.freeze`.
     arena.freeze()
@@ -174,7 +174,8 @@ export async function createRenderer(options: RendererOptions): Promise<Renderer
       sinceDecision += 1
       if (sinceDecision < QUALITY_WINDOW_FRAMES) return
       sinceDecision = 0
-      const next = nextPixelRatio(pixelRatio, recent.stats().p99Ms, budgetMs, ceiling)
+      // The median, not the tail. See `nextPixelRatio`.
+      const next = nextPixelRatio(pixelRatio, recent.stats().medianMs, budgetMs, ceiling)
       recent.reset()
       if (next === pixelRatio) return
       pixelRatio = next
@@ -184,8 +185,6 @@ export async function createRenderer(options: RendererOptions): Promise<Renderer
     resize() {
       engine.resize()
     },
-
-    whenReady: () => readiness,
 
     capture(width, height) {
       // Drawn again first, so the copy is of a frame that is definitely in the

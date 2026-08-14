@@ -242,7 +242,6 @@ async function boot(): Promise<void> {
 
   // A rolling estimate, so the HUD reads a rate rather than one frame's noise.
   let fps = 0
-  let hudP99Ms = 0
   let hudDueMs = 0
 
   const frame = (nowMs: number) => {
@@ -306,14 +305,17 @@ async function boot(): Promise<void> {
       return
     }
     hudDueMs = HUD_INTERVAL_MS
-    hudP99Ms = renderer.frameStats().p99Ms
+    // A percentile costs a sort of the whole window, so it is computed here,
+    // ten times a second, rather than once a frame. Measuring frame pacing is
+    // not allowed to be the thing that costs a frame.
+    const p99Ms = renderer.frameStats().p99Ms
 
     hud.update({
       build: BUILD,
       mapName: CLIENT_MAP.source.name,
       renderer: `${renderer.description} · ${renderer.pixelRatio}x`,
       frameBudgetMs: FRAME_BUDGET_MS,
-      p99Ms: hudP99Ms,
+      p99Ms,
       fps,
       tick,
       ticksPerSecond: TICK_RATE,

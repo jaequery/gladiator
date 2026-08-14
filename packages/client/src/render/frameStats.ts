@@ -125,19 +125,18 @@ const EMPTY_STATS: FrameStats = {
  * a claim about a frame, and a number interpolated between two frames is a
  * claim about neither.
  */
-export function percentile(ascending: readonly number[], q: number): number {
+export function percentile(ascending: ArrayLike<number>, q: number): number {
   if (ascending.length === 0) return 0
   const rank = Math.ceil(q * ascending.length)
   const index = rank < 1 ? 0 : rank > ascending.length ? ascending.length - 1 : rank - 1
   return ascending[index] ?? 0
 }
 
-/** Summarise a set of frame intervals. Exported so tests can drive it directly. */
-export function summarise(intervalsMs: readonly number[]): FrameStats {
-  if (intervalsMs.length === 0) return EMPTY_STATS
-  const ascending = [...intervalsMs].sort((a, b) => a - b)
+/** The summary of an already-sorted window. Allocates one object and nothing else. */
+function statsFromSorted(ascending: ArrayLike<number>): FrameStats {
+  if (ascending.length === 0) return EMPTY_STATS
   let total = 0
-  for (const interval of ascending) total += interval
+  for (let i = 0; i < ascending.length; i += 1) total += ascending[i] ?? 0
   return {
     frames: ascending.length,
     spanMs: total,
@@ -147,6 +146,11 @@ export function summarise(intervalsMs: readonly number[]): FrameStats {
     p99Ms: percentile(ascending, 0.99),
     worstMs: ascending[ascending.length - 1] ?? 0,
   }
+}
+
+/** Summarise a set of frame intervals. Exported so tests can drive it directly. */
+export function summarise(intervalsMs: readonly number[]): FrameStats {
+  return statsFromSorted([...intervalsMs].sort((a, b) => a - b))
 }
 
 /**
@@ -191,15 +195,17 @@ export function frameVerdict(intervalsMs: readonly number[], budgetMs: number): 
  */
 export function createFrameMeter(capacity: number = DEFAULT_CAPACITY): FrameMeter {
   const intervals = new Float64Array(capacity)
+  // Sorted into, never allocated. `stats()` is called ten times a second by the
+  // HUD, and a fresh eight-thousand-element array each time is a megabyte a
+  // second of garbage — which shows up as exactly the hitches this module
+  // exists to report. A frame-pacing instrument that costs frames is worse than
+  // no instrument.
+  const sorted = new Float64Array(capacity)
   let count = 0
   let next = 0
 
-  const window = (): number[] => {
-    const size = count < capacity ? count : capacity
-    const out: number[] = []
-    for (let i = 0; i < size; i += 1) out.push(intervals[i] ?? 0)
-    return out
-  }
+  /** How many of the ring's slots hold a real interval. Order does not matter. */
+  const size = () => (count < capacity ? count : capacity)
 
   return {
     record(intervalMs) {
@@ -211,8 +217,24 @@ export function createFrameMeter(capacity: number = DEFAULT_CAPACITY): FrameMete
       next = (next + 1) % capacity
       count += 1
     },
-    stats: () => summarise(window()),
-    intervals: window,
+
+    stats() {
+      const used = size()
+      const window = sorted.subarray(0, used)
+      window.set(intervals.subarray(0, used))
+      // `TypedArray.sort` is numeric by default, so there is no comparator
+      // closure to allocate either.
+      window.sort()
+      return statsFromSorted(window)
+    },
+
+    intervals() {
+      const used = size()
+      const out: number[] = new Array(used)
+      for (let i = 0; i < used; i += 1) out[i] = intervals[i] ?? 0
+      return out
+    },
+
     reset() {
       count = 0
       next = 0

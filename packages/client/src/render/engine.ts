@@ -59,13 +59,26 @@ export const MAX_PIXEL_RATIO = 2
 export const PIXEL_RATIO_LADDER: readonly number[] = [2, 1.5, 1.25, 1, 0.85, 0.75, 0.6, 0.5]
 
 /**
- * How far under budget p99 has to sit before quality is stepped back up.
+ * How far under budget the typical frame has to sit before quality is
+ * stepped back up.
  *
  * 0.7 — a 30% margin. Stepping up the moment there is room would put the
  * renderer straight back into the state that made it step down, once per
  * evaluation window, forever.
  */
 export const RECOVER_FRACTION = 0.7
+
+/**
+ * How far over budget the typical frame has to be before the dial reacts.
+ *
+ * 1.15, and it is not a fudge factor — it is the difference between a frame
+ * that *missed* its budget and one that was quantised past it. A 60 Hz display
+ * hands out intervals of 16.7 or 16.8 ms, and the budget is 1000/60 = 16.667:
+ * without this, every 60 Hz machine in the world reads as permanently over
+ * budget and the quality controller walks its image down to the bottom rung on
+ * a screen that is keeping perfect time.
+ */
+export const QUALITY_TOLERANCE = 1.15
 
 /** Clamp a device pixel ratio into something worth rendering. */
 export function clampPixelRatio(devicePixelRatio: number, max: number = MAX_PIXEL_RATIO): number {
@@ -85,12 +98,21 @@ export function ladderRung(ratio: number): number {
  * One evaluation of the quality dial: what the pixel ratio should be next.
  *
  * Pure, so the hysteresis is testable without a GPU. Steps down one rung when
- * the 99th-percentile frame misses the budget, up one rung when it is
- * comfortably inside it, and otherwise leaves well alone.
+ * the typical frame misses the budget, up one rung when it is comfortably
+ * inside it, and otherwise leaves well alone.
+ *
+ * `costMs` is the **median** frame interval, not the 99th percentile, and the
+ * distinction is the whole design of this function. A percentile measures
+ * *smoothness* and a median measures *cost*, and only one of them is something
+ * fewer pixels can fix: a tail of stalls caused by the operating system
+ * descheduling the tab does not get better at half the resolution, so a dial
+ * driven by p99 would walk the image down to nothing chasing a number it has no
+ * influence over. A scene that is genuinely too expensive moves the median on
+ * the very first window.
  */
 export function nextPixelRatio(
   current: number,
-  p99Ms: number,
+  costMs: number,
   budgetMs: number,
   ceiling: number,
 ): number {
@@ -100,8 +122,8 @@ export function nextPixelRatio(
   // than snapping the image size out from under whoever chose it.
   if (index === -1) return current
 
-  if (p99Ms > budgetMs) return rungs[index + 1] ?? current
-  if (p99Ms > 0 && p99Ms < budgetMs * RECOVER_FRACTION) {
+  if (costMs > budgetMs * QUALITY_TOLERANCE) return rungs[index + 1] ?? current
+  if (costMs > 0 && costMs < budgetMs * RECOVER_FRACTION) {
     const up = rungs[index - 1]
     return up !== undefined && up <= ceiling ? up : current
   }

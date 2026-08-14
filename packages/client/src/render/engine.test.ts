@@ -9,7 +9,7 @@ import {
   ladderRung,
   nextPixelRatio,
 } from './engine.ts'
-import { FRAME_BUDGET_MS } from './frameStats.ts'
+import { FRAME_BUDGET_MS, summarise } from './frameStats.ts'
 
 describe('clampPixelRatio', () => {
   it('caps what a very dense display asks for', () => {
@@ -53,7 +53,7 @@ describe('nextPixelRatio', () => {
   const over = budget * 2
   const comfortable = budget * RECOVER_FRACTION * 0.5
 
-  it('steps down when the 99th-percentile frame misses the budget', () => {
+  it('steps down when the typical frame misses the budget', () => {
     expect(nextPixelRatio(2, over, budget, 2)).toBe(1.5)
     expect(nextPixelRatio(1, over, budget, 2)).toBe(0.85)
   })
@@ -79,5 +79,30 @@ describe('nextPixelRatio', () => {
 
   it('does nothing before there is anything to judge', () => {
     expect(nextPixelRatio(1, 0, budget, 2)).toBe(1)
+  })
+
+  it('leaves a display that is keeping perfect time alone', () => {
+    // The measured interval on a 60 Hz display is 16.7 or 16.8 ms and the
+    // budget is 1000/60 = 16.667. Without a tolerance, every 60 Hz machine
+    // reads as permanently over budget and walks its own image down to the
+    // bottom rung while hitting every single frame.
+    expect(nextPixelRatio(1, 16.7, budget, 2)).toBe(1)
+    expect(nextPixelRatio(1, 16.8, budget, 2)).toBe(1)
+  })
+
+  it('is driven by the median, so a tail of stalls does not soften the image', () => {
+    // The window this stands for: a loop keeping the 60 Hz cadence exactly,
+    // with a handful of frames descheduled by the operating system. Its p99 is
+    // 250 ms and its median is 16.7, and fewer pixels would not have helped
+    // with either. A dial fed the percentile would walk the image down to the
+    // bottom rung chasing a number it has no influence over.
+    const window = [
+      ...Array.from({ length: 588 }, () => 1000 / 60),
+      ...Array.from({ length: 12 }, () => 250),
+    ]
+    const stalling = summarise(window)
+    expect(stalling.p99Ms).toBeGreaterThan(budget)
+    expect(nextPixelRatio(1, stalling.medianMs, budget, 2)).toBe(1)
+    expect(nextPixelRatio(1, stalling.p99Ms, budget, 2)).toBe(0.85)
   })
 })

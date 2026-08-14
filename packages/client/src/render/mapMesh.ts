@@ -164,7 +164,10 @@ function createSurfaceMaterial(
  * computed from an index, because getting the pairing wrong mirrors the texture
  * on one class of surface only, which is exactly the sort of thing that ships.
  */
-function faceUv(position: readonly [number, number, number], normal: readonly [number, number, number]): [number, number] {
+function faceUv(
+  position: readonly [number, number, number],
+  normal: readonly [number, number, number],
+): [number, number] {
   const [x, y, z] = position
   const ax = Math.abs(normal[0])
   const ay = Math.abs(normal[1])

@@ -94,6 +94,20 @@ Nothing else in the renderer knows which one came up. The HUD says so, and
 `forceWebGL`), so the committed image does not depend on whether the machine
 that took it happened to offer WebGPU.
 
+### CI gates on WebGL2; WebGPU is verified by hand
+
+Headless Chromium under SwiftShader has no `navigator.gpu`, so
+`WebGPUEngine.IsSupportedAsync` is false and the smoke test exercises the
+fallback — which is the path most players will take anyway, and the one whose
+breakage would be silent. The test asserts that *a* modern context came up
+(`webgpu` or `webgl2`) rather than which, so it will start covering WebGPU the
+day the runner grows a GPU without needing to be rewritten.
+
+The WebGPU path is therefore verified by opening the deployed page in a browser
+that has it and reading the backend off the HUD. That is a deliberate trade:
+gating on a headless WebGPU implementation would be gating on the emulator's
+bugs.
+
 ---
 
 ## §4 Pixel ratio is the quality dial
@@ -105,9 +119,21 @@ number of pixels is the knob with the most travel.
   for nine times the fragments of a 1× one for a difference nobody can see at
   arm's length.
 - **Stepped down under load**, one rung at a time along a coarse ladder, when
-  the 99th-percentile frame misses the budget; stepped back up when it is
+  the **median** frame misses the budget; stepped back up when it is
   comfortably inside it. The hysteresis is a pure function (`nextPixelRatio`)
   so it can be tested without a GPU.
+
+  With a 15% tolerance over the budget, because the measured interval on a
+  60 Hz display is 16.7 ms and one 60 Hz frame is 16.667: without it, every
+  60 Hz machine reads as permanently over budget and softens its own image
+  while hitting every single frame.
+
+  The median rather than the percentile, deliberately: a percentile measures
+  smoothness and a median measures cost, and only one of them is something
+  fewer pixels can fix. A tail of stalls caused by the operating system
+  descheduling the tab does not improve at half the resolution, so a dial
+  driven by p99 would walk the image down to nothing chasing a number it has no
+  influence over.
 
 Softening the image slightly at a steady frame rate beats a crisp one that
 hitches. Everything else — the geometry, the lighting, the texture filtering —
