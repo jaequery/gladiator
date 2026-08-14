@@ -87,6 +87,45 @@ const DETERMINISM_BANS = [
   },
 ]
 
+/**
+ * The transcendentals, which are the same hazard as `Math.hypot` with a much
+ * better disguise: `Math.sin` looks like arithmetic and is not. The
+ * specification calls every one of these "implementation-approximated", so V8
+ * and JavaScriptCore may legally return different last bits — and a view angle
+ * turned into a direction vector feeds that difference straight into position.
+ *
+ * `packages/sim/src/trig.ts` computes sine and cosine from IEEE-exact
+ * operations only. These are banned so that it is the only way to get one.
+ *
+ * Split out from DETERMINISM_BANS because `trig.test.ts` legitimately needs
+ * `Math.sin` as the reference it asserts against — see the test override below.
+ *
+ * @type {Array<{ selector: string, message: string }>}
+ */
+const TRANSCENDENTAL_BANS = [
+  'sin',
+  'cos',
+  'tan',
+  'asin',
+  'acos',
+  'atan',
+  'atan2',
+  'exp',
+  'expm1',
+  'log',
+  'log2',
+  'log10',
+  'log1p',
+  'sinh',
+  'cosh',
+  'tanh',
+  'cbrt',
+  'pow',
+].map((name) => ({
+  selector: `MemberExpression[object.name='Math'][property.name='${name}']`,
+  message: `gladiator: Math.${name}() is banned in packages/sim. The specification only requires it to be "implementation-approximated", so V8 and JavaScriptCore may return different last bits for the same argument — which is a desync, not a rounding error. Use packages/sim/src/trig.ts, which computes sine and cosine from IEEE-exact operations only, or multiply the value out.`,
+}))
+
 export default tseslint.config(
   {
     ignores: [
@@ -113,6 +152,16 @@ export default tseslint.config(
     },
   },
 
+  /* The browser smoke test is a Node script that also contains functions which
+   * run *inside the page* — `page.evaluate(() => window.__gladiator...)`. Both
+   * sets of globals are legitimately in scope in the same file. */
+  {
+    files: ['scripts/e2e.mjs'],
+    languageOptions: {
+      globals: { ...globals.nodeBuiltin, ...globals.browser },
+    },
+  },
+
   /* ------------------------------------------------------------------
    * packages/sim — the deterministic core.
    *
@@ -125,16 +174,22 @@ export default tseslint.config(
       globals: {},
     },
     rules: {
-      'no-restricted-syntax': ['error', ...DETERMINISM_BANS],
+      'no-restricted-syntax': ['error', ...DETERMINISM_BANS, ...TRANSCENDENTAL_BANS],
       'gladiator/no-external-import': 'error',
       'gladiator/require-ts-extension': 'error',
     },
   },
   {
     /* Tests are the one place inside the sim allowed a bare import, and the
-     * allowlist is exactly one entry long. */
+     * allowlist is exactly one entry long.
+     *
+     * They are also the one place allowed `Math.sin`: `trig.test.ts` exists to
+     * assert that our own implementation tracks the engine's, and it cannot do
+     * that without naming the engine's. Every other determinism ban still
+     * applies — a test that reaches for `Math.random()` is still a bug. */
     files: ['packages/sim/**/*.test.ts'],
     rules: {
+      'no-restricted-syntax': ['error', ...DETERMINISM_BANS],
       'gladiator/no-external-import': ['error', { allow: ['vitest'] }],
     },
   },
