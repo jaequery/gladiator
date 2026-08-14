@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "display": "Gladiator base",
+  "compilerOptions": {
+    /* ----------------------------------------------------------------
+     * Module resolution
+     *
+     * Every package resolves the same way, so `packages/sim` means the
+     * same thing to Vite, to esbuild, to tsx and to `vitest`. The shared
+     * package is source-only and never built, so there is exactly one
+     * resolution condition and nothing for `bundler` and `NodeNext` to
+     * disagree about.
+     * ---------------------------------------------------------------- */
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+
+    /* ----------------------------------------------------------------
+     * Emit
+     *
+     * `tsc` never emits anywhere in this repo. It is a typechecker; the
+     * bundlers emit. That is what lets relative imports carry the `.ts`
+     * extension (`allowImportingTsExtensions` requires `noEmit`).
+     * ---------------------------------------------------------------- */
+    "noEmit": true,
+
+    /* ----------------------------------------------------------------
+     * Syntax
+     *
+     * `erasableSyntaxOnly` bans `enum`, `namespace`, parameter properties
+     * and anything else TypeScript would have to *generate code* for.
+     * What survives is types-as-annotations, which Node can strip natively
+     * and which no bundler can get subtly wrong.
+     * ---------------------------------------------------------------- */
+    "erasableSyntaxOnly": true,
+    "target": "ES2023",
+    "useDefineForClassFields": true,
+
+    /* ----------------------------------------------------------------
+     * Strictness
+     * ---------------------------------------------------------------- */
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+    "exactOptionalPropertyTypes": true,
+    "forceConsistentCasingInFileNames": true,
+
+    "skipLibCheck": true
+  }
+}

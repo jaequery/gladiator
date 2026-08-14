@@ -1,0 +1,21 @@
+{
+  "name": "@gladiator/client",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The browser client: Babylon renderer, prediction, input.",
+  "dependencies": {
+    "@babylonjs/core": "9.21.1",
+    "@gladiator/bot": "workspace:*",
+    "@gladiator/sim": "workspace:*"
+  },
+  "devDependencies": {
+    "vite": "8.2.1"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -p tsconfig.json"
+  }
+}

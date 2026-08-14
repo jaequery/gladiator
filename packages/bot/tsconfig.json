@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    /* The bot only ever speaks to the simulation through `UserCmd`, the same
+     * struct a human's keyboard produces, so it inherits the simulation's
+     * purity: no DOM, no Node, no clock. */
+    "lib": ["ES2023"],
+    "types": [],
+    "rootDir": "./src"
+  },
+  "include": ["src/**/*.ts"]
+}
