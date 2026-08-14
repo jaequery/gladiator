@@ -2,7 +2,7 @@
  * The client half of the hash echo.
  *
  * The client simulates its own input immediately and sends the commands on.
- * The server runs the *same* `pmove` over the *same* commands and sends back a
+ * The server runs the *same* `tick()` over the *same* commands and sends back a
  * state hash. If the two ever disagree, the shared simulation is not shared,
  * and everything built on top of it — prediction, lag compensation, the bot —
  * is built on sand. So this ticket makes that disagreement loud, on screen,

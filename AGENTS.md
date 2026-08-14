@@ -113,9 +113,16 @@ guardrail nobody knows is connected.
 ### `tick()` mutates `GameState` in place
 
 ```ts
-tick(state, inputs)          // advances `state` by one 8 ms sub-step
+tick(state, inputs, world)   // advances `state` by one 8 ms sub-step
 const before = cloneGameState(state)   // if you need the old one, say so
 ```
+
+`world` is a `CollisionWorld` and defaults to `SKELETON_ARENA` — level data,
+loaded once, never mutated by a sub-step, which is why it sits beside the state
+rather than inside it. It needs no cloning for reconciliation and no hashing;
+two peers agreeing about the map is something the lobby settles before the
+first tick. A real map replaces the *value* (GLAD-G2M8QQ, GLAD-B8DI4J), never
+the code that takes it.
 
 It returns nothing, allocates nothing in the steady state, and keeps the same
 entity objects — a reference you held before the call points at the new values
@@ -149,8 +156,12 @@ state per frame silently skips whichever ticks shared one.
 ### Phase order
 
 `tick()` runs fixed phases, and the order is the contract later tickets build
-against: advance the PRNG, apply commands, integrate, expire. Adding a phase
+against: advance the PRNG, move players, integrate, expire. Adding a phase
 means deciding where it goes, once, for everyone.
+
+The *movement* phase has an order of its own, and it is not negotiable either:
+`docs/physics-spec.md` §1.5. `PM_CheckJump` runs before `PM_Friction`, and that
+one ordering is the whole bunny hop.
 
 The PRNG (`rng.ts`, mulberry32 over one uint32) advances once per sub-step
 whether or not anything drew from it, so the stream position is a function of
@@ -159,31 +170,48 @@ carry it for free.
 
 ### One name per number
 
-The timestep is `tick.ts`; the movement constants are `pmove.ts`; the player
-bounding box is `bbox.ts`; the collision constants — `OVERCLIP`, `STEP_SIZE`,
-`MIN_WALK_NORMAL`, the trace epsilon — are `slidemove.ts` and `trace.ts`; the
-map's rules — the ramp gradients, the spawn headroom and separation minima —
-are `map/schema.ts`; angles are angle units, defined in `usercmd.ts`; sine and
-cosine are `trig.ts`.
-Everything else imports rather than restating. Two names for one number is the
-drift everything else in this file exists to prevent, so if you find yourself
-adding a `constants.ts`, put the constant next to the code that owns it
-instead.
+The timestep is `tick.ts`; the movement constants live next to the movement
+code that owns them — `GRAVITY`, `RUN_SPEED` and `JUMP_VELOCITY` in
+`pmove/index.ts`, friction's two in `pmove/friction.ts`, acceleration's four in
+`pmove/accelerate.ts`; the player bounding box is `bbox.ts`; the collision
+constants — `OVERCLIP`, `STEP_SIZE`, `MIN_WALK_NORMAL`, the trace epsilon — are
+`slidemove.ts` and `trace.ts`; the map's rules — the ramp gradients, the spawn
+headroom and separation minima — are `map/schema.ts`; angles are angle units,
+defined in `usercmd.ts`; sine and cosine are `trig.ts`. Everything else imports
+rather than restating. Two names for one number is the drift everything else in
+this file exists to prevent, so if you find yourself adding a `constants.ts`,
+put the constant next to the code that owns it instead.
 
-`packages/sim` currently holds two worlds: `GameState`/`tick()` (the kernel)
-and `PlayerState`/`pmove()` (the walking skeleton's one-player stub, which the
-deployed client and server still run). They share the timestep, the plane and
-the movement constants deliberately, so they do not disagree about physics.
-GLAD-0B1GDS folds the second into the first.
+There is exactly **one** world: `GameState`/`tick()`. The walking skeleton's
+`PlayerState`/`pmove(state, cmd)` stub is gone, and the deployed client and
+server both run the kernel over the same `CollisionWorld`. Two implementations
+of "how a player moves" is precisely the drift a desync hides in, which is why
+there is no second, smaller state hash either.
+
+### The movement layer
+
+`packages/sim/src/pmove/` is Quake's `bg_pmove.c`: `cmdscale.ts`,
+`friction.ts`, `accelerate.ts`, `snap.ts`, and the `PmoveSingle` ordering in
+`index.ts`. It moves a `PmoveBody` — a `MoveBody` plus the jump latch — through
+a `CollisionWorld`, and it knows nothing about `GameState`; the kernel copies an
+entity in and the result back out. That seam is deliberate: the bot
+(GLAD-TSED8V) and client prediction (GLAD-6RT64L) both need to run the real
+movement over a body that is not an entity in the live state.
+
+Three things in there look like bugs and are load-bearing — the acceleration
+gate on `dot(velocity, wishdir)`, `PM_CheckJump` before `PM_Friction`, and
+integer velocity snapping. All three are argued in `docs/physics-spec.md` §1
+and measured in `pmove/pmove.test.ts`.
 
 ### The collision layer
 
 `collide.ts` (the brush world and its broadphase), `trace.ts` (the swept-AABB
 trace) and `slidemove.ts` (`SlideMove`, `StepSlideMove`, the ground trace) are
-a third thing again: a *pure* layer that neither world is wired to yet.
-`MoveBody` is the shape a body has to be to be moved, `CollisionWorld` is level
-data loaded once, and nothing in there touches `GameState`. GLAD-0B1GDS is what
-joins the two up. Numbers and reasoning: `docs/physics-spec.md` §2.
+the layer `pmove` stands on. `MoveBody` is the shape a body has to be to be
+moved and `CollisionWorld` is level data loaded once; nothing in there touches
+`GameState`. `arena.ts` holds the world the kernel defaults to — see the note
+at the end of **Maps** for why that is not a baked map. Numbers and reasoning:
+`docs/physics-spec.md` §2.
 
 They mutate in place and reuse module-level scratch, for the same reason and
 under the same guarantee as `hashState` — single-threaded and synchronous, with
@@ -216,6 +244,17 @@ Client and server exchange `mapHash` in the handshake and refuse the session if
 it differs, because the client deploys to Vercel and the server to Fly and
 never at the same instant. `PROTOCOL_VERSION` covers the message shapes; the
 map hash covers the world they describe.
+
+**Nothing simulates a baked map yet, and that is staged rather than forgotten.**
+`packages/sim` cannot import `maps/` — `rootDir` is `./src`, and the package has
+no filesystem — so the kernel's default world is the hand-written brush world in
+`arena.ts`, which is also what the golden replay runs in and what the renderer
+draws. The client and the server load `testbed`, verify its hash and exchange
+it, and then tick `SKELETON_ARENA`. Wiring the loaded map through is one line in
+each once there is something that draws it: the renderer is GLAD-0IDR6J and the
+arena worth playing in is GLAD-B8DI4J. Until then, moving the simulation onto a
+map the renderer does not draw would trade a cosmetic gap for players walking
+into invisible walls.
 
 ### The golden replay
 

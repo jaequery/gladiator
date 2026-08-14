@@ -27,6 +27,8 @@ import { CreateGround } from '@babylonjs/core/Meshes/Builders/groundBuilder'
 import { TargetCamera } from '@babylonjs/core/Cameras/targetCamera'
 import { Scene } from '@babylonjs/core/scene'
 import {
+  LANDMARK_MAXS,
+  LANDMARK_MINS,
   PLANE_HALF_EXTENT,
   PLAYER_HALF_WIDTH,
   PLAYER_HEIGHT,
@@ -126,12 +128,27 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
   player.material = playerMaterial
 
   // A second, static box, so that running past something makes the movement
-  // legible. There is no collision against it — GLAD-3SCN0U owns that.
+  // legible — and running *into* it makes the collision legible. Its dimensions
+  // come from the simulation's arena rather than from a second pair of numbers
+  // here: a landmark you can see and walk through is worse than no landmark.
   const landmarkMaterial = new StandardMaterial('landmark', scene)
   landmarkMaterial.diffuseColor = new Color3(0.25, 0.5, 0.75)
-  const landmark = CreateBox('landmark', { width: 128, depth: 128, height: 256 }, scene)
+  const landmark = CreateBox(
+    'landmark',
+    {
+      // Quake `x` is depth once the axis map has run, and Quake `y` is width.
+      depth: LANDMARK_MAXS[0] - LANDMARK_MINS[0],
+      width: LANDMARK_MAXS[1] - LANDMARK_MINS[1],
+      height: LANDMARK_MAXS[2] - LANDMARK_MINS[2],
+    },
+    scene,
+  )
   landmark.material = landmarkMaterial
-  const landmarkOrigin = quakeToEngine([512, 512, 128])
+  const landmarkOrigin = quakeToEngine([
+    (LANDMARK_MINS[0] + LANDMARK_MAXS[0]) / 2,
+    (LANDMARK_MINS[1] + LANDMARK_MAXS[1]) / 2,
+    (LANDMARK_MINS[2] + LANDMARK_MAXS[2]) / 2,
+  ])
   landmark.position.set(landmarkOrigin[0], landmarkOrigin[1], landmarkOrigin[2])
 
   const eye = new Vector3()

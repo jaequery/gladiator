@@ -29,7 +29,7 @@ import { describe, expect, it } from 'vitest'
 import { GOLDEN_REPLAY, GOLDEN_TRACE } from './fixtures/golden-replay.ts'
 import { formatHash } from './hash.ts'
 import { NO_INPUTS, advanceHost, clampHostDelta, createKernel, tick } from './kernel.ts'
-import { GRAVITY, JUMP_VELOCITY } from './pmove.ts'
+import { GRAVITY, JUMP_VELOCITY } from './pmove/index.ts'
 import {
   commandSourceFor,
   createReplayState,
