@@ -21,6 +21,7 @@ Vocabulary is in [`CONTEXT.md`](./CONTEXT.md). Physics numbers are in
 | `pnpm run build`     | Vite (client) and esbuild (server)                     |
 | `pnpm run guardrails`| proves the simulation boundary rejects violations      |
 | `pnpm run ci`        | all five, in that order — what CI runs                 |
+| `pnpm run e2e`       | the browser smoke test — needs Chromium, own CI job    |
 
 > `pnpm run ci`, not `pnpm ci`. pnpm reserves the bare `ci` verb
 > (`ERR_PNPM_CI_NOT_IMPLEMENTED`) and will not fall through to a package
@@ -85,6 +86,7 @@ Banned in `packages/sim` only, each with an error message explaining itself:
 | `Date.now()`, `new Date()`      | the sim has no clock; it knows its tick number                  |
 | `performance.now()`             | wall-clock drives the scheduler, never the simulation           |
 | `Math.hypot()`                  | implementation-approximated — use `Math.sqrt(x * x + y * y)`    |
+| `Math.sin`, `Math.cos`, `Math.pow`, … | implementation-approximated — use `sim/src/trig.ts`        |
 | `**` and `**=`                  | implementation-approximated (so is `Math.pow`) — multiply out   |
 | `async` / `await`               | a tick is a synchronous, total function of `(state, inputs)`    |
 | bare / cross-package imports    | see layer 1                                                     |

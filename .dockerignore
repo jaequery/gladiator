@@ -1,0 +1,16 @@
+# Everything the build stage installs or produces itself. Sending a local
+# node_modules to the daemon would also send a pnpm symlink graph that points
+# at paths which do not exist inside the image.
+node_modules
+**/node_modules
+dist
+**/dist
+.git
+.github
+.vite
+coverage
+*.tsbuildinfo
+*.log
+
+# The client is deployed by Vercel, not baked into the server image.
+packages/client/dist

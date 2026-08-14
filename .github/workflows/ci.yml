@@ -49,3 +49,72 @@ jobs:
       # it does because nothing has violated it yet. See scripts/guardrails.mjs.
       - name: Guardrails
         run: pnpm run guardrails
+
+  # The acceptance list, in a real browser, against the real bundles: the page
+  # loads without console errors, clicking locks the pointer, W runs and space
+  # jumps, and the client and server state hashes agree over a minute of
+  # movement. Its own job because it needs a ~120 MB browser download, which has
+  # no business slowing down a typecheck.
+  e2e:
+    name: browser smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Build
+        run: pnpm run build
+
+      - name: End-to-end
+        run: pnpm run e2e
+
+  # Vercel deploys the client itself, from its own Git integration. Duplicating
+  # that here would mean two deploys racing for the same URL, so this job is
+  # only the Fly half.
+  deploy-server:
+    name: fly deploy
+    needs: [ci, e2e]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # One deploy at a time, and never cancelled halfway: a cancelled deploy can
+    # leave a machine in a half-updated state.
+    concurrency:
+      group: fly-deploy
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          if [ -z "${FLY_API_TOKEN}" ]; then
+            echo "::warning::FLY_API_TOKEN is not set — skipping the Fly deploy."
+            echo "Set it with: flyctl tokens create deploy | gh secret set FLY_API_TOKEN"
+            exit 0
+          fi
+          # GLADIATOR_BUILD is what a client on a stale protocol is told to
+          # reload for, so it has to mean something: it is the commit.
+          flyctl deploy \
+            --remote-only \
+            --wait-timeout 300 \
+            --build-arg "GLADIATOR_BUILD=$(git rev-parse --short HEAD)"
