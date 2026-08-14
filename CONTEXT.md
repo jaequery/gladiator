@@ -123,6 +123,31 @@ between them. `docs/physics-spec.md` §0.3.
 
 ---
 
+## The renderer
+
+**Renderer** — `packages/client/src/render`. It draws simulation state and
+decides nothing about it. Settings and reasoning: `docs/renderer.md`.
+
+**Camera-as-puppet** — the rule that the camera transform is written from
+simulation state every frame and never read back. No attached input, no
+inertia, no engine collision. `docs/renderer.md` §1.
+
+**Backend** — which graphics context actually came up: `webgpu`, `webgl2` or
+`webgl1`. Tried in that order, reported on the HUD, and branched on nowhere.
+
+**Frame budget** — how long a frame may take. One 60 Hz frame, defended by the
+pixel-ratio dial rather than by hope.
+
+**Hitch** — a frame that took half again its budget: a dropped frame at any
+refresh rate. Counted as a *rate*, because a percentile cannot see something
+that happens twice a second. `docs/renderer.md` §9.
+
+**Reference screenshot** — a committed PNG of a fixed pose, compared in the
+browser smoke test within a perceptual threshold. A renderer change that
+legitimately moves the picture ships the new image in the same commit.
+
+---
+
 ## The network
 
 **Listen server** — a server running inside the client process. How

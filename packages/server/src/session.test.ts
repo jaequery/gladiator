@@ -1,9 +1,9 @@
 import {
   NULL_CMD,
   PROTOCOL_VERSION,
-  SKELETON_ARENA,
+  SKELETON_SEED,
   type GameState,
-  createSkeletonState,
+  createMapState,
   encodeCmd,
   findPlayer,
   hashState,
@@ -11,6 +11,7 @@ import {
 } from '@gladiator/sim'
 import { describe, expect, it } from 'vitest'
 
+import { SERVER_MAP } from './map.ts'
 import {
   CLOSE_BAD_FRAME,
   CLOSE_MAP_MISMATCH,
@@ -138,14 +139,17 @@ describe('session simulation', () => {
     const cmds = [encodeCmd({ ...NULL_CMD, forwardMove: 1 }), encodeCmd(NULL_CMD)]
     const step = applyFrame(greeted(), JSON.stringify({ t: 'cmds', startTick: 1, cmds }), IDENTITY)
 
-    const expected = createSkeletonState()
-    simTick(expected, [{ ...NULL_CMD, forwardMove: 1 }], SKELETON_ARENA)
-    simTick(expected, [NULL_CMD], SKELETON_ARENA)
+    const expected = createMapState(SERVER_MAP.source, SKELETON_SEED)
+    simTick(expected, [{ ...NULL_CMD, forwardMove: 1 }], SERVER_MAP.world)
+    simTick(expected, [NULL_CMD], SERVER_MAP.world)
     expect(step.replies).toEqual([{ t: 'hash', tick: 2, hash: hashState(expected) }])
     expect(step.session.tick).toBe(2)
 
     // And the state really did advance, rather than the hash being of nothing.
-    expect(playerOf(step.session.state).origin[0]).toBeGreaterThan(0)
+    // Measured from the map's spawn rather than from the origin: the session
+    // starts where `testbed` says a player starts, not at (0, 0, 0).
+    const spawn = createMapState(SERVER_MAP.source, SKELETON_SEED)
+    expect(playerOf(step.session.state).origin[0]).toBeGreaterThan(playerOf(spawn).origin[0])
   })
 
   it('counts a gap instead of silently renumbering it', () => {

@@ -12,16 +12,18 @@
  */
 import {
   PROTOCOL_VERSION,
-  SKELETON_ARENA,
+  SKELETON_SEED,
   type ClientMessage,
   type GameState,
   type ServerMessage,
-  createSkeletonState,
+  createMapState,
   decodeCmd,
   hashState,
   parseClientMessage,
   tick as simTick,
 } from '@gladiator/sim'
+
+import { SERVER_MAP } from './map.ts'
 
 /**
  * What the server tells a client about itself at the handshake.
@@ -81,7 +83,7 @@ export const CLOSE_MAP_MISMATCH = 4004
 export function createSession(id: string): SessionState {
   return {
     id,
-    state: createSkeletonState(),
+    state: createMapState(SERVER_MAP.source, SKELETON_SEED),
     tick: 0,
     greeted: false,
     rejected: false,
@@ -174,7 +176,7 @@ export function applyMessage(
   // players sharing one world is GLAD-FHKBN8.
   const state = session.state
   for (const wire of message.cmds) {
-    simTick(state, [decodeCmd(wire)], SKELETON_ARENA)
+    simTick(state, [decodeCmd(wire)], SERVER_MAP.world)
   }
 
   return {

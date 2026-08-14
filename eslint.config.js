@@ -126,6 +126,66 @@ const TRANSCENDENTAL_BANS = [
   message: `gladiator: Math.${name}() is banned in packages/sim. The specification only requires it to be "implementation-approximated", so V8 and JavaScriptCore may return different last bits for the same argument — which is a desync, not a rounding error. Use packages/sim/src/trig.ts, which computes sine and cosine from IEEE-exact operations only, or multiply the value out.`,
 }))
 
+/**
+ * What `packages/client` may not name.
+ *
+ * The simulation is authoritative. Babylon will happily run a *second* one —
+ * `mesh.checkCollisions`, `camera.applyGravity`, `camera.ellipsoid` and
+ * `moveWithCollisions()` need no plugin, no dependency and no ceremony, and
+ * they are the canonical Babylon first-person-controller recipe that every
+ * tutorial, every forum answer and every autocomplete will offer. Using one
+ * would not break the game. It would produce movement that is *almost* right:
+ * a client that disagrees with the server by a few units per second, which
+ * looks like a network problem, is diagnosed as a network problem, and is not
+ * one.
+ *
+ * `attachControl` is here for the same reason one layer up. View angles are
+ * authoritative float state the client owns, because they go into the
+ * `UserCmd` the server simulates and lag-compensates against. A camera that
+ * reads the mouse itself makes the renderer the source of truth for aim.
+ *
+ * The physics-plugin API is banned as the outer fence: it cannot be reached
+ * without a dependency, and `scripts/no-physics-plugin.mjs` fails the build if
+ * one ever appears in the lockfile. Two locks, because this is the mistake
+ * that would be hardest to find later.
+ *
+ * @type {Array<{ selector: string, message: string }>}
+ */
+const ENGINE_COLLISION_BANS = [
+  [
+    'checkCollisions',
+    "gladiator: `checkCollisions` is banned in packages/client. Babylon's built-in collision system is a second simulation, and the authoritative one lives in packages/sim. Two collision systems do not produce a compromise; they produce a desync that looks like lag. Trace against the map with `traceBox` instead.",
+  ],
+  [
+    'moveWithCollisions',
+    'gladiator: `moveWithCollisions` is banned in packages/client. Movement is `pmove` in packages/sim, replayed identically by the server — nothing in the renderer may move a body. The renderer draws where the simulation says things are.',
+  ],
+  [
+    'applyGravity',
+    "gladiator: `applyGravity` is banned in packages/client. Gravity is a simulation constant (`pmove.ts`), applied in 8 ms sub-steps on both peers. A camera falling at Babylon's rate would fight prediction every frame.",
+  ],
+  [
+    'ellipsoid',
+    'gladiator: `ellipsoid` is banned in packages/client. The player is a 30x30x56 axis-aligned *box* (`bbox.ts`), and every movement constant in this repo was measured against that box. An ellipsoid is a different solid and a different game.',
+  ],
+  [
+    'attachControl',
+    'gladiator: `attachControl` is banned in packages/client. The camera is a puppet: yaw and pitch are ours, they go into the `UserCmd` the server lag-compensates against, and they are written to the camera every frame and never read back. Babylon reading the mouse itself inverts that.',
+  ],
+  [
+    'enablePhysics',
+    'gladiator: `enablePhysics` is banned in packages/client. There is no physics engine in this project and there will not be one — the simulation is 400 lines of Quake movement that has to run bit-identically in two runtimes. See `scripts/no-physics-plugin.mjs`.',
+  ],
+  [
+    'PhysicsAggregate',
+    'gladiator: `PhysicsAggregate` is banned in packages/client. See `enablePhysics`: there is no physics engine here, on purpose.',
+  ],
+  [
+    'PhysicsBody',
+    'gladiator: `PhysicsBody` is banned in packages/client. See `enablePhysics`: there is no physics engine here, on purpose.',
+  ],
+].map(([name, message]) => ({ selector: `Identifier[name='${name}']`, message }))
+
 export default tseslint.config(
   {
     ignores: [
@@ -222,10 +282,21 @@ export default tseslint.config(
       globals: globals.nodeBuiltin,
     },
   },
+  /* ------------------------------------------------------------------
+   * packages/client — the renderer.
+   *
+   * The simulation boundary protects `packages/sim` from the outside world.
+   * This protects the outside world from *reimplementing* the simulation:
+   * Babylon ships a collision system and a physics API, and either one would
+   * silently compete with the authoritative one. See ENGINE_COLLISION_BANS.
+   * ------------------------------------------------------------------ */
   {
     files: ['packages/client/**/*.ts'],
     languageOptions: {
       globals: globals.browser,
+    },
+    rules: {
+      'no-restricted-syntax': ['error', ...ENGINE_COLLISION_BANS],
     },
   },
 )

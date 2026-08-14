@@ -25,8 +25,20 @@ import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
-const PROBE = join(ROOT, 'packages', 'sim', 'src', '__guardrail_probe__.ts')
-const PROBE_REL = relative(ROOT, PROBE)
+
+/**
+ * Where a deliberately-violating probe is written.
+ *
+ * One per boundary: the simulation's, the renderer's, and the lockfile the
+ * physics-plugin check reads. All three are deleted immediately, whether the
+ * check passed or threw.
+ */
+const PROBES = {
+  sim: join(ROOT, 'packages', 'sim', 'src', '__guardrail_probe__.ts'),
+  client: join(ROOT, 'packages', 'client', 'src', '__guardrail_probe__.ts'),
+  lockfile: join(ROOT, '__guardrail_lock__.yaml'),
+}
+const PROBE_REL = relative(ROOT, PROBES.sim)
 
 const RESOLVE_BABYLON = [
   'node',
@@ -37,9 +49,10 @@ const RESOLVE_BABYLON = [
 
 /**
  * @typedef {{
- *   layer: 'resolve' | 'typecheck' | 'lint',
+ *   layer: 'resolve' | 'typecheck' | 'lint' | 'lockfile',
  *   label: string,
  *   probe?: string,
+ *   probeAt?: keyof typeof PROBES,
  *   command: string[],
  *   cwd?: string,
  *   expect: 'fail' | 'pass',
@@ -181,18 +194,109 @@ const CASES = [
     expect: 'fail',
     match: [/must carry the '\.ts' extension/],
   },
+
+  /* ------------------------------------------------------------------
+   * The renderer's boundary.
+   *
+   * The simulation is authoritative, and Babylon will run a second one for
+   * free if asked. These are the four calls every first-person tutorial
+   * offers, plus the camera input attachment and the physics API.
+   * ------------------------------------------------------------------ */
+  {
+    layer: 'lint',
+    label: "Babylon's own collision system cannot be reached from packages/client",
+    probeAt: 'client',
+    probe: [
+      "import { Vector3 } from '@babylonjs/core/Maths/math.vector'",
+      '',
+      'type Body = {',
+      '  checkCollisions: boolean',
+      '  ellipsoid: Vector3',
+      '  applyGravity: boolean',
+      '  moveWithCollisions(displacement: Vector3): void',
+      '}',
+      '',
+      'export function walk(body: Body): void {',
+      '  body.checkCollisions = true',
+      '  body.applyGravity = true',
+      '  body.ellipsoid = new Vector3(15, 28, 15)',
+      '  body.moveWithCollisions(new Vector3(1, 0, 0))',
+      '}',
+      '',
+    ].join('\n'),
+    command: ['pnpm', 'run', 'lint'],
+    expect: 'fail',
+    match: [
+      /`checkCollisions` is banned in packages\/client/,
+      /`applyGravity` is banned in packages\/client/,
+      /`ellipsoid` is banned in packages\/client/,
+      /`moveWithCollisions` is banned in packages\/client/,
+    ],
+  },
+  {
+    layer: 'lint',
+    label: 'the camera cannot be given its own input, and physics cannot be enabled',
+    probeAt: 'client',
+    probe: [
+      'type Camera = { attachControl(element: unknown): void }',
+      'type World = { enablePhysics(): void }',
+      '',
+      'export function drive(camera: Camera, world: World): void {',
+      '  camera.attachControl(null)',
+      '  world.enablePhysics()',
+      '}',
+      '',
+      'export const shapes = { PhysicsAggregate: 1, PhysicsBody: 2 }',
+      '',
+    ].join('\n'),
+    command: ['pnpm', 'run', 'lint'],
+    expect: 'fail',
+    match: [
+      /`attachControl` is banned in packages\/client/,
+      /`enablePhysics` is banned in packages\/client/,
+      /`PhysicsAggregate` is banned in packages\/client/,
+      /`PhysicsBody` is banned in packages\/client/,
+    ],
+  },
+  {
+    layer: 'lockfile',
+    label: 'a physics engine in the lockfile fails the build',
+    probeAt: 'lockfile',
+    probe: [
+      'packages:',
+      '',
+      "  '@babylonjs/havok@1.3.10':",
+      '    resolution: {integrity: sha512-guardrail}',
+      '',
+      '  cannon-es@0.20.0:',
+      '    resolution: {integrity: sha512-guardrail}',
+      '',
+    ].join('\n'),
+    command: ['node', 'scripts/no-physics-plugin.mjs', '--lockfile', PROBES.lockfile],
+    expect: 'fail',
+    match: [/@babylonjs\/havok/, /cannon-es/, /no physics engine, on purpose/],
+  },
+  {
+    layer: 'lockfile',
+    label: "control: the repo's own lockfile passes the same check",
+    command: ['node', 'scripts/no-physics-plugin.mjs'],
+    expect: 'pass',
+  },
 ]
 
 function removeProbe() {
-  if (existsSync(PROBE)) rmSync(PROBE)
+  for (const path of Object.values(PROBES)) if (existsSync(path)) rmSync(path)
 }
 
 /** @param {Case} testCase */
 function run(testCase) {
   if (testCase.probe !== undefined) {
+    const path = PROBES[testCase.probeAt ?? 'sim']
+    const comment = path.endsWith('.yaml') ? '#' : '/*'
+    const close = path.endsWith('.yaml') ? '' : ' */'
     writeFileSync(
-      PROBE,
-      `/* Written by scripts/guardrails.mjs. Deleted again immediately. */\n${testCase.probe}`,
+      path,
+      `${comment} Written by scripts/guardrails.mjs. Deleted again immediately.${close}\n${testCase.probe}`,
       'utf8',
     )
   }
@@ -233,7 +337,9 @@ function run(testCase) {
 removeProbe()
 
 let failures = 0
-console.log(`guardrails: ${CASES.length} deliberate violations, via ${PROBE_REL}\n`)
+console.log(
+  `guardrails: ${CASES.length} deliberate violations, via ${PROBE_REL} and two like it\n`,
+)
 
 for (const testCase of CASES) {
   const outcome = run(testCase)

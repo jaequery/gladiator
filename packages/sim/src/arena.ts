@@ -8,14 +8,16 @@
  * that swapping in a baked map later is a different `CollisionWorld`, not a
  * different code path.
  *
- * It survives the map format landing (GLAD-G2M8QQ) for two reasons. The narrow
- * one: `packages/sim` cannot import `maps/` — `rootDir` is `./src` and the
- * package has no filesystem — so the kernel's default world and the golden
- * replay's world have to be written in source, here. The wider one: this is
- * still what the renderer draws. The client and the server load `testbed` and
- * exchange its hash, and tick this; moving the simulation onto a map nothing
- * draws would trade a cosmetic gap for invisible walls. The renderer is
- * GLAD-0IDR6J and the arena worth playing in is GLAD-B8DI4J.
+ * It survives the map format landing (GLAD-G2M8QQ) because `packages/sim` cannot
+ * import `maps/` — `rootDir` is `./src` and the package has no filesystem — so
+ * the kernel's default world and the golden replay's world have to be written in
+ * source, here.
+ *
+ * It is no longer what anything *ships*. The wider reason it used to survive was
+ * that the renderer drew this and not a map; GLAD-0IDR6J made the renderer draw
+ * the map's own brushes, so the client and the server now tick
+ * `LoadedMap.world` and spawn through `createMapState` (`map/load.ts`). The
+ * arena worth playing in is GLAD-B8DI4J.
  *
  * Sized to match what the renderer already draws: a 2048x2048 floor with its
  * surface at `z = 0`, walls tall enough that a jump cannot clear them.
