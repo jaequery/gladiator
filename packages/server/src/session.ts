@@ -22,13 +22,28 @@ import {
   pmove,
 } from '@gladiator/sim'
 
+/**
+ * What the server tells a client about itself at the handshake.
+ *
+ * Two strings that both answer "are we the same deploy", from two angles.
+ * `build` is which commit; `mapHash` is which world. Passed as one value
+ * rather than two positional strings, because two adjacent strings of the same
+ * type is a swap waiting to happen and the swap would not fail a typecheck.
+ */
+export type ServerIdentity = {
+  readonly build: string
+  /** `map/load.ts`: eight hex digits over the map's content. */
+  readonly mapHash: string
+}
+
 export type SessionState = {
   readonly id: string
   readonly state: PlayerState
   /** The last tick this session has simulated. */
   readonly tick: number
   readonly greeted: boolean
-  /** Set once the client has proven it speaks a protocol we do not. */
+  /** Set once the client has proven it is not the deploy we are: wrong
+   *  protocol, or a different map. */
   readonly rejected: boolean
   /** Command batches whose `startTick` did not follow on from `tick`. */
   readonly gaps: number
@@ -50,6 +65,9 @@ export const CLOSE_BAD_FRAME = 4002
 
 /** Close code for a client that sent commands before saying hello. */
 export const CLOSE_NO_HELLO = 4003
+
+/** Close code for a client holding a different map than the server. */
+export const CLOSE_MAP_MISMATCH = 4004
 
 export function createSession(id: string): SessionState {
   return {
@@ -75,7 +93,7 @@ export function createSession(id: string): SessionState {
 export function applyMessage(
   session: SessionState,
   message: ClientMessage,
-  build: string,
+  identity: ServerIdentity,
 ): SessionStep {
   if (message.t === 'hello') {
     if (message.protocol !== PROTOCOL_VERSION) {
@@ -86,16 +104,45 @@ export function applyMessage(
             t: 'version_mismatch',
             serverProtocol: PROTOCOL_VERSION,
             clientProtocol: message.protocol,
-            serverBuild: build,
+            serverBuild: identity.build,
           },
         ],
         close: { code: CLOSE_VERSION_MISMATCH, reason: 'protocol version' },
       }
     }
+
+    // The protocol check first, then the map: a client that cannot parse our
+    // frames cannot read a map-mismatch frame either, and being told the wrong
+    // thing is worse than being told nothing.
+    //
+    // Refusing rather than adopting the client's map is the whole point. The
+    // server is authoritative, and a server that quietly played whichever
+    // arena the client claimed would be a server that can be told where the
+    // walls are.
+    if (message.mapHash !== identity.mapHash) {
+      return {
+        session: { ...session, rejected: true },
+        replies: [
+          {
+            t: 'map_mismatch',
+            serverMapHash: identity.mapHash,
+            clientMapHash: message.mapHash,
+          },
+        ],
+        close: { code: CLOSE_MAP_MISMATCH, reason: 'map mismatch' },
+      }
+    }
+
     return {
       session: { ...session, greeted: true },
       replies: [
-        { t: 'welcome', protocol: PROTOCOL_VERSION, build, session: session.id },
+        {
+          t: 'welcome',
+          protocol: PROTOCOL_VERSION,
+          build: identity.build,
+          session: session.id,
+          mapHash: identity.mapHash,
+        },
       ],
     }
   }
@@ -134,7 +181,11 @@ export function applyMessage(
 }
 
 /** Apply one raw frame from the wire. */
-export function applyFrame(session: SessionState, raw: string, build: string): SessionStep {
+export function applyFrame(
+  session: SessionState,
+  raw: string,
+  identity: ServerIdentity,
+): SessionStep {
   const message: ClientMessage | null = parseClientMessage(raw)
   if (message === null) {
     return {
@@ -143,5 +194,5 @@ export function applyFrame(session: SessionState, raw: string, build: string): S
       close: { code: CLOSE_BAD_FRAME, reason: 'bad frame' },
     }
   }
-  return applyMessage(session, message, build)
+  return applyMessage(session, message, identity)
 }

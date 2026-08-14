@@ -1,7 +1,7 @@
 import { NULL_CMD, PROTOCOL_VERSION } from '@gladiator/sim'
 import { describe, expect, it } from 'vitest'
 
-import { createNetClient, resolveServerUrl } from './net.ts'
+import { createNetClient, mustHoldStill, resolveServerUrl } from './net.ts'
 
 /**
  * A stand-in for the browser's `WebSocket`, enough of one for this module: it
@@ -40,11 +40,15 @@ class FakeSocket {
   }
 }
 
+/** The map hash this fake client claims to hold. */
+const MAP_HASH = 'a1b2c3d4'
+
 function connected(protocolOverride?: number) {
   const socket = new FakeSocket()
   const client = createNetClient({
     url: 'ws://test',
     build: 'test-build',
+    mapHash: MAP_HASH,
     socketFactory: () => socket as unknown as WebSocket,
     now: () => 0,
     ...(protocolOverride === undefined ? {} : { protocolOverride }),
@@ -77,18 +81,60 @@ describe('resolveServerUrl', () => {
 })
 
 describe('net client', () => {
-  it('opens with a hello carrying the protocol version and build', () => {
+  it('opens with a hello carrying the protocol version, the build and the map', () => {
     const { socket } = connected()
     expect(JSON.parse(socket.sent[0] ?? '{}')).toEqual({
       t: 'hello',
       protocol: PROTOCOL_VERSION,
       build: 'test-build',
+      mapHash: MAP_HASH,
     })
+  })
+
+  it('stops the world and says which two arenas when the server refuses the map', () => {
+    // What the player must see. Continuing to simulate would mean running into
+    // walls that are not there on the authoritative side, which looks like the
+    // movement being broken and is the map being wrong.
+    const { socket, client } = connected()
+    socket.deliver({ t: 'map_mismatch', serverMapHash: '00000000', clientMapHash: MAP_HASH })
+
+    const snapshot = client.snapshot()
+    expect(snapshot.status).toBe('map-mismatch')
+    expect(mustHoldStill(snapshot.status)).toBe(true)
+    expect(snapshot.serverMapHash).toBe('00000000')
+    expect(snapshot.message).toContain(MAP_HASH)
+    expect(snapshot.message).toContain('00000000')
+    expect(snapshot.message).toContain('reload')
+  })
+
+  it('keeps the mismatch message when the server then closes the socket', () => {
+    // The close arrives a moment after the frame. Overwriting the explanation
+    // with "disconnected (code 4004)" is how a diagnosable failure becomes a
+    // mystery.
+    const { socket, client } = connected()
+    socket.deliver({ t: 'map_mismatch', serverMapHash: '00000000', clientMapHash: MAP_HASH })
+    socket.close()
+    socket.emit('close', { code: 4004, reason: 'map mismatch' })
+    expect(client.snapshot().status).toBe('map-mismatch')
+    expect(client.snapshot().message).toContain('reload')
+  })
+
+  it('plays on when the server is holding the same arena', () => {
+    const { socket, client } = connected()
+    socket.deliver({
+      t: 'welcome',
+      protocol: PROTOCOL_VERSION,
+      build: 'srv',
+      session: 's1',
+      mapHash: MAP_HASH,
+    })
+    expect(client.snapshot().serverMapHash).toBe(MAP_HASH)
+    expect(mustHoldStill(client.snapshot().status)).toBe(false)
   })
 
   it('reports agreement when the hashes match', () => {
     const { socket, client } = connected()
-    socket.deliver({ t: 'welcome', protocol: PROTOCOL_VERSION, build: 'srv', session: 's1' })
+    socket.deliver({ t: 'welcome', protocol: PROTOCOL_VERSION, build: 'srv', session: 's1', mapHash: MAP_HASH })
     client.record(10, 0xdeadbeef)
     socket.deliver({ t: 'hash', tick: 10, hash: 0xdeadbeef })
 
@@ -184,6 +230,7 @@ describe('net client', () => {
     const client = createNetClient({
       url: 'ws://test',
       build: 'b',
+      mapHash: MAP_HASH,
       socketFactory: () => socket as unknown as WebSocket,
     })
     client.connect()
@@ -201,7 +248,7 @@ describe('net client', () => {
 
   it('says so on the HUD when a live session starts dropping commands', () => {
     const { socket, client } = connected()
-    socket.deliver({ t: 'welcome', protocol: PROTOCOL_VERSION, build: 'srv', session: 's1' })
+    socket.deliver({ t: 'welcome', protocol: PROTOCOL_VERSION, build: 'srv', session: 's1', mapHash: MAP_HASH })
     expect(client.snapshot().status).toBe('live')
 
     socket.close()
@@ -214,7 +261,7 @@ describe('net client', () => {
   })
 
   it('says so when the deploy has no server URL, instead of failing silently', () => {
-    const client = createNetClient({ url: null, build: 'b' })
+    const client = createNetClient({ url: null, build: 'b', mapHash: MAP_HASH })
     client.connect()
     expect(client.snapshot().status).toBe('unconfigured')
     expect(client.snapshot().message).toContain('VITE_SERVER_URL')

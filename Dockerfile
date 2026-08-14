@@ -44,6 +44,13 @@ COPY packages/sim packages/sim
 COPY packages/bot packages/bot
 COPY packages/server packages/server
 
+# The baked maps. `packages/server/src/map.ts` imports `maps/baked/*.json`
+# directly and esbuild inlines it, so the image carries the arena in the same
+# file as the code and cannot start holding a different one. Without this the
+# build fails to resolve rather than starting up mapless, which is the right way
+# round.
+COPY maps/baked maps/baked
+
 RUN pnpm --filter @gladiator/server run build
 
 # The runtime dependency tree, built with npm so it is real directories rather

@@ -1,0 +1,33 @@
+/**
+ * The map this server serves.
+ *
+ * Loaded from the committed artifact at module load, in plain Node: no GPU, no
+ * canvas, no browser globals, no asset pipeline. That is not incidental — it is
+ * the property that lets the authoritative simulation run headless on Fly while
+ * the identical simulation runs in a tab, and it is why the map format's only
+ * consumer inside `packages/sim` reads brushes and spawns and nothing else.
+ *
+ * The artifact is bundled by esbuild rather than read from disk at runtime, so
+ * the container ships one file and cannot start with a map that is not the one
+ * it was built with.
+ *
+ * Which map is a hard-coded `testbed` for now. Room-to-map assignment arrives
+ * with the room registry (GLAD-FHKBN8), and the arena that will replace this
+ * one is GLAD-B8DI4J.
+ */
+import { loadMap, type LoadedMap } from '@gladiator/sim'
+
+import baked from '../../../maps/baked/testbed.json' with { type: 'json' }
+
+/** The loaded map: source, verified hash, and a collision world to trace against. */
+export const SERVER_MAP: LoadedMap = loadMap(baked)
+
+/**
+ * The eight hex digits a client has to match to be allowed to play.
+ *
+ * `PROTOCOL_VERSION` covers the shape of the messages; this covers the world
+ * they describe. A map can change without the protocol changing, and a client
+ * one deploy behind on the map is exactly as desynchronised as one a protocol
+ * behind — it just fails later and much less legibly.
+ */
+export const SERVER_MAP_HASH: string = SERVER_MAP.hash

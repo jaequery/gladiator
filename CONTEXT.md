@@ -184,3 +184,25 @@ that order of strength.
 
 **Baker** — a build-time tool that turns authored content (a map, navigation
 data) into the compact form the sim loads (GLAD-G2M8QQ, GLAD-OB46VC).
+
+**Baked map** — what `pnpm map:bake` writes: `maps/baked/<name>.json`, carrying
+the format version, the map, and the content hash. Committed, so a build needs
+no bake step in front of it. `docs/physics-spec.md` §4.
+
+**Ramp** — a brush that is an axis-aligned box with its top face replaced by one
+sloped plane. Exactly two gradients exist, `1:1` (45°) and `1:2` (26.57°), so
+that a level designer cannot make a physics decision by typing an angle. §4.3.
+
+**Surface** — a named material a brush's faces are drawn with. Declared once per
+map and referenced by name; a surface no brush uses fails the bake.
+
+**`nonSolid` / `noRender`** — the two escape hatches that let a brush be drawn
+without being collided, or collided without being drawn. Everything else is
+both, by construction. §4.2.
+
+**Prop** — a glTF reference in a map's `props[]`: decoration that affects
+neither collision nor the derived render mesh, and that the sim never parses.
+
+**Map hash** — eight hex digits over a baked map's content, recomputed at load
+and exchanged in the handshake. Two peers that disagree about it refuse to play
+rather than simulate two different worlds. §4.5.
