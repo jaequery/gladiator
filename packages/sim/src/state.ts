@@ -33,6 +33,16 @@ export const EntityFlag = {
   OnGround: 1 << 0,
   Ducked: 1 << 1,
   Dead: 1 << 2,
+  /**
+   * Jump has been held since it last fired. Quake 3's `PMF_JUMP_HELD`.
+   *
+   * A flag rather than a field because it is one bit and `flags` is already
+   * hashed and encoded — and it *must* be both. It is the only piece of
+   * movement state that survives between sub-steps, so a client whose
+   * reconciliation restored everything except this one bit would re-jump on a
+   * tick the server did not, and diverge from a keypress.
+   */
+  JumpHeld: 1 << 3,
 } as const
 
 export type EntityFlag = (typeof EntityFlag)[keyof typeof EntityFlag]
@@ -62,6 +72,16 @@ export type EntityState = {
    */
   angles: MutVec3
   health: number
+  /**
+   * Sub-steps of knockback left. Quake 3's `ps->pm_time`.
+   *
+   * While it is positive the player takes no ground friction, accelerates as
+   * though airborne even while standing, and `slideMove` restores the velocity
+   * a move started with. That is what makes a rocket jump keep the speed the
+   * explosion gave it. Set by splash damage (GLAD-5QGO11); `pmove` counts it
+   * down.
+   */
+  knockbackTicks: number
   /** The entity that is responsible for this one — a rocket's shooter. */
   ownerId: number
   spawnTick: number
@@ -102,6 +122,7 @@ export type EntityInit = {
   velocity?: MutVec3
   angles?: MutVec3
   health?: number
+  knockbackTicks?: number
   ownerId?: number
   expireTick?: number
 }
@@ -117,6 +138,7 @@ export function spawnEntity(state: GameState, init: EntityInit): EntityState {
     velocity: init.velocity ?? vec3(),
     angles: init.angles ?? vec3(),
     health: init.health ?? 0,
+    knockbackTicks: init.knockbackTicks ?? 0,
     ownerId: init.ownerId ?? 0,
     spawnTick: state.tick,
     expireTick: init.expireTick ?? NEVER_EXPIRES,
@@ -157,6 +179,7 @@ export function cloneEntity(entity: EntityState): EntityState {
     velocity: [entity.velocity[0], entity.velocity[1], entity.velocity[2]],
     angles: [entity.angles[0], entity.angles[1], entity.angles[2]],
     health: entity.health,
+    knockbackTicks: entity.knockbackTicks,
     ownerId: entity.ownerId,
     spawnTick: entity.spawnTick,
     expireTick: entity.expireTick,
@@ -222,6 +245,7 @@ export function encodeInto(writer: ByteWriter, state: GameState): void {
     writeF64(writer, entity.angles[1])
     writeF64(writer, entity.angles[2])
     writeF64(writer, entity.health)
+    writeI32(writer, entity.knockbackTicks)
     writeI32(writer, entity.ownerId)
     writeI32(writer, entity.spawnTick)
     writeI32(writer, entity.expireTick)

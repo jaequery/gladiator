@@ -4,7 +4,7 @@
  * One frame does, in order:
  *
  *   1. read the clock once, and turn elapsed wall-clock into whole ticks
- *   2. for each tick: sample input, `pmove`, hash, queue the command
+ *   2. for each tick: sample input, `tick()`, hash, queue the command
  *   3. flush the queued commands as one frame to the server
  *   4. draw the interpolated result
  *
@@ -14,13 +14,18 @@
  * this shape.
  */
 import {
-  SPAWN_STATE,
+  EntityFlag,
+  SKELETON_ARENA,
   TICK_RATE,
   angleUnitsToRadians,
-  hashPlayerState,
-  type PlayerState,
+  cloneGameState,
+  createSkeletonState,
+  findPlayer,
+  hashState,
+  onSpeedClamp,
+  type GameState,
   type Vec3,
-  pmove,
+  tick as simTick,
 } from '@gladiator/sim'
 
 import { createHud } from './hud.ts'
@@ -68,11 +73,36 @@ function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t
 }
 
-function interpolate(previous: PlayerState, current: PlayerState, alpha: number): Vec3 {
+/** The one player this client simulates. Two players is GLAD-FHKBN8. */
+const LOCAL_SLOT = 0
+
+/** `[0, 0, 0]` if the player has somehow gone missing, rather than throwing in a frame. */
+const NOWHERE: Vec3 = [0, 0, 0]
+
+function originOf(state: GameState): Vec3 {
+  const player = findPlayer(state, LOCAL_SLOT)
+  return player === null ? NOWHERE : [player.origin[0], player.origin[1], player.origin[2]]
+}
+
+function velocityOf(state: GameState): Vec3 {
+  const player = findPlayer(state, LOCAL_SLOT)
+  return player === null
+    ? NOWHERE
+    : [player.velocity[0], player.velocity[1], player.velocity[2]]
+}
+
+function onGroundIn(state: GameState): boolean {
+  const player = findPlayer(state, LOCAL_SLOT)
+  return player !== null && (player.flags & EntityFlag.OnGround) !== 0
+}
+
+function interpolate(previous: GameState, current: GameState, alpha: number): Vec3 {
+  const from = originOf(previous)
+  const to = originOf(current)
   return [
-    lerp(previous.origin[0], current.origin[0], alpha),
-    lerp(previous.origin[1], current.origin[1], alpha),
-    lerp(previous.origin[2], current.origin[2], alpha),
+    lerp(from[0], to[0], alpha),
+    lerp(from[1], to[1], alpha),
+    lerp(from[2], to[2], alpha),
   ]
 }
 
@@ -110,20 +140,29 @@ function boot(): void {
   })
   net.connect()
 
-  let state = SPAWN_STATE
-  let previous = SPAWN_STATE
-  let tick = 0
-  let clientHash = hashPlayerState(tick, state)
+  const state = createSkeletonState()
+  // `tick()` advances the world in place, so the frame before is a *copy* —
+  // `AGENTS.md` says this out loud because holding a reference instead is a bug
+  // that only shows up as a rendering stutter.
+  let previous = cloneGameState(state)
+  let clientHash = hashState(state)
   let accumulatorMs = 0
   let lastFrameMs = performance.now()
+
+  // The sim has no `console`, so the §2.6 safety rail reports through a seam.
+  // If this ever prints, something upstream handed the simulation a velocity no
+  // amount of movement could produce.
+  onSpeedClamp((speed) => {
+    console.warn(`gladiator: clamped a velocity of ${speed.toFixed(0)} qu/s`)
+  })
 
   window.__gladiator = {
     snapshot: () => ({
       build: BUILD,
-      tick,
-      origin: state.origin,
-      velocity: state.velocity,
-      onGround: state.onGround,
+      tick: state.tick,
+      origin: originOf(state),
+      velocity: velocityOf(state),
+      onGround: onGroundIn(state),
       clientHash,
       locked: input.locked,
       net: net.snapshot(),
@@ -160,12 +199,11 @@ function boot(): void {
       const step = advance(accumulatorMs, elapsedMs)
       accumulatorMs = step.accumulatorMs
       for (let i = 0; i < step.ticks; i += 1) {
-        previous = state
-        state = pmove(state, cmd)
-        tick += 1
-        clientHash = hashPlayerState(tick, state)
-        net.record(tick, clientHash)
-        net.queue(tick, cmd)
+        previous = cloneGameState(state)
+        simTick(state, [cmd], SKELETON_ARENA)
+        clientHash = hashState(state)
+        net.record(state.tick, clientHash)
+        net.queue(state.tick, cmd)
       }
       net.flush()
     }
@@ -180,7 +218,7 @@ function boot(): void {
       build: BUILD,
       renderer: renderer.description,
       fps,
-      tick,
+      tick: state.tick,
       ticksPerSecond: TICK_RATE,
       clientHash,
       locked: input.locked,

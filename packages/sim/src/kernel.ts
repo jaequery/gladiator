@@ -31,28 +31,28 @@
  *
  * ## What is *not* here yet
  *
- * Gameplay. The step below applies input, gravity and the walking skeleton's
- * flat plane, and that is on purpose — this ticket is the engine, not the
- * game. `pmove` proper (GLAD-0B1GDS) replaces `applyCommands` and folds the
- * `pmove.ts` stub into it; swept-AABB tracing (GLAD-3SCN0U) replaces the plane
- * clamp in `integrate`; weapons (GLAD-0QWRYK) and round rules (GLAD-L4SYN9)
- * add phases. The phase order below is the contract those tickets build
- * against, and each of them will move the golden trace — which is what the
- * golden trace is for.
+ * Gameplay. The step below moves players and expires entities, and that is all.
+ * Weapons (GLAD-0QWRYK) and round rules (GLAD-L4SYN9) add phases; a real map
+ * (GLAD-G2M8QQ, GLAD-B8DI4J) replaces the `CollisionWorld` the kernel is handed
+ * rather than any code in here. The phase order below is the contract those
+ * tickets build against, and each of them will move the golden trace — which is
+ * what the golden trace is for.
  *
- * The constants come from `tick.ts` and `pmove.ts` rather than being restated
+ * The constants come from `tick.ts` and `pmove/` rather than being restated
  * here. Two names for one number is the drift this repo is built to prevent.
  */
 
-import { PLAYER_HALF_WIDTH } from './bbox.ts'
-import { angleVectors, vec3 } from './math.ts'
-import type { MutVec3 } from './math.ts'
-import { GRAVITY, JUMP_VELOCITY, PLANE_HALF_EXTENT, RUN_SPEED } from './pmove.ts'
+import { SKELETON_ARENA } from './arena.ts'
+import { PLAYER_MAXS, PLAYER_MINS } from './bbox.ts'
+import type { CollisionWorld } from './collide.ts'
+import { copyVec3 } from './math.ts'
+import { GRAVITY, createPmoveBody, pmove } from './pmove/index.ts'
+import type { PmoveBody } from './pmove/index.ts'
 import { advanceRng } from './rng.ts'
 import { EntityFlag, EntityKind } from './state.ts'
-import type { GameState } from './state.ts'
+import type { EntityState, GameState } from './state.ts'
 import { MAX_HOST_FRAME_MS, TICK_DT, TICK_INTERVAL_MS } from './tick.ts'
-import { BUTTON_JUMP, NULL_CMD } from './usercmd.ts'
+import { NULL_CMD } from './usercmd.ts'
 import type { UserCmd } from './usercmd.ts'
 
 /**
@@ -82,6 +82,15 @@ export type TickObserver = (state: GameState) => void
 export type Kernel = {
   state: GameState
   /**
+   * The geometry this world's bodies collide with.
+   *
+   * Level data, loaded once and never mutated by a sub-step, which is why it
+   * sits beside the state rather than inside it: it does not need cloning for
+   * reconciliation, snapshotting or hashing, and two peers agreeing about the
+   * map is a question the lobby settles before the first tick.
+   */
+  world: CollisionWorld
+  /**
    * Wall-clock milliseconds accumulated but not yet worth a sub-step.
    *
    * Always in `[0, TICK_INTERVAL_MS)`. Exactly, not approximately: `TICK_INTERVAL_MS` is 8, a
@@ -93,8 +102,11 @@ export type Kernel = {
   steps: number
 }
 
-export function createKernel(state: GameState): Kernel {
-  return { state, remainderMs: 0, steps: 0 }
+export function createKernel(
+  state: GameState,
+  world: CollisionWorld = SKELETON_ARENA,
+): Kernel {
+  return { state, world, remainderMs: 0, steps: 0 }
 }
 
 /* --------------------------------------------------------------------------
@@ -149,7 +161,7 @@ export function advanceHost(
   kernel.remainderMs = accumulated - steps * TICK_INTERVAL_MS
 
   for (let i = 0; i < steps; i++) {
-    tick(kernel.state, commands(kernel.state.tick + 1))
+    tick(kernel.state, commands(kernel.state.tick + 1), kernel.world)
     if (onTick !== undefined) onTick(kernel.state)
   }
 
@@ -167,7 +179,11 @@ export function advanceHost(
  * The phase order is the contract. It is fixed, and it is the reason two peers
  * running different builds of the *renderer* still agree about the world.
  */
-export function tick(state: GameState, inputs: TickInputs): void {
+export function tick(
+  state: GameState,
+  inputs: TickInputs,
+  world: CollisionWorld = SKELETON_ARENA,
+): void {
   state.tick += 1
 
   // The stream advances once per sub-step whether or not anything drew from
@@ -177,26 +193,30 @@ export function tick(state: GameState, inputs: TickInputs): void {
   // the first tick, rather than only once some code happens to roll a die.
   advanceRng(state)
 
-  applyCommands(state, inputs)
+  movePlayers(state, inputs, world)
   integrate(state)
   expire(state)
 }
 
 /**
- * Turn `UserCmd`s into intent on the controlling entity.
+ * Run `pmove` for every player entity.
  *
- * **Placeholder.** Real `pmove` — friction, `Accelerate`, air control, the
- * strafe-jump projection, integer velocity snapping — is GLAD-0B1GDS and
- * replaces the body of this function. What is here sets angles and drives the
- * player around at a flat speed, which is enough to make the golden trace
- * depend on every field of a command that matters.
+ * The kernel's whole share of movement is marshalling: it copies an entity into
+ * the shape the collision layer moves, hands it to `pmove`, and copies the
+ * result back. Every decision about *how* a player moves lives in `pmove/`, and
+ * that separation is deliberate — the bot (GLAD-TSED8V) and client prediction
+ * (GLAD-6RT64L) both need to run the movement over a body that is not an entity
+ * in this state.
+ *
+ * A player with no command this sub-step is moved with `NULL_CMD` rather than
+ * skipped. Gravity, friction and the ground trace all still have to run, or a
+ * dropped packet would leave a player hanging in the air.
  */
-function applyCommands(state: GameState, inputs: TickInputs): void {
+function movePlayers(state: GameState, inputs: TickInputs, world: CollisionWorld): void {
   for (const entity of state.entities) {
     if (entity.kind !== EntityKind.Player) continue
-    if (entity.slot < 0) continue
 
-    const cmd = inputs[entity.slot] ?? NULL_CMD
+    const cmd = (entity.slot < 0 ? null : inputs[entity.slot]) ?? NULL_CMD
 
     // Angle units in, angle units stored. `sanitizeUserCmd` has already wrapped
     // yaw and clamped pitch, so there is nothing to normalise here — which is
@@ -205,50 +225,55 @@ function applyCommands(state: GameState, inputs: TickInputs): void {
     entity.angles[1] = cmd.yaw
     entity.angles[2] = 0
 
-    // Movement is horizontal, so the wish direction is taken from yaw alone —
-    // looking at the floor must not slow you down. `pmove` does the same.
-    angleVectors(0, cmd.yaw, 0, scratchForward, scratchRight, null)
-
-    let wishX = scratchForward[0] * cmd.forwardMove + scratchRight[0] * cmd.sideMove
-    let wishY = scratchForward[1] * cmd.forwardMove + scratchRight[1] * cmd.sideMove
-
-    // Normalise past unit length so a diagonal is not faster than a straight
-    // line. Quake normalises unconditionally; this is the same for the -1/0/+1
-    // axes a `UserCmd` carries.
-    const wishLength = Math.sqrt(wishX * wishX + wishY * wishY)
-    if (wishLength > 1) {
-      wishX /= wishLength
-      wishY /= wishLength
-    }
-
-    const onGround = (entity.flags & EntityFlag.OnGround) !== 0
-
-    if (onGround) {
-      // No acceleration curve, no friction, no air control, no velocity
-      // snapping. All of that is the point of GLAD-0B1GDS; none of it belongs
-      // in the kernel.
-      entity.velocity[0] = wishX * RUN_SPEED
-      entity.velocity[1] = wishY * RUN_SPEED
-
-      if ((cmd.buttons & BUTTON_JUMP) !== 0) {
-        entity.velocity[2] = JUMP_VELOCITY
-        entity.flags &= ~EntityFlag.OnGround
-      }
-    }
+    loadBody(scratchBody, entity)
+    pmove(world, scratchBody, cmd, TICK_DT)
+    storeBody(entity, scratchBody)
   }
 }
 
+/** Copy an entity into the movement body. */
+function loadBody(body: PmoveBody, entity: EntityState): void {
+  copyVec3(body.origin, entity.origin)
+  copyVec3(body.velocity, entity.velocity)
+  body.knockbackTicks = entity.knockbackTicks
+  body.jumpHeld = (entity.flags & EntityFlag.JumpHeld) !== 0
+
+  // Recomputed by `pmove`'s own ground trace before anything reads them; reset
+  // here so one player cannot inherit the previous player's ground plane.
+  body.groundPlane = false
+  body.walking = false
+  body.groundNormal[0] = 0
+  body.groundNormal[1] = 0
+  body.groundNormal[2] = 0
+}
+
+/** Copy the moved body back onto the entity. */
+function storeBody(entity: EntityState, body: PmoveBody): void {
+  copyVec3(entity.origin, body.origin)
+  copyVec3(entity.velocity, body.velocity)
+  entity.knockbackTicks = body.knockbackTicks
+
+  // `OnGround` is `walking`, not `groundPlane`: a body resting against a slope
+  // too steep to stand on is touching geometry, not standing on it.
+  if (body.walking) entity.flags |= EntityFlag.OnGround
+  else entity.flags &= ~EntityFlag.OnGround
+
+  if (body.jumpHeld) entity.flags |= EntityFlag.JumpHeld
+  else entity.flags &= ~EntityFlag.JumpHeld
+}
+
 /**
- * Gravity, Euler integration, and the walking skeleton's square plane.
+ * Gravity and Euler integration for everything that is not a player.
  *
- * **Placeholder world.** The plane is the same one `pmove.ts` runs on, so the
- * kernel and the skeleton do not disagree about where the ground is. Swept-AABB
- * tracing (GLAD-3SCN0U) replaces both clamps below with a `StepSlideMove`
- * against real geometry.
+ * Which today is nothing: the only non-player entity kind is `Projectile`, and
+ * rockets are GLAD-0QWRYK's — they will want a trace and an explosion, not
+ * this. It is kept as the one line of behaviour a spawned entity has so that
+ * "an entity exists and the world advances" stays testable in the meantime.
  */
 function integrate(state: GameState): void {
   for (const entity of state.entities) {
     if (entity.kind === EntityKind.None) continue
+    if (entity.kind === EntityKind.Player) continue
 
     if ((entity.flags & EntityFlag.OnGround) === 0) {
       entity.velocity[2] -= GRAVITY * TICK_DT
@@ -257,27 +282,7 @@ function integrate(state: GameState): void {
     entity.origin[0] += entity.velocity[0] * TICK_DT
     entity.origin[1] += entity.velocity[1] * TICK_DT
     entity.origin[2] += entity.velocity[2] * TICK_DT
-
-    if (entity.kind !== EntityKind.Player) continue
-
-    entity.origin[0] = clampToPlane(entity.origin[0])
-    entity.origin[1] = clampToPlane(entity.origin[1])
-
-    if (entity.origin[2] <= FLOOR_Z) {
-      entity.origin[2] = FLOOR_Z
-      if (entity.velocity[2] < 0) entity.velocity[2] = 0
-      entity.flags |= EntityFlag.OnGround
-    } else {
-      entity.flags &= ~EntityFlag.OnGround
-    }
   }
-}
-
-/** Keep a player's centre inside the square plane. */
-function clampToPlane(value: number): number {
-  if (value > MOVE_LIMIT) return MOVE_LIMIT
-  if (value < -MOVE_LIMIT) return -MOVE_LIMIT
-  return value
 }
 
 /**
@@ -297,30 +302,15 @@ function expire(state: GameState): void {
   }
 }
 
-/* --------------------------------------------------------------------------
- * The placeholder world
- *
- * Derived from `pmove.ts` rather than invented, so the kernel's stand-in world
- * and the walking skeleton's are the same world. Both go when GLAD-3SCN0U
- * lands a real trace.
- * ----------------------------------------------------------------------- */
-
-/** How far a player's centre may get from the middle of the plane. */
-const MOVE_LIMIT = PLANE_HALF_EXTENT - PLAYER_HALF_WIDTH
-
-/** The height of the stand-in floor plane, in Quake units. */
-const FLOOR_Z = 0
-
 /**
- * Scratch vectors for `angleVectors`.
+ * The one body every player is moved through, reused.
  *
- * Module scope so the tick loop allocates nothing. Safe for the same reason
+ * Module scope so the tick loop allocates nothing, and safe for the same reason
  * the scratch writer in `state.ts` is: the simulation is single-threaded and
- * synchronous, which `await` being a lint error inside this package is there
- * to guarantee.
+ * synchronous, which `await` being a lint error inside this package is there to
+ * guarantee. `loadBody` overwrites every field before `pmove` reads one.
  */
-const scratchForward: MutVec3 = vec3()
-const scratchRight: MutVec3 = vec3()
+const scratchBody: PmoveBody = createPmoveBody(PLAYER_MINS, PLAYER_MAXS)
 
 /**
  * Advance an existing kernel by a whole number of sub-steps, ignoring the host
@@ -337,7 +327,7 @@ export function advanceTicks(
   onTick?: TickObserver,
 ): void {
   for (let i = 0; i < count; i++) {
-    tick(kernel.state, commands(kernel.state.tick + 1))
+    tick(kernel.state, commands(kernel.state.tick + 1), kernel.world)
     if (onTick !== undefined) onTick(kernel.state)
   }
   kernel.steps += count

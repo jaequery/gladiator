@@ -29,7 +29,7 @@ import {
   createProvingGround,
 } from './fixtures/proving-ground.ts'
 import { lengthVec3 } from './math.ts'
-import { GRAVITY } from './pmove.ts'
+import { GRAVITY } from './pmove/index.ts'
 import { rngChance, rngRange, seedRng } from './rng.ts'
 import type { RngHolder } from './rng.ts'
 import {

@@ -13,7 +13,7 @@ messages. Most of them are still to be written:
 | 0.1 | Units, tick rate and the fixed timestep       | **below**    |
 | 0.2 | Player bounding box and eye height            | **below**    |
 | 0.3 | Coordinate systems and the axis map           | **below**    |
-| 1.x | `pmove`: friction, acceleration, air control  | GLAD-0B1GDS  |
+| 1.x | `pmove`: friction, acceleration, snapping     | **below**    |
 | 2.x | Tracing: swept AABB, `SlideMove`, step-up     | **below**    |
 | 3.x | Weapons: rockets, splash, railgun             | GLAD-0QWRYK  |
 
@@ -238,6 +238,212 @@ were never wrong.
 `axis.test.ts` asserts both the determinant and the basis-vector table above.
 That test is what stops this document, `AGENTS.md` and the code from drifting
 apart.
+
+---
+
+## §1 `pmove`
+
+The movement. Ported from Quake 3's `bg_pmove.c`, in
+`packages/sim/src/pmove/`, and measured by `pmove/pmove.test.ts` — every number
+in §1.7 is a reading taken off the running code rather than an identity.
+
+### §1.1 The constants
+
+| Constant | Value | Quake 3 name | Source |
+| -------- | ----- | ------------ | ------ |
+| `GRAVITY` | 800 qu/s² | `g_gravity` | `pmove/index.ts` |
+| `RUN_SPEED` | 320 qu/s | `g_speed`, `ps->speed` | |
+| `JUMP_VELOCITY` | 270 qu/s | `JUMP_VELOCITY` | |
+| `PM_ACCELERATE` | 10 | `pm_accelerate` | `pmove/accelerate.ts` |
+| `PM_AIR_ACCELERATE` | 1 | `pm_airaccelerate` | |
+| `AIR_STOP_ACCELERATE` | 2.5 | CPMA's `pm_airstopaccelerate` | |
+| `AIR_CONTROL` | **0** | CPMA's `pm_airControl` | |
+| `PM_FRICTION` | 6 | `pm_friction` | `pmove/friction.ts` |
+| `PM_STOPSPEED` | 100 qu/s | `pm_stopspeed` | |
+
+VQ3 throughout, with exactly one borrowing from Challenge ProMode — see §1.8.
+
+### §1.2 `PM_CmdScale`, and the jump axis that is not in it
+
+A diagonal must not be faster than a straight line. Holding W and D produces a
+wish vector of length `sqrt(2)`, and the scale is what turns that back into 320:
+
+```
+max   = max(|forwardmove|, |rightmove|)
+total = sqrt(forwardmove^2 + rightmove^2)
+scale = speed * max / total
+```
+
+Quake's own version divides by `127.0 * total`, because its move axes are
+`signed char` and 127 is full deflection. A `UserCmd` here carries -1/0/+1, so
+the full-scale divisor is 1 and drops out. The arithmetic is otherwise
+identical.
+
+**The jump axis is excluded, and Quake includes it.** Quake counts `upmove` in
+`total`, where it contributes to the denominator but never to the wish
+*vector*, which is horizontal. So holding jump cuts air wishspeed from 320 to
+`320 / sqrt(2)` = 226, and holding jump plus a diagonal cuts it to
+`320 * sqrt(2/3)` = 261.
+
+That is not a mechanic. It is a tax on input hardware: the players who beat it
+are the ones whose keyboard or script releases jump for a tick between hops,
+not the ones with better movement. Gladiator drops it, so air wishspeed is 320
+whether or not jump is down.
+
+### §1.3 `PM_Friction`
+
+```
+speed   = |velocity| , with z zeroed while walking
+if speed < 1: velocity.xy = 0 and return
+control = max(speed, PM_STOPSPEED)
+drop    = control * PM_FRICTION * dt          (only while walking)
+velocity *= max(0, speed - drop) / speed
+```
+
+At the 8 ms sub-step that is **4.8% of your speed per tick**, and above
+`PM_STOPSPEED` it is exactly 4.8% because the drop is proportional. Below 100
+ups the floor makes it a flat 4.8 qu/s per tick, which is what makes a player
+stop in finite time rather than creeping toward zero forever.
+
+Two gates decide everything the player feels:
+
+- **`walking` only.** There is no air friction at all. That is why speed
+  carried into a jump survives it, and why strafe-jumping compounds.
+- **`knockbackTicks === 0`.** A player still being knocked back pays no ground
+  friction, so the floor cannot file a rocket jump's speed off in the ticks
+  before they have left it. Quake's `PMF_TIME_KNOCKBACK`.
+
+### §1.4 `PM_Accelerate` — the mechanic
+
+```
+currentspeed = dot(velocity, wishdir)
+addspeed     = wishspeed - currentspeed
+if addspeed <= 0: return
+accelspeed   = min(accel * dt * wishspeed, addspeed)
+velocity    += wishdir * accelspeed
+```
+
+The gate is on the **projection** of the velocity onto the wish direction, not
+on its magnitude. The question it asks is not "are you already doing 320?" but
+"are you already doing 320 *in the direction you are asking for*?". Turn 85
+degrees away from your velocity and the projection collapses toward zero, the
+gate swings open however fast you are travelling, and the acceleration that
+lands is mostly perpendicular — which lengthens the vector rather than
+replacing it. Do that every tick while airborne and speed compounds.
+
+id shipped this deliberately: the alternative is in `bg_pmove.c` behind
+`#if 0`, commented *"proper way (avoids strafe jump maxspeed bug), but feels
+bad"*. **It is the mechanic, not a bug.** `pmove.test.ts` asserts that
+accelerating *perpendicular* to the velocity increases total speed, so that a
+future refactor which "fixes" it fails a test rather than a playtest.
+
+### §1.5 The phase order
+
+One sub-step, Quake 3's `PmoveSingle`:
+
+```
+release the jump latch  ->  drop timers  ->  §2.6 speed rail
+  ->  PM_GroundTrace  ->  PM_WalkMove | PM_AirMove  ->  PM_GroundTrace
+  ->  SnapVector
+```
+
+and inside `PM_WalkMove`:
+
+```
+PM_CheckJump  ->  (jumped? PM_AirMove, and return)  ->  PM_Friction  ->  ...
+```
+
+**`PM_CheckJump` running before `PM_Friction` is the entire bunny hop.** A
+successful jump clears `walking`, so friction finds nothing to charge and a
+frame-perfect landing-then-jump costs *exactly zero* speed. Miss the tick by one
+and it costs 4.8%. Swapping the two calls leaves a game that still runs, still
+looks right, and quietly has no movement ceiling.
+
+Two more things in here are deliberate:
+
+- **The jump assigns `velocity[2] = 270`** rather than adding to it.
+  QuakeWorld's additive form lets a player stack a jump onto rising velocity —
+  off a ramp, out of an explosion — and stack it again.
+- **Jump must be released before it fires again** (Quake 3's `PMF_JUMP_HELD`),
+  which is the only piece of movement state that survives between sub-steps. It
+  is carried as an `EntityFlag`, so it is hashed and encoded like everything
+  else: a client whose reconciliation restored everything *except* that bit
+  would re-jump on a tick the server did not.
+
+### §1.6 Velocity snapping
+
+Every component of the velocity is rounded to the nearest whole unit at the end
+of every sub-step. **Round to nearest, never truncate** — §0.1 has the
+derivation, and the short version is that rounding makes gravity behave like
+750 and puts the jump apex at 48.6 units, while truncating would make it 875
+and 41.6.
+
+Snapping is not free, and the place it shows is §1.7's strafe-jump number. The
+acceleration a tick applies is small (2.56 qu/s in the air), so rounding the
+*result* is very nearly rounding the acceleration itself — and it is rounded on
+the world axes rather than along the velocity. A player turning smoothly gets
+slightly less than the continuous model predicts; one turning to the lattice can
+get slightly more. Both are Quake, and both are in the test.
+
+### §1.7 The gates
+
+Measured by `packages/sim/src/pmove/pmove.test.ts`, sampled **after `pmove`
+returns** — after the second ground trace and after the snap. Tolerances are two
+ticks, because a one-tick tolerance would be encoding an unstated decision about
+where inside `PmoveSingle` the reading was taken.
+
+| Measurement | Value |
+| ----------- | ----- |
+| Flat-ground jump apex | 48.53 qu above the take-off (48.60 ± 0.5) |
+| 0 -> 320 ups, holding W | 19 ticks = **152 ms** |
+| 320 -> 0 ups, no input | 44 ticks = **352 ms** (360 ± 2 ticks) |
+| Frame-perfect landing-then-jump | **0%** speed lost |
+| One tick late | **4.8%** speed lost |
+| Air time per jump | 90 accelerating ticks (89 airborne + the take-off tick) |
+| Four chained perfect jumps from 320, W+D | **794–883 ups**, see below |
+
+The last row is a band rather than a number, and the band is the honest answer.
+The continuous model — each air tick adds a constant
+`2a(wishspeed - a) + a^2` to `v^2`, with `a = 2.56` — predicts **832 ups** after
+four 90-tick jumps, and that is the figure the movement was specified against.
+Velocity snapping (§1.6) turns it into a range:
+
+| Turning | Reaches |
+| ------- | ------- |
+| smoothly, ignoring the snap lattice | 794 ups |
+| tuned to the snap lattice, to 1/65536 of a turn | 883 ups |
+
+A human approximates the lower bound; only a bot can extract the upper. 832 sits
+between them, and `pmove.test.ts` asserts exactly that — both bounds, and the
+continuous model that produces 832 — so the discrepancy stays legible instead of
+becoming a mystery for whoever reads the number next.
+
+### §1.8 What is deliberately not here
+
+**`airControl` is 0 and the CPM strafe path is cut.** CPMA rotates velocity
+toward the wish direction when the player holds W alone, which makes a second,
+easier acceleration technique discoverable — but it accelerates at roughly half
+the rate of the diagonal path it is meant to teach, so a player who finds it
+first learns the slower movement and then has to unlearn it. One movement
+vocabulary, not two.
+
+**`airStopAccelerate` is the one thing borrowed from CPMA**, at 2.5, and it
+applies **if and only if** `dot(velocity, wishdir) < 0`. VQ3's air control is
+otherwise so weak that a mistimed jump cannot be corrected at all — you commit
+to a trajectory at take-off and ride it into a wall. 2.5 gives an airborne
+player enough authority to kill speed they did not want, and none to gain speed
+they did not earn: by construction it can only ever act against the current
+heading.
+
+**Ducking is not implemented.** `UserCmd` has no crouch button yet
+(`usercmd.ts` names it as arriving with its own ticket), so there is nothing to
+drive `PM_CheckDuck` with. §0.2's note assigning the ducked dimensions to this
+ticket is deferred to whichever ticket adds that button — the dimensions are
+still deliberately unstated, so there is still only one place they could be
+wrong.
+
+**Water, ladders, flight and the grapple are not implemented**, and are not
+planned: Gladiator has one arena, two weapons and no items.
 
 ---
 

@@ -2,6 +2,16 @@ export { QUAKE_TO_ENGINE, applyMat3, determinant3, quakeToEngine } from './axis.
 export type { Mat3, Vec3 } from './axis.ts'
 
 export {
+  LANDMARK_MAXS,
+  LANDMARK_MINS,
+  PLANE_HALF_EXTENT,
+  SKELETON_ARENA,
+  SKELETON_BRUSHES,
+  SKELETON_SEED,
+  createSkeletonState,
+} from './arena.ts'
+
+export {
   PLAYER_HALF_WIDTH,
   PLAYER_HEIGHT,
   PLAYER_MAXS,
@@ -41,7 +51,6 @@ export {
   hashBytes,
   hashFloat64,
   hashInit,
-  hashPlayerState,
   hashString,
   hashUint32,
 } from './hash.ts'
@@ -73,14 +82,25 @@ export {
 export type { MutVec3 } from './math.ts'
 
 export {
+  AIR_CONTROL,
+  AIR_STOP_ACCELERATE,
   GRAVITY,
   JUMP_VELOCITY,
-  PLANE_HALF_EXTENT,
+  PM_ACCELERATE,
+  PM_AIR_ACCELERATE,
+  PM_FRICTION,
+  PM_STOPSPEED,
   RUN_SPEED,
-  SPAWN_STATE,
+  accelerate,
+  airAccelerationFor,
+  cmdScale,
+  createPmoveBody,
+  friction,
+  onSpeedClamp,
   pmove,
-} from './pmove.ts'
-export type { PlayerState } from './pmove.ts'
+  snapVelocity,
+} from './pmove/index.ts'
+export type { PmoveBody } from './pmove/index.ts'
 
 export {
   MAX_CMDS_PER_BATCH,

@@ -4,7 +4,7 @@
  * Everything interesting is in `server.ts`; this is the part that reads the
  * environment, prints a line, and knows how to die politely.
  */
-import { PROTOCOL_VERSION } from '@gladiator/sim'
+import { PROTOCOL_VERSION, onSpeedClamp } from '@gladiator/sim'
 
 import { readConfig } from './config.ts'
 import { createJitterProbe } from './jitter.ts'
@@ -15,6 +15,14 @@ const JITTER_REPORT_MS = 60_000
 
 const config = readConfig(process.env)
 const jitter = createJitterProbe()
+
+// The simulation has no `console` — that is enforced, not conventional — so the
+// physics-spec §2.6 safety rail reports through a seam the host fills in.
+// Nothing a player can do reaches 3000 qu/s, so a line here means a command
+// stream produced a velocity that movement cannot: worth seeing in the log.
+onSpeedClamp((speed) => {
+  console.warn(`gladiator: clamped a velocity of ${speed.toFixed(0)} qu/s`)
+})
 
 const server = await startServer({ config, jitter })
 

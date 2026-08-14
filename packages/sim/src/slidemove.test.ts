@@ -5,7 +5,7 @@ import { boxBrush, boxPenetration, brush, createCollisionWorld } from './collide
 import type { CollisionWorld } from './collide.ts'
 import { lengthVec3, vec3 } from './math.ts'
 import type { MutVec3 } from './math.ts'
-import { GRAVITY } from './pmove.ts'
+import { GRAVITY } from './pmove/index.ts'
 import {
   MAX_MOVE_SPEED,
   MIN_WALK_NORMAL,

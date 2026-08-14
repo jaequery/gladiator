@@ -27,8 +27,9 @@
  * at the seam. That conversion happens where a constant is transcribed — here —
  * and never at runtime.
  *
- * Ducking itself is GLAD-0B1GDS's; the numbers are not stated here so that
- * there is only ever one place they could be wrong.
+ * Ducking is not implemented — `UserCmd` has no crouch button yet — and its
+ * numbers are still not stated here, so that when it arrives there is only
+ * ever one place they could be wrong. `docs/physics-spec.md` §1.8.
  */
 
 import type { Vec3 } from './axis.ts'

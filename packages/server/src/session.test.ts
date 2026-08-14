@@ -1,10 +1,13 @@
 import {
   NULL_CMD,
   PROTOCOL_VERSION,
-  SPAWN_STATE,
+  SKELETON_ARENA,
+  type GameState,
+  createSkeletonState,
   encodeCmd,
-  hashPlayerState,
-  pmove,
+  findPlayer,
+  hashState,
+  tick as simTick,
 } from '@gladiator/sim'
 import { describe, expect, it } from 'vitest'
 
@@ -17,6 +20,13 @@ import {
 } from './session.ts'
 
 const BUILD = '9f3c1d2'
+
+/** The one player a session's world holds. */
+function playerOf(state: GameState) {
+  const player = findPlayer(state, 0)
+  if (player === null) throw new Error('a session with no player in slot 0')
+  return player
+}
 
 function greeted() {
   const step = applyFrame(
@@ -83,12 +93,14 @@ describe('session simulation', () => {
     const cmds = [encodeCmd({ ...NULL_CMD, forwardMove: 1 }), encodeCmd(NULL_CMD)]
     const step = applyFrame(greeted(), JSON.stringify({ t: 'cmds', startTick: 1, cmds }), BUILD)
 
-    const expected = pmove(pmove(SPAWN_STATE, { ...NULL_CMD, forwardMove: 1 }), NULL_CMD)
-    expect(step.replies).toEqual([{ t: 'hash', tick: 2, hash: hashPlayerState(2, expected) }])
+    const expected = createSkeletonState()
+    simTick(expected, [{ ...NULL_CMD, forwardMove: 1 }], SKELETON_ARENA)
+    simTick(expected, [NULL_CMD], SKELETON_ARENA)
+    expect(step.replies).toEqual([{ t: 'hash', tick: 2, hash: hashState(expected) }])
     expect(step.session.tick).toBe(2)
 
     // And the state really did advance, rather than the hash being of nothing.
-    expect(step.session.state.origin[0]).toBeGreaterThan(0)
+    expect(playerOf(step.session.state).origin[0]).toBeGreaterThan(0)
   })
 
   it('counts a gap instead of silently renumbering it', () => {
@@ -116,7 +128,8 @@ describe('session simulation', () => {
     )
     const hash = step.replies[0]
     expect(hash).toMatchObject({ t: 'hash', tick: 1 })
-    for (const value of [...step.session.state.origin, ...step.session.state.velocity]) {
+    const player = playerOf(step.session.state)
+    for (const value of [...player.origin, ...player.velocity]) {
       expect(Number.isFinite(value)).toBe(true)
     }
   })
