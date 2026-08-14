@@ -19,7 +19,7 @@
 import { sanitizeUserCmd, type UserCmd } from './usercmd.ts'
 
 /** Bump on any change to the message shapes below. */
-export const PROTOCOL_VERSION = 1
+export const PROTOCOL_VERSION = 2
 
 /**
  * The most commands one frame may carry. The client's accumulator clamps a
@@ -35,6 +35,15 @@ export type ClientHello = {
   readonly t: 'hello'
   readonly protocol: number
   readonly build: string
+  /**
+   * The hash of the map this page loaded. Eight lowercase hex digits.
+   *
+   * Separate from `protocol` because a map can change without the message
+   * shapes changing, and a peer playing yesterday's arena is exactly as
+   * desynchronised as one speaking yesterday's protocol — it just fails twenty
+   * seconds later and points at the netcode when it does. `map/load.ts`.
+   */
+  readonly mapHash: string
 }
 
 export type ClientCmds = {
@@ -51,6 +60,9 @@ export type ServerWelcome = {
   readonly protocol: number
   readonly build: string
   readonly session: string
+  /** The map the server is authoritative over. Matches the client's, or the
+   *  session would have been refused with a {@link ServerMapMismatch}. */
+  readonly mapHash: string
 }
 
 export type ServerHash = {
@@ -66,13 +78,25 @@ export type ServerVersionMismatch = {
   readonly serverBuild: string
 }
 
+/** The client and the server are not looking at the same arena. */
+export type ServerMapMismatch = {
+  readonly t: 'map_mismatch'
+  readonly serverMapHash: string
+  readonly clientMapHash: string
+}
+
 export type ServerFault = {
   readonly t: 'fault'
   readonly code: string
   readonly detail: string
 }
 
-export type ServerMessage = ServerWelcome | ServerHash | ServerVersionMismatch | ServerFault
+export type ServerMessage =
+  | ServerWelcome
+  | ServerHash
+  | ServerVersionMismatch
+  | ServerMapMismatch
+  | ServerFault
 
 /** Pack a command for the wire. */
 export function encodeCmd(cmd: UserCmd): WireCmd {
@@ -106,6 +130,15 @@ export function describeVersionMismatch(mismatch: ServerVersionMismatch): string
   )
 }
 
+/** The on-screen text for a map mismatch. Same rule as the version one: the
+ *  message a test asserts on is the message a player reads. */
+export function describeMapMismatch(mismatch: ServerMapMismatch): string {
+  return (
+    `this page has arena ${mismatch.clientMapHash} and the server has ` +
+    `${mismatch.serverMapHash} — reload to pick up the current one.`
+  )
+}
+
 function asRecord(raw: string): Record<string, unknown> | null {
   let parsed: unknown
   try {
@@ -125,6 +158,11 @@ function asString(value: unknown, limit: number): string | null {
   return typeof value === 'string' && value.length <= limit ? value : null
 }
 
+/** A map hash on the wire: exactly what `formatHash` produces, or nothing. */
+function asMapHash(value: unknown): string | null {
+  return typeof value === 'string' && /^[0-9a-f]{8}$/.test(value) ? value : null
+}
+
 /** Parse a client frame, or `null` if it is not one. */
 export function parseClientMessage(raw: string): ClientMessage | null {
   const record = asRecord(raw)
@@ -133,8 +171,9 @@ export function parseClientMessage(raw: string): ClientMessage | null {
   if (record['t'] === 'hello') {
     const protocol = asFiniteInteger(record['protocol'])
     const build = asString(record['build'], 64)
-    if (protocol === null || build === null) return null
-    return { t: 'hello', protocol, build }
+    const mapHash = asMapHash(record['mapHash'])
+    if (protocol === null || build === null || mapHash === null) return null
+    return { t: 'hello', protocol, build, mapHash }
   }
 
   if (record['t'] === 'cmds') {
@@ -157,8 +196,9 @@ export function parseServerMessage(raw: string): ServerMessage | null {
     const protocol = asFiniteInteger(record['protocol'])
     const build = asString(record['build'], 64)
     const session = asString(record['session'], 64)
-    if (protocol === null || build === null || session === null) return null
-    return { t: 'welcome', protocol, build, session }
+    const mapHash = asMapHash(record['mapHash'])
+    if (protocol === null || build === null || session === null || mapHash === null) return null
+    return { t: 'welcome', protocol, build, session, mapHash }
   }
 
   if (record['t'] === 'hash') {
@@ -174,6 +214,13 @@ export function parseServerMessage(raw: string): ServerMessage | null {
     const serverBuild = asString(record['serverBuild'], 64)
     if (serverProtocol === null || clientProtocol === null || serverBuild === null) return null
     return { t: 'version_mismatch', serverProtocol, clientProtocol, serverBuild }
+  }
+
+  if (record['t'] === 'map_mismatch') {
+    const serverMapHash = asMapHash(record['serverMapHash'])
+    const clientMapHash = asMapHash(record['clientMapHash'])
+    if (serverMapHash === null || clientMapHash === null) return null
+    return { t: 'map_mismatch', serverMapHash, clientMapHash }
   }
 
   if (record['t'] === 'fault') {

@@ -18,14 +18,17 @@
     "build": "pnpm -r run build",
     "guardrails": "node scripts/guardrails.mjs",
     "e2e": "node scripts/e2e.mjs",
+    "map:bake": "tsx tools/bake-map.ts",
     "ci": "pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run build && pnpm run guardrails"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@gladiator/sim": "workspace:*",
     "@types/node": "22.20.1",
     "eslint": "10.8.1",
     "globals": "17.11.0",
     "playwright": "1.62.1",
+    "tsx": "4.23.12",
     "typescript": "6.0.3",
     "typescript-eslint": "8.67.0",
     "vitest": "4.1.10"

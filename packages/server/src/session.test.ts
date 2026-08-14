@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   CLOSE_BAD_FRAME,
+  CLOSE_MAP_MISMATCH,
   CLOSE_NO_HELLO,
   CLOSE_VERSION_MISMATCH,
   applyFrame,
@@ -18,24 +19,34 @@ import {
 
 const BUILD = '9f3c1d2'
 
+/** Which commit and which world. A fake map hash: this is a unit test of the
+ *  state machine, and it never has to load a map to run one. */
+const MAP_HASH = 'a1b2c3d4'
+const IDENTITY = { build: BUILD, mapHash: MAP_HASH }
+
+function hello(over: Record<string, unknown> = {}) {
+  return JSON.stringify({
+    t: 'hello',
+    protocol: PROTOCOL_VERSION,
+    build: 'client',
+    mapHash: MAP_HASH,
+    ...over,
+  })
+}
+
 function greeted() {
-  const step = applyFrame(
-    createSession('s1'),
-    JSON.stringify({ t: 'hello', protocol: PROTOCOL_VERSION, build: 'client' }),
-    BUILD,
-  )
-  return step.session
+  return applyFrame(createSession('s1'), hello(), IDENTITY).session
 }
 
 describe('session handshake', () => {
   it('welcomes a client on the same protocol', () => {
     const step = applyFrame(
       createSession('s1'),
-      JSON.stringify({ t: 'hello', protocol: PROTOCOL_VERSION, build: 'client' }),
-      BUILD,
+      hello(),
+      IDENTITY,
     )
     expect(step.replies).toEqual([
-      { t: 'welcome', protocol: PROTOCOL_VERSION, build: BUILD, session: 's1' },
+      { t: 'welcome', protocol: PROTOCOL_VERSION, build: BUILD, session: 's1', mapHash: MAP_HASH },
     ])
     expect(step.close).toBeUndefined()
     expect(step.session.greeted).toBe(true)
@@ -46,8 +57,8 @@ describe('session handshake', () => {
     // all, which is indistinguishable from the server being down.
     const step = applyFrame(
       createSession('s1'),
-      JSON.stringify({ t: 'hello', protocol: PROTOCOL_VERSION + 1, build: 'stale' }),
-      BUILD,
+      hello({ protocol: PROTOCOL_VERSION + 1, build: 'stale' }),
+      IDENTITY,
     )
     expect(step.replies).toEqual([
       {
@@ -60,18 +71,52 @@ describe('session handshake', () => {
     expect(step.close).toEqual({ code: CLOSE_VERSION_MISMATCH, reason: 'protocol version' })
   })
 
+  it('refuses a client holding a different map, and says which two', () => {
+    // The scenario: Vercel has deployed and Fly has not (or the reverse). The
+    // protocol matches, the build string does not have to, and the two would
+    // simulate different worlds from identical inputs.
+    const step = applyFrame(createSession('s1'), hello({ mapHash: 'deadbeef' }), IDENTITY)
+    expect(step.replies).toEqual([
+      { t: 'map_mismatch', serverMapHash: MAP_HASH, clientMapHash: 'deadbeef' },
+    ])
+    expect(step.close).toEqual({ code: CLOSE_MAP_MISMATCH, reason: 'map mismatch' })
+    expect(step.session.greeted).toBe(false)
+    expect(step.session.rejected).toBe(true)
+  })
+
+  it('does not adopt the map the client claims', () => {
+    // A server that played whichever arena it was told about is a server that
+    // can be told where the walls are.
+    const step = applyFrame(createSession('s1'), hello({ mapHash: 'deadbeef' }), IDENTITY)
+    const after = applyFrame(
+      step.session,
+      JSON.stringify({ t: 'cmds', startTick: 1, cmds: [encodeCmd(NULL_CMD)] }),
+      IDENTITY,
+    )
+    expect(after.close?.code).toBe(CLOSE_NO_HELLO)
+  })
+
+  it('rejects a hello with no map hash at all rather than assuming ours', () => {
+    const step = applyFrame(
+      createSession('s1'),
+      JSON.stringify({ t: 'hello', protocol: PROTOCOL_VERSION, build: 'client' }),
+      IDENTITY,
+    )
+    expect(step.close?.code).toBe(CLOSE_BAD_FRAME)
+  })
+
   it('refuses commands before a hello', () => {
     const step = applyFrame(
       createSession('s1'),
       JSON.stringify({ t: 'cmds', startTick: 1, cmds: [encodeCmd(NULL_CMD)] }),
-      BUILD,
+      IDENTITY,
     )
     expect(step.close?.code).toBe(CLOSE_NO_HELLO)
   })
 
   it('closes on a frame it cannot parse, rather than guessing', () => {
     for (const junk of ['', 'not json', '{"t":"nope"}', '[]']) {
-      const step = applyFrame(greeted(), junk, BUILD)
+      const step = applyFrame(greeted(), junk, IDENTITY)
       expect(step.close?.code).toBe(CLOSE_BAD_FRAME)
       expect(step.replies[0]).toMatchObject({ t: 'fault', code: 'bad-frame' })
     }
@@ -81,7 +126,7 @@ describe('session handshake', () => {
 describe('session simulation', () => {
   it('replies with the hash at the last tick of the batch', () => {
     const cmds = [encodeCmd({ ...NULL_CMD, forwardMove: 1 }), encodeCmd(NULL_CMD)]
-    const step = applyFrame(greeted(), JSON.stringify({ t: 'cmds', startTick: 1, cmds }), BUILD)
+    const step = applyFrame(greeted(), JSON.stringify({ t: 'cmds', startTick: 1, cmds }), IDENTITY)
 
     const expected = pmove(pmove(SPAWN_STATE, { ...NULL_CMD, forwardMove: 1 }), NULL_CMD)
     expect(step.replies).toEqual([{ t: 'hash', tick: 2, hash: hashPlayerState(2, expected) }])
@@ -97,12 +142,12 @@ describe('session simulation', () => {
     const first = applyFrame(
       greeted(),
       JSON.stringify({ t: 'cmds', startTick: 1, cmds: [encodeCmd(NULL_CMD)] }),
-      BUILD,
+      IDENTITY,
     )
     const second = applyFrame(
       first.session,
       JSON.stringify({ t: 'cmds', startTick: 99, cmds: [encodeCmd(NULL_CMD)] }),
-      BUILD,
+      IDENTITY,
     )
     expect(second.session.gaps).toBe(1)
     expect(second.session.tick).toBe(2)
@@ -112,7 +157,7 @@ describe('session simulation', () => {
     const step = applyFrame(
       greeted(),
       JSON.stringify({ t: 'cmds', startTick: 1, cmds: [[1e308, 'x', null, {}, -5]] }),
-      BUILD,
+      IDENTITY,
     )
     const hash = step.replies[0]
     expect(hash).toMatchObject({ t: 'hash', tick: 1 })
@@ -129,8 +174,8 @@ describe('session simulation', () => {
         encodeCmd({ ...NULL_CMD, forwardMove: 1, yaw: i * 91, buttons: i % 7 === 0 ? 1 : 0 }),
       ),
     })
-    const a = applyFrame(greeted(), frame, BUILD)
-    const b = applyFrame(greeted(), frame, BUILD)
+    const a = applyFrame(greeted(), frame, IDENTITY)
+    const b = applyFrame(greeted(), frame, IDENTITY)
     expect(a.replies).toEqual(b.replies)
   })
 })

@@ -152,6 +152,20 @@ export default tseslint.config(
     },
   },
 
+  /* Authored maps and the tools that bake them. Both are repo-level Node
+   * TypeScript belonging to no package; both carry the `.ts` extension
+   * convention, because the baker runs under `tsx` and under Node's native
+   * type stripping and neither invents an extension for you. */
+  {
+    files: ['maps/**/*.ts', 'tools/**/*.ts'],
+    languageOptions: {
+      globals: globals.nodeBuiltin,
+    },
+    rules: {
+      'gladiator/require-ts-extension': 'error',
+    },
+  },
+
   /* The browser smoke test is a Node script that also contains functions which
    * run *inside the page* — `page.evaluate(() => window.__gladiator...)`. Both
    * sets of globals are legitimately in scope in the same file. */

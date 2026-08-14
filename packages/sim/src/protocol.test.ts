@@ -4,6 +4,7 @@ import {
   MAX_CMDS_PER_BATCH,
   PROTOCOL_VERSION,
   decodeCmd,
+  describeMapMismatch,
   describeVersionMismatch,
   encodeCmd,
   parseClientMessage,
@@ -32,12 +33,32 @@ describe('wire commands', () => {
 
 describe('parseClientMessage', () => {
   it('parses a hello', () => {
-    const raw = JSON.stringify({ t: 'hello', protocol: PROTOCOL_VERSION, build: 'abc123' })
+    const raw = JSON.stringify({
+      t: 'hello',
+      protocol: PROTOCOL_VERSION,
+      build: 'abc123',
+      mapHash: 'a1b2c3d4',
+    })
     expect(parseClientMessage(raw)).toEqual({
       t: 'hello',
       protocol: PROTOCOL_VERSION,
       build: 'abc123',
+      mapHash: 'a1b2c3d4',
     })
+  })
+
+  it('refuses a hello whose map hash is missing or not eight hex digits', () => {
+    // Not defaulting to the server's own map is the point: a client that did
+    // not say which arena it holds has not agreed to anything.
+    for (const mapHash of [undefined, '', 'A1B2C3D4', 'a1b2c3d', 'a1b2c3d4e', 'zzzzzzzz', 1234]) {
+      const raw = JSON.stringify({
+        t: 'hello',
+        protocol: PROTOCOL_VERSION,
+        build: 'abc123',
+        ...(mapHash === undefined ? {} : { mapHash }),
+      })
+      expect(parseClientMessage(raw), `accepted ${String(mapHash)}`).toBe(null)
+    }
   })
 
   it('parses a command batch', () => {
@@ -70,9 +91,18 @@ describe('parseServerMessage', () => {
   it('parses every server frame', () => {
     expect(
       parseServerMessage(
-        JSON.stringify({ t: 'welcome', protocol: 1, build: 'b', session: 's' }),
+        JSON.stringify({ t: 'welcome', protocol: 1, build: 'b', session: 's', mapHash: '0000beef' }),
       ),
-    ).toEqual({ t: 'welcome', protocol: 1, build: 'b', session: 's' })
+    ).toEqual({ t: 'welcome', protocol: 1, build: 'b', session: 's', mapHash: '0000beef' })
+    expect(
+      parseServerMessage(
+        JSON.stringify({
+          t: 'map_mismatch',
+          serverMapHash: '0000beef',
+          clientMapHash: 'deadbeef',
+        }),
+      ),
+    ).toEqual({ t: 'map_mismatch', serverMapHash: '0000beef', clientMapHash: 'deadbeef' })
     expect(parseServerMessage(JSON.stringify({ t: 'hash', tick: 3, hash: 42 }))).toEqual({
       t: 'hash',
       tick: 3,
@@ -104,6 +134,19 @@ describe('parseServerMessage', () => {
     for (const raw of ['', '{}', '{"t":"hash"}', '{"t":"hash","tick":1.5,"hash":2}']) {
       expect(parseServerMessage(raw)).toBe(null)
     }
+  })
+})
+
+describe('describeMapMismatch', () => {
+  it('names both arenas and tells the player what to do', () => {
+    const text = describeMapMismatch({
+      t: 'map_mismatch',
+      serverMapHash: '0000beef',
+      clientMapHash: 'deadbeef',
+    })
+    expect(text).toContain('deadbeef')
+    expect(text).toContain('0000beef')
+    expect(text).toContain('reload')
   })
 })
 

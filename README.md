@@ -36,9 +36,21 @@ pnpm run e2e         # the whole acceptance list, in headless Chromium
 `pnpm run e2e` builds the real bundles, runs the real server, and drives a real
 browser through it: the page loads with no console errors, clicking locks the
 pointer, the box runs and jumps, the hashes agree over a minute of movement, and
-`?protocol=999` puts a readable version-mismatch message on screen. It needs a
-browser download (`pnpm exec playwright install --with-deps chromium`), so it is
-its own CI job rather than part of `pnpm run ci`.
+`?protocol=999` and `?map=deadbeef` each put a readable mismatch message on
+screen. It needs a browser download
+(`pnpm exec playwright install --with-deps chromium`), so it is its own CI job
+rather than part of `pnpm run ci`.
+
+```sh
+pnpm run map:bake            # compile maps/*.ts to maps/baked/*.json
+pnpm run map:bake --check    # verify the committed artifacts, write nothing
+```
+
+Maps are hand-authored TypeScript. The baker validates them — a spawn inside
+solid, a spawn with no headroom, two spawns too close together and an
+unreferenced surface all fail the bake — hashes them, and writes JSON that both
+the client and the server load. The baked artifacts are committed, and a test
+fails if they are stale. `docs/physics-spec.md` §4.
 
 Requires Node ≥ 20.19 (CI runs the version in [`.nvmrc`](./.nvmrc)) and pnpm 10.
 
@@ -49,6 +61,8 @@ packages/sim      the deterministic simulation — zero dependencies, no clock
 packages/bot      single-player opposition; emits UserCmds like a human does
 packages/client   Babylon renderer, prediction, input
 packages/server   authoritative tick loop, rooms, WebSocket transport
+maps/             hand-authored maps, and the baked JSON both ends load
+tools/            bake-map.ts — compiles, validates and hashes maps/*.ts
 scripts/          guardrails.mjs — proves the sim boundary rejects violations
                   e2e.mjs        — the browser smoke test
 docs/             physics-spec.md, deploy.md
