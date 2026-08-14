@@ -261,3 +261,5 @@ export {
   yawUnitsFromDegrees,
 } from './usercmd.ts'
 export type { UserCmd } from './usercmd.ts'
+
+export { NEVER_FIRED, Weapon, isWeapon } from './weapon.ts'

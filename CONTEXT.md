@@ -146,6 +146,21 @@ that happens twice a second. `docs/renderer.md` §9.
 browser smoke test within a perceptual threshold. A renderer change that
 legitimately moves the picture ships the new image in the same commit.
 
+**Player model** — the opponent's body: a rig of boxes sized to sit inside the
+simulation's player box, posed from netstate. `docs/renderer.md` §11.
+
+**Netstate-driven animation** — the rule that what an opponent's model is doing
+is derived from `EntityState` and the tick, never from what the renderer can
+see happening. `packages/client/src/render/animState.ts`; `docs/renderer.md`
+§11.
+
+**Animation state** — one of `idle`, `run`, `jump`, `land`, `fire-rocket`,
+`fire-rail`, `death`. Carries a **move direction** — travel relative to facing
+— so a strafe reads as a strafe.
+
+**Viewmodel** — the weapon in your own hands, drawn as a child of the camera in
+its own depth range. `docs/renderer.md` §11.
+
 ---
 
 ## The network
@@ -172,6 +187,13 @@ between two received states, so their motion is smooth rather than stepped.
 
 **Lag compensation** — the server rewinding other players to where the shooter
 saw them when deciding whether a shot hit (GLAD-5QGO11).
+
+**Weapon** — which of the two an entity is holding, as a netstate field
+(`packages/sim/src/weapon.ts`). Behaviour is GLAD-0QWRYK's; the field exists
+because an opponent's weapon is something you *read*, one snapshot after the
+server changed it. Paired with **`lastFireTick`** — the tick they last fired
+on, carried as state rather than sent as an event so it survives a dropped
+snapshot.
 
 **Netstate / snapshot** — the serialised slice of sim state the server sends to
 clients each tick.

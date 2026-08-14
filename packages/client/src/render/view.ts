@@ -38,6 +38,7 @@
  * since 1996.
  */
 import {
+  ANGLE_UNITS,
   PLAYER_VIEW_HEIGHT,
   type Vec3,
   angleUnitsToRadians,
@@ -45,6 +46,8 @@ import {
   quakeToEngine,
   yawUnitsFromDegrees,
 } from '@gladiator/sim'
+
+import type { PlayerNetState } from './animState.ts'
 
 /** The slice of a simulation tick the renderer reads. */
 export type RenderState = {
@@ -60,6 +63,30 @@ export type RenderView = {
   readonly yawUnits: number
   /** View pitch in angle units. */
   readonly pitchUnits: number
+  /**
+   * The simulation tick being drawn.
+   *
+   * Every animation clock in the renderer is derived from this and
+   * {@link RenderView.alpha}, and from nothing else. Two clients drawing the
+   * same tick at 60 Hz and at 240 Hz therefore draw the same pose — the same
+   * property the camera has, extended to the things that move by themselves.
+   */
+  readonly tick?: number
+  /** The accumulator's remainder, `[0, 1)`. `loop.ts`. */
+  readonly alpha?: number
+  /**
+   * The other players, as interpolated netstates. See
+   * {@link interpolateNetState}.
+   *
+   * Keyed on `id` by the renderer, which creates a rig the first time it sees
+   * one and disposes it the first frame it does not.
+   */
+  readonly players?: readonly PlayerNetState[]
+  /**
+   * The local player, for the first-person viewmodel. Absent draws no hands —
+   * which is what the reference screenshot and a spectator both want.
+   */
+  readonly self?: PlayerNetState
 }
 
 /**
@@ -96,6 +123,67 @@ export function interpolateOrigin(previous: RenderState, current: RenderState, a
     lerp(previous.origin[1], current.origin[1], alpha),
     lerp(previous.origin[2], current.origin[2], alpha),
   ]
+}
+
+/**
+ * Interpolate two angles the short way round.
+ *
+ * Angle units wrap at {@link ANGLE_UNITS}, so a player turning through north
+ * goes from 65500 to 36 — and a plain `lerp` between those spins them 359
+ * degrees the wrong way in one frame. Taking the shorter of the two arcs is the
+ * whole of the fix, and it has to happen here rather than in the simulation,
+ * which has no opinion about how a turn *looks*.
+ */
+export function lerpAngleUnits(a: number, b: number, alpha: number): number {
+  const half = ANGLE_UNITS / 2
+  let delta = (b - a) % ANGLE_UNITS
+  if (delta > half) delta -= ANGLE_UNITS
+  if (delta < -half) delta += ANGLE_UNITS
+  return a + delta * alpha
+}
+
+/**
+ * A netstate to draw, between two the simulation produced.
+ *
+ * Continuous fields — position, velocity, angles — are interpolated, because
+ * 125 Hz motion on a 144 Hz display is visibly stepped. Discrete ones —
+ * `flags`, `health`, `weapon`, `lastFireTick` — are taken from the *newer*
+ * state and never blended: half a weapon switch is not a thing, and an
+ * animation is either playing or it is not.
+ *
+ * The result is a drawing value, not a simulation one. It goes into the
+ * renderer and stops there; `PlayerNetState` is deeply readonly and every field
+ * of it is a copy, so there is no path from a value produced here back into
+ * `GameState`.
+ */
+export function interpolateNetState(
+  previous: PlayerNetState,
+  current: PlayerNetState,
+  alpha: number,
+): PlayerNetState {
+  return {
+    id: current.id,
+    slot: current.slot,
+    origin: [
+      lerp(previous.origin[0], current.origin[0], alpha),
+      lerp(previous.origin[1], current.origin[1], alpha),
+      lerp(previous.origin[2], current.origin[2], alpha),
+    ],
+    velocity: [
+      lerp(previous.velocity[0], current.velocity[0], alpha),
+      lerp(previous.velocity[1], current.velocity[1], alpha),
+      lerp(previous.velocity[2], current.velocity[2], alpha),
+    ],
+    angles: [
+      lerp(previous.angles[0], current.angles[0], alpha),
+      lerpAngleUnits(previous.angles[1], current.angles[1], alpha),
+      lerpAngleUnits(previous.angles[2], current.angles[2], alpha),
+    ],
+    flags: current.flags,
+    health: current.health,
+    weapon: current.weapon,
+    lastFireTick: current.lastFireTick,
+  }
 }
 
 /**
