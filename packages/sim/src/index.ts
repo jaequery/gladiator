@@ -2,14 +2,41 @@ export { QUAKE_TO_ENGINE, applyMat3, determinant3, quakeToEngine } from './axis.
 export type { Mat3, Vec3 } from './axis.ts'
 
 export {
+  createWriter,
+  resetWriter,
+  writeF64,
+  writeI32,
+  writeU8,
+  writeU32,
+  writtenBytes,
+} from './encoding.ts'
+export type { ByteWriter } from './encoding.ts'
+
+export {
   FNV_OFFSET_BASIS,
   FNV_PRIME,
   formatHash,
+  hashByte,
+  hashBytes,
   hashFloat64,
   hashInit,
   hashPlayerState,
+  hashString,
   hashUint32,
 } from './hash.ts'
+
+export {
+  NO_INPUTS,
+  advanceHost,
+  advanceTicks,
+  clampHostDelta,
+  createKernel,
+  tick,
+} from './kernel.ts'
+export type { CommandSource, Kernel, TickInputs, TickObserver } from './kernel.ts'
+
+export { angleVectors, copyVec3, lengthVec2, lengthVec3, setVec3, vec3 } from './math.ts'
+export type { MutVec3 } from './math.ts'
 
 export {
   GRAVITY,
@@ -44,7 +71,56 @@ export type {
   WireCmd,
 } from './protocol.ts'
 
-export { TICK_DT, TICK_INTERVAL_MS, TICK_RATE } from './tick.ts'
+export {
+  commandSourceFor,
+  createReplayState,
+  firstDivergence,
+  formatTraceLiteral,
+  runReplay,
+  runReplayHosted,
+  sampleTicks,
+} from './replay.ts'
+export type { Replay, ReplaySpawn, ScriptFrame, TraceDivergence, TraceSample } from './replay.ts'
+
+export {
+  advanceRng,
+  rngChance,
+  rngFloat,
+  rngInt,
+  rngNext,
+  rngRange,
+  rngUint32,
+  rngValue,
+  seedFromString,
+  seedRng,
+} from './rng.ts'
+export type { RngHolder, RngState } from './rng.ts'
+
+export { snapshotOf } from './snapshot.ts'
+export type { Snapshot } from './snapshot.ts'
+
+export {
+  EntityFlag,
+  EntityKind,
+  NEVER_EXPIRES,
+  NO_SLOT,
+  cloneEntity,
+  cloneGameState,
+  createGameState,
+  encodeExact,
+  encodeInto,
+  findEntity,
+  findPlayer,
+  hashState,
+  removeEntity,
+  spawnEntity,
+} from './state.ts'
+export type { EntityInit, EntityState, GameState } from './state.ts'
+
+export { MAX_HOST_FRAME_MS, TICK_DT, TICK_INTERVAL_MS, TICK_RATE } from './tick.ts'
+
+export { CloseReason, TransportState, messageSize } from './transport.ts'
+export type { Transport, TransportHandlers, TransportMessage } from './transport.ts'
 
 export { cosRad, sinRad } from './trig.ts'
 

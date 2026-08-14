@@ -48,11 +48,17 @@ same world, bit for bit, in the browser and on the server. It has zero
 dependencies and no access to a clock, a renderer, or the network. See
 "The simulation boundary" in `AGENTS.md`.
 
-**Tick** — one fixed-timestep advance of the world. The sim's only unit of
-time; it has no notion of wall-clock seconds.
+**Tick** — one fixed-timestep advance of the world: exactly 8 ms, 125 a second.
+The sim's only unit of time; it has no notion of wall-clock seconds.
 
-**Sub-step** — a tick internally divided into smaller integration steps so that
-fast movement does not tunnel through geometry (GLAD-OOELC5).
+**Sub-step** — a tick, seen from the host's point of view. The host frame runs
+at whatever rate the browser or the server scheduler wakes up at, and is
+advanced as a whole number of exact 8.000 ms sub-steps with the remainder
+carried to the next frame. "Tick" and "sub-step" name the same 8 ms; which word
+gets used says whose clock is being talked about. `docs/physics-spec.md` §0.1.
+
+**Host frame** — one wake-up of whatever is driving the simulation. Its length
+is measured, not chosen, and it is never a unit of simulation time.
 
 **`UserCmd`** — one tick's worth of player intent: movement axes, view angles,
 button bits. The *only* way anything gets into the simulation. A human's
@@ -71,9 +77,20 @@ from a step-height above, which is why stairs work.
 **Swept AABB** — axis-aligned bounding box moved continuously, rather than
 teleported and tested. Continuous, so nothing tunnels.
 
-**State hash** — a cheap digest of the whole sim state at a tick. Two peers
-comparing hashes find a desync at the tick it happened rather than the minute
-it became visible (GLAD-OOELC5).
+**State hash** — a cheap digest of the whole sim state at a tick: FNV-1a over a
+canonical little-endian encoding of every field, raw bit patterns, nothing
+rounded. Two peers comparing hashes find a desync at the tick it happened
+rather than the minute it became visible.
+
+**Golden replay** — a committed input stream plus the hash trace it is known to
+produce, sampled every half second. The regression test for determinism itself:
+a change to the physics moves the trace, and a change nobody meant to make
+cannot ride along with one they did.
+
+**Transport** — the interface a WebSocket, the in-process loopback and (later)
+WebTransport all satisfy. It moves bytes and knows nothing about what they
+mean. Its contract requires reliable, ordered delivery, and records which parts
+of the protocol actually depend on that.
 
 **Seeded PRNG** — the only source of randomness the sim is allowed. Carried in
 the state, advanced by the tick, identical on both peers. This is why
@@ -81,6 +98,11 @@ the state, advanced by the tick, identical on both peers. This is why
 
 **Quake units** — the distance unit the movement constants are expressed in.
 Kept rather than converted, because converting them is how the feel gets lost.
+
+**Angle units** — the *angle* unit: 1/65536 of a turn, Quake's 16-bit angles.
+Integers, so an angle is the same number on both peers by construction rather
+than by luck, and hashes exactly. Degrees appear only where a human authors or
+reads one.
 
 **Quake frame / engine frame** — the two coordinate systems and the one matrix
 between them. `docs/physics-spec.md` §0.3.

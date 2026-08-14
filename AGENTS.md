@@ -98,6 +98,92 @@ guardrail nobody knows is connected.
 
 ---
 
+## The simulation kernel
+
+`packages/sim/src/kernel.ts`. Numbers and the reasoning behind them are
+[`docs/physics-spec.md` §0.1](./docs/physics-spec.md).
+
+### `tick()` mutates `GameState` in place
+
+```ts
+tick(state, inputs)          // advances `state` by one 8 ms sub-step
+const before = cloneGameState(state)   // if you need the old one, say so
+```
+
+It returns nothing, allocates nothing in the steady state, and keeps the same
+entity objects — a reference you held before the call points at the new values
+after it. This is deliberate: a tick runs 125 times a second per room and
+reconciliation replays dozens of them per correction, and a fresh world object
+per tick is garbage nobody needs to make.
+
+It is also the one genuinely surprising thing about the API, which is why it is
+written down here. **A caller that needs the previous state calls
+`cloneGameState` first.** Getting this wrong produces a bug that only appears
+under packet loss, which is the worst kind to go looking for.
+
+### Sub-steps, not frames
+
+The host reports elapsed wall-clock; the kernel converts it into whole 8 ms
+sub-steps and carries the remainder:
+
+```ts
+const kernel = createKernel(createGameState(seed))
+advanceHost(kernel, clampHostDelta(dtMs), commands, onTick)
+```
+
+`advanceHost` runs exactly `floor((remainder + dtMs) / 8)` sub-steps — no
+hidden clamp, because throwing time away after a hitch is scheduler *policy*
+and belongs to whoever can also tell the other peer about it. Run the measured
+delta through `clampHostDelta` first.
+
+`onTick` fires after **every sub-step**, not once per host frame. Sampling
+state per frame silently skips whichever ticks shared one.
+
+### Phase order
+
+`tick()` runs fixed phases, and the order is the contract later tickets build
+against: advance the PRNG, apply commands, integrate, expire. Adding a phase
+means deciding where it goes, once, for everyone.
+
+The PRNG (`rng.ts`, mulberry32 over one uint32) advances once per sub-step
+whether or not anything drew from it, so the stream position is a function of
+the tick number. It lives in `GameState`, so snapshots, hashing and rewinding
+carry it for free.
+
+### One name per number
+
+The timestep is `tick.ts`; the movement constants are `pmove.ts`; angles are
+angle units, defined in `usercmd.ts`; sine and cosine are `trig.ts`. The kernel
+imports all four rather than restating any of them. Two names for one number is
+the drift everything else in this file exists to prevent, so if you find
+yourself adding a `constants.ts`, put the constant next to the code that owns
+it instead.
+
+`packages/sim` currently holds two worlds: `GameState`/`tick()` (the kernel)
+and `PlayerState`/`pmove()` (the walking skeleton's one-player stub, which the
+deployed client and server still run). They share the timestep, the plane and
+the movement constants deliberately, so they do not disagree about physics.
+GLAD-0B1GDS folds the second into the first.
+
+### The golden replay
+
+`packages/sim/src/determinism.test.ts` runs a committed input stream and
+compares a committed hash trace sampled every half second. A failure names the
+half-second where the two first diverged, and prints the new trace as a
+paste-ready literal.
+
+A ticket that changes what a sub-step does **is expected to move that trace**.
+Re-bake it by pasting what the failure prints over `GOLDEN_TRACE` in
+`src/fixtures/golden-replay.ts`, and say in the commit message why the world
+moved. There is no bake script, because a bake script would need a filesystem
+and this package does not have one.
+
+`hashState` hashes raw IEEE 754 bit patterns — it never rounds, because
+rounding is precisely what would hide a slow drift. It does normalise `-0` to
+`+0` and every NaN to one NaN; see `encoding.ts` for why both are necessary.
+
+---
+
 ## TypeScript conventions
 
 **Relative imports carry the `.ts` extension.** In `packages/sim` and

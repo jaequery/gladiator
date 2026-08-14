@@ -21,8 +21,10 @@
  * peer that reached rest from the left and one that reached rest from the right
  * would report a desync they do not have.
  *
- * GLAD-OOELC5 owns the hash over the *full* sim state. This is the skeleton's:
- * one player, one tick.
+ * This file is the digest itself. The hash over the *full* sim state is
+ * `hashState` in `state.ts`, which folds `hashBytes` over a canonical encoding;
+ * `hashPlayerState` below is the walking skeleton's one-player version, and
+ * goes when the skeleton's `pmove` stub does (GLAD-0B1GDS).
  */
 import type { PlayerState } from './pmove.ts'
 
@@ -40,8 +42,8 @@ export const FNV_PRIME = 0x01000193
 const scratch = new DataView(new ArrayBuffer(8))
 
 /** Fold one byte into the digest. */
-function mixByte(digest: number, byte: number): number {
-  return Math.imul(digest ^ byte, FNV_PRIME) >>> 0
+export function hashByte(digest: number, byte: number): number {
+  return Math.imul(digest ^ (byte & 0xff), FNV_PRIME) >>> 0
 }
 
 /** A fresh digest. */
@@ -52,10 +54,10 @@ export function hashInit(): number {
 /** Fold a 32-bit integer into the digest, low byte first. */
 export function hashUint32(digest: number, value: number): number {
   const v = value >>> 0
-  let next = mixByte(digest, v & 0xff)
-  next = mixByte(next, (v >>> 8) & 0xff)
-  next = mixByte(next, (v >>> 16) & 0xff)
-  return mixByte(next, (v >>> 24) & 0xff)
+  let next = hashByte(digest, v & 0xff)
+  next = hashByte(next, (v >>> 8) & 0xff)
+  next = hashByte(next, (v >>> 16) & 0xff)
+  return hashByte(next, (v >>> 24) & 0xff)
 }
 
 /** Fold a double into the digest, by its eight little-endian bytes. */
@@ -64,7 +66,41 @@ export function hashFloat64(digest: number, value: number): number {
   scratch.setFloat64(0, value === 0 ? 0 : value, true)
   let next = digest
   for (let i = 0; i < 8; i += 1) {
-    next = mixByte(next, scratch.getUint8(i))
+    next = hashByte(next, scratch.getUint8(i))
+  }
+  return next
+}
+
+/**
+ * Fold a byte range into the digest.
+ *
+ * What `hashState` uses, over the canonical encoding in `state.ts`. Folding
+ * bytes rather than fields keeps the *layout* decision in one place — the
+ * encoder — instead of splitting it between an encoder and a hasher that have
+ * to agree.
+ */
+export function hashBytes(bytes: Uint8Array, digest: number = FNV_OFFSET_BASIS): number {
+  let next = digest
+  for (const byte of bytes) next = hashByte(next, byte)
+  return next
+}
+
+/**
+ * Fold a string's UTF-16 code units into the digest, low byte first.
+ *
+ * Deliberately *not* UTF-8: encoding would need `TextEncoder`, which is not in
+ * the ECMAScript standard library and so does not exist inside the sim. Code
+ * units are what `charCodeAt` gives, on every engine, for free.
+ *
+ * Used to derive a match seed from a room code, so that two peers can compute
+ * the same seed from something they already both know.
+ */
+export function hashString(text: string, digest: number = FNV_OFFSET_BASIS): number {
+  let next = digest
+  for (let i = 0; i < text.length; i += 1) {
+    const unit = text.charCodeAt(i)
+    next = hashByte(next, unit & 0xff)
+    next = hashByte(next, unit >>> 8)
   }
   return next
 }
