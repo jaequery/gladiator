@@ -18,8 +18,17 @@
  */
 import { sanitizeUserCmd, type UserCmd } from './usercmd.ts'
 
-/** Bump on any change to the message shapes below. */
-export const PROTOCOL_VERSION = 2
+/**
+ * Bump on any change to the message shapes below — **or to what they mean**.
+ *
+ * Version 3 is the second kind. No frame changed shape; `EntityState` grew
+ * `weapon` and `lastFireTick` (GLAD-PWCON8), which changes the canonical
+ * encoding and therefore every `hash` a peer computes for the same world. A
+ * client one deploy behind would now disagree with the server about a world
+ * both of them simulated correctly, and report it as a desync — which is
+ * exactly the confusion this number exists to prevent.
+ */
+export const PROTOCOL_VERSION = 3
 
 /**
  * The most commands one frame may carry. The client's accumulator clamps a

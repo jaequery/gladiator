@@ -271,3 +271,95 @@ that separates two players is the mouse driver's.
 Where the browser refuses the flag, the request is retried without it, because
 accelerated input is much better than no game. `PointerLock.raw` says which
 happened, so the settings screen (GLAD-NPCTU8) can be honest about it.
+
+---
+
+## §11 The player, and the hands
+
+Two things the renderer draws that the camera does not: the opponent's body,
+and the weapon in your own. `render/animState.ts`, `render/playerModel.ts`,
+`render/viewmodel.ts`.
+
+### Animation is a fold over netstate, not a reading of the scene
+
+The tempting way to animate an opponent is from what the renderer can see: run
+when the mesh moves, land when it stops falling, flash a muzzle when a rocket
+appears. Every one of those is a guess about a simulation that is authoritative
+somewhere else, and each guess fails in its own way under packet loss — the
+mesh stops moving because a snapshot was late, not because the player stopped.
+
+So the input is `PlayerNetState`: a **copy** of the fields of `EntityState` the
+representation is allowed to read, deeply `readonly`. The copy matters as much
+as the `readonly` does — `tick()` mutates entities in place and keeps the same
+objects, so a held reference would quietly become a reference to the present.
+
+`advanceAnim(previous, net, tick)` is a pure fold. It takes the previous frame
+because exactly one animation needs history: **landing**. `EntityState` says
+whether a player is on the ground and not whether they arrived this tick, and
+it cannot be inferred, because `pmove` clips the velocity against the floor
+plane in the same sub-step that sets `OnGround` — on the landing tick the
+vertical velocity is already zero. The missing bit is "were they airborne last
+time", and the fold carries it and nothing else.
+
+The priority order is chosen for what a duellist has to read first: death,
+then firing, then airborne, then landing, then run/idle. Firing outranks
+airborne on purpose — a rocket jump draws as a shot, because the jump is
+obvious from the trajectory and the shot is what is about to hurt you.
+
+Both firing poses are distinct states rather than one `fire`, and the run
+carries a direction relative to *facing*, because at arena distance an opponent
+is a few dozen pixels and what you need off them is which way they are moving
+and which weapon just went off.
+
+### Silhouette over fidelity, and no asset licence
+
+The model is boxes: a wide chest, a small head, limbs that swing visibly, and
+two weapons whose outlines cannot be confused. Polygon count buys nothing here
+that a clearer outline does not buy more of — and placeholder geometry that
+this repository authored has no licence attached to it, which a downloaded rig
+very often turns out to. GLAD-PGS73O owns the real asset pipeline.
+
+The body is sized to sit **inside** the simulation's 30x30x56 box, and
+`playerModel.test.ts` asserts it, so what a player aims at and what they see
+line up. The weapon and the arm holding it stick out in front, exactly as
+Quake's models always have. Nothing about the rig is ever read by anything that
+decides a hit: hitboxes are the sim's AABBs and are never derived from a mesh
+or a bone.
+
+Every animation clock is `tick + alpha` — the simulation's clock and the
+accumulator's remainder — so two clients drawing the same tick at 60 Hz and at
+240 Hz draw the same pose. The stride is paced by *distance travelled* rather
+than by time, which is why a player skimming out of a rocket jump reads as
+moving fast rather than as a film played faster.
+
+### The viewmodel is camera-parented
+
+GLAD-PWCON8 left this open; the answer is a child node of the camera, written
+only with *local* offsets. A mesh in world space positioned from the same
+`CameraPose` would be two pieces of code computing one transform from the same
+numbers, and the failure mode of that is a viewmodel that is correct at every
+yaw except one. Parenting makes the agreement structural.
+
+It does not weaken §1. The camera is still written and never read: the
+viewmodel writes `position` and `rotation` on a *child* and never reads the
+parent's.
+
+It draws in rendering group 1 with the depth buffer cleared in front of it, so
+a gun held 24 units from the eye cannot poke through a wall 20 units away. The
+viewmodel is not in the world; it is a diagram of what your hands are doing,
+drawn over the top of the world.
+
+### Nothing here is in the reference screenshot
+
+`RenderView.players` and `RenderView.self` are both optional, and
+`REFERENCE_VIEW` carries neither, so `?shot=1` draws the arena and nothing
+else. That is deliberate: §8's whole argument is a page with nothing moving in
+it, and a bobbing viewmodel is the most moving thing on screen.
+
+`?dummy=1` is the other half of that trade — a scripted opponent
+(`dummyOpponent.ts`) who runs a circle, jumps, fires, switches weapons and
+dies, so every animation state can be watched in a real browser before
+GLAD-FHKBN8 and GLAD-6RT64L deliver real snapshots. It produces `EntityState`
+and goes through the same interpolation path a real snapshot pair will, and it
+never touches `GameState` — so the client and the server go on agreeing about
+the world exactly as they did before.
