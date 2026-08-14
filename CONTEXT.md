@@ -68,11 +68,24 @@ keyboard produces these; so does the bot, which is what makes the bot fair.
 acceleration, air control, velocity snapping (GLAD-0B1GDS).
 
 **Trace** — a swept query: "move this box from A to B and tell me what it hit,
-and when". The primitive all collision and hitscan is built on (GLAD-3SCN0U).
+and when". The primitive all collision and hitscan is built on.
+`packages/sim/src/trace.ts`; `docs/physics-spec.md` §2.2.
+
+**Brush** — a convex solid, defined by the outward-facing planes that bound it.
+A map is a list of them. Not necessarily a box: the one non-axial plane on a
+brush is what makes a ramp a ramp. `docs/physics-spec.md` §2.1.
 
 **`SlideMove` / `StepSlideMove`** — Quake's move-and-slide: trace, clip velocity
 to the plane you hit, repeat; `StepSlideMove` additionally tries the move again
-from a step-height above, which is why stairs work.
+from a step-height above, which is why stairs work. `docs/physics-spec.md` §2.4.
+
+**Crease** — the edge two clip planes share. A move wedged between them slides
+along `normalize(cross(pi, pj))` rather than alternating between the two, which
+is what a corner would otherwise do to you.
+
+**`OVERCLIP`** — 1.001. `SlideMove` removes 100.1% of the velocity into a
+surface rather than 100%, so a body leaves the surface instead of resting on it.
+The reason a ramp rotates your speed instead of eating it.
 
 **Swept AABB** — axis-aligned bounding box moved continuously, rather than
 teleported and tested. Continuous, so nothing tunnels.

@@ -11,10 +11,10 @@ messages. Most of them are still to be written:
 | §   | Topic                                        | Owner        |
 | --- | -------------------------------------------- | ------------ |
 | 0.1 | Units, tick rate and the fixed timestep       | **below**    |
-| 0.2 | Player bounding box and eye height            | GLAD-3SCN0U  |
+| 0.2 | Player bounding box and eye height            | **below**    |
 | 0.3 | Coordinate systems and the axis map           | **below**    |
 | 1.x | `pmove`: friction, acceleration, air control  | GLAD-0B1GDS  |
-| 2.x | Tracing: swept AABB, `SlideMove`, step-up     | GLAD-3SCN0U  |
+| 2.x | Tracing: swept AABB, `SlideMove`, step-up     | **below**    |
 | 3.x | Weapons: rockets, splash, railgun             | GLAD-0QWRYK  |
 
 ---
@@ -109,6 +109,47 @@ to whatever is displaying or scheduling, not to the sim.
 
 ---
 
+## §0.2 Player bounding box and eye height
+
+The player is a box. Not a capsule, not a mesh, not a cylinder — a box, and an
+axis-aligned one that does not rotate with the view. Every movement constant in
+§0.1 and §1.x was measured against this solid, and every trace in §2 sweeps it.
+
+| Constant | Value | Source |
+| -------- | ----- | ------ |
+| `PLAYER_HALF_WIDTH` | 15 qu | `packages/sim/src/bbox.ts` |
+| `PLAYER_HEIGHT` | 56 qu | |
+| `PLAYER_VIEW_HEIGHT` | 50 qu | |
+| `PLAYER_MINS` | `(-15, -15, 0)` | relative to the origin |
+| `PLAYER_MAXS` | `(15, 15, 56)` | |
+
+30 units wide and 56 tall. This is Quake 3's `(-15,-15,-24)..(15,15,32)`: the
+same solid, written against a different origin.
+
+### The origin is the feet
+
+Quake 3 puts the origin at the middle of the box and carries `mins[2] = -24`.
+Gladiator puts it on the soles, so `mins[2] = 0` and `maxs[2] = 56`.
+
+Two reasons, and both are about what a number *reads* as six months later:
+
+- `origin[2]` is then literally the floor height a player is standing on, so a
+  spawn point, a ledge and a step are the same number in the map file, in the
+  debugger and in the level editor.
+- Crouching shrinks `maxs[2]` and leaves `mins[2]` alone, so the feet stay
+  planted. With a centred origin, crouching has to move the origin *as well* as
+  resize the box, and getting those two half-steps out of order is the classic
+  "crouch in a doorway, fall through the floor" bug.
+
+The cost is that Quake 3 source ported verbatim needs 24 added or subtracted at
+the seam. That conversion happens once, where a constant is transcribed into
+`bbox.ts`, and never at runtime.
+
+Ducking dimensions belong to GLAD-0B1GDS and are deliberately not stated here,
+so that there is only ever one place they could be wrong.
+
+---
+
 ## §0.3 Coordinate systems and the axis map
 
 Gladiator carries two coordinate systems and exactly one conversion between
@@ -197,3 +238,218 @@ were never wrong.
 `axis.test.ts` asserts both the determinant and the basis-vector table above.
 That test is what stops this document, `AGENTS.md` and the code from drifting
 apart.
+
+---
+
+## §2 Tracing
+
+### §2.1 The world is a brush list
+
+Level geometry is a list of **brushes**: convex solids, each defined by the
+outward-facing planes that bound it. A plane is `dot(normal, x) <= dist` with
+`normal` a unit vector pointing *out* of the solid, so a point is inside a
+brush when it is behind every one of its planes.
+
+Convex-and-plane-bounded is what makes §2.2 a closed-form interval
+intersection rather than a search. A brush is *not* required to be
+axis-aligned: the 45-degree ramp in §2.4 has one non-axial plane, and an
+AABB-only world cannot express it.
+
+Brush bounds are **derived**, never authored — `brush()` enumerates the
+corners (every triple of planes, keeping the solutions inside all the others)
+and rejects a brush that runs to infinity in any direction. Bounds one unit
+too small do not fail loudly; they make one brush invisible to the trace from
+one direction, and a player falls through the world once every few rounds.
+
+The broadphase is a uniform grid, stored as one flat index array plus per-cell
+offsets. Candidates come back sorted by brush index rather than by the order
+the grid visited them, so a trace's answer does not depend on the cell size.
+
+`packages/sim/src/collide.ts`.
+
+### §2.2 The swept AABB trace
+
+| Constant | Value | Source |
+| -------- | ----- | ------ |
+| `SURFACE_CLIP_EPSILON` | 0.125 qu | `packages/sim/src/trace.ts` |
+
+**Traces are swept, never point tests.** At the §2.6 speed clamp a body covers
+24 units in one 8 ms tick; a rocket at 900 qu/s covers 7.2 and a rocket-jumping
+player covers about 8. Those are large fractions of a 30-unit player box and
+larger than plenty of real geometry, so a discrete endpoint test misses walls
+that a continuous one cannot.
+
+The box is folded into the geometry rather than carried through it. For each
+plane, the plane is pushed out by the box's support distance along its normal —
+the Minkowski sum of box and solid — leaving a *ray* against a fattened convex
+volume:
+
+```
+offset  = ( n.x < 0 ? maxs.x : mins.x,  n.y < 0 ? maxs.y : mins.y,  n.z < 0 ? maxs.z : mins.z )
+dist'   = plane.dist - dot(offset, n)
+```
+
+The ray-vs-convex test is then interval intersection: walk the planes
+accumulating the latest entry fraction and the earliest exit fraction, and the
+brush is entered exactly when entry still precedes exit.
+
+A trace stops `SURFACE_CLIP_EPSILON` short of contact. This is not a fudge
+factor. Landing *exactly* on a plane leaves the next tick's trace starting on
+the boundary, where a rounding error either way decides whether the body is
+inside solid — and being inside solid is unrecoverable in a way that being an
+eighth of a unit clear of it is not. An eighth is exactly representable in
+binary floating point, so the gap is the same gap on every machine.
+
+A consequence worth stating: **a box resting exactly on a surface counts as
+inside it.** A body at rest on the floor sits at `z = 0.125`, not `z = 0`.
+
+`traceRay` is `traceBox` with a zero-extent box, deliberately the same code
+path, so hitscan and movement cannot disagree about the epsilon.
+
+`packages/sim/src/trace.ts`.
+
+### §2.3 `PM_ClipVelocity` and `OVERCLIP`
+
+| Constant | Value | Source |
+| -------- | ----- | ------ |
+| `OVERCLIP` | 1.001 | `packages/sim/src/slidemove.ts` |
+
+```
+backoff = dot(v, n)
+backoff = backoff < 0 ? backoff * OVERCLIP : backoff / OVERCLIP
+out     = v - n * backoff
+```
+
+100.1% of the velocity into a surface is removed, not 100%, and the extra tenth
+of a percent is the whole point: removing exactly the normal component leaves
+the body travelling *along* the plane, which means resting on it, which means
+re-contacting it every tick until it grinds to a stop. Reflecting a whisker past
+parallel pushes it off instead.
+
+The asymmetry — multiply going in, *divide* coming out — is Quake's. A velocity
+already leaving the surface is nudged very slightly back towards it, which damps
+the one case where the reflection would compound.
+
+Two numbers a player feels, and both are asserted in `slidemove.test.ts`:
+
+- **Landing at 500 qu/s downward leaves +0.5 qu/s upward.** Imperceptible, and
+  it is what keeps you from sticking.
+- **A 45-degree ramp at 700 qu/s horizontal comes off at (349.6, 350.4).** The
+  speed is *rotated*, not spent: 350 qu/s of climb out of a run, against
+  `JUMP_VELOCITY`'s 270. That is the ramp jump, which is why this constant is
+  not a tunable.
+
+### §2.4 `SlideMove`
+
+| Constant | Value | Source |
+| -------- | ----- | ------ |
+| `MAX_BUMPS` | 4 | `packages/sim/src/slidemove.ts` |
+| `MAX_CLIP_PLANES` | 5 | |
+
+Trace, clip the velocity to what was hit, repeat — up to four times. Two of the
+five clip-plane slots are spoken for before the first trace: the ground plane
+(so a move never turns down into the floor) and the normalised direction of
+travel (so a move never reverses into the velocity it started with).
+
+When a move runs into a plane, three cases, in this order:
+
+1. **One plane.** Clip to it. A wall; you slide along it. Common case, stops
+   here.
+2. **Two planes.** If the slide runs into a second plane, clip to both. If the
+   doubly-clipped velocity now points back into the first, the two clips are
+   fighting, and alternating between them is the classic corner jitter. Stop
+   treating them as two surfaces: slide along the **crease**,
+   `normalize(cross(p_i, p_j))`, projecting the original velocity onto it.
+3. **Three planes.** If the crease itself runs into a third plane, there is no
+   direction left. **Stop dead** — set the velocity to exactly zero and return.
+   Not "clip again", not "zero the horizontal component". Anything else jitters
+   in the corner of a room forever, and the acceptance gate asserts `=== 0`
+   rather than a tolerance.
+
+A velocity counts as running into a plane when `dot(v, n) < 0.1` qu/s. Sliding
+along a wall gives a dot product of zero to within rounding, and without a
+threshold every such tick would re-clip against a surface it is parallel to.
+
+Hitting a plane already in the set (`dot > 0.99`) nudges the velocity out along
+its normal rather than adding a duplicate, which would burn a clip-plane slot.
+Exhausting all five stops the body dead. So does a trace reporting `allsolid`,
+except that the horizontal velocity is kept so the body can be walked out.
+
+**The knockback restore.** While a body's knockback timer is running,
+`SlideMove` restores the velocity it started the move with — every clip
+performed along the way is discarded. This is Quake's `ps->pm_time` behaviour
+and it is not a bug: it is what makes a rocket jump keep the speed the
+explosion gave it even while scraping along a wall, instead of having it filed
+off by the geometry it is sliding past.
+
+**Gravity is a half-step.** When gravity is on, the move integrates with the
+velocity at the *midpoint* of the tick while the endpoint velocity is carried
+separately and clipped by the same planes; the endpoint velocity is what the
+body keeps. Quake's trick for making a jump arc independent of the tick rate.
+
+### §2.5 `StepSlideMove` and the ground trace
+
+| Constant | Value | Source |
+| -------- | ----- | ------ |
+| `STEP_SIZE` | 18 qu | `packages/sim/src/slidemove.ts` |
+| `MIN_WALK_NORMAL` | 0.7 | |
+| `GROUND_TRACE_DEPTH` | 0.25 qu | |
+| kick-off speed | 10 qu/s | |
+
+`StepSlideMove` runs `SlideMove`; if that hit anything, it lifts the body by
+`STEP_SIZE`, runs the move again from up there, and pushes it back down by
+however far it actually got lifted. Landing on top of the obstruction is what
+climbing a step is, and it is why stairs work without a ramp under them.
+
+**You never step up while rising.** A body with upward velocity that is not
+standing on a walkable surface is jumping, and letting a jump take an 18-unit
+free ride at the apex turns ledges that should need a rocket jump into ledges
+you can mantle.
+
+The ground trace is a 0.25-unit downward sweep of the body's own box. A quarter
+of a unit because §2.2's epsilon leaves a resting body an eighth of a unit clear
+of the floor, so anything shorter would report a stationary player as airborne
+every other tick.
+
+```
+onGround = trace hit something
+walking  = onGround && trace.normal.z >= MIN_WALK_NORMAL
+```
+
+`MIN_WALK_NORMAL = 0.7` is a hair under `cos(45deg)`, so the 45-degree ramp of
+§2.3 is walkable and anything steeper is not — the ramp that gives you a ramp
+jump is also one you can stand on.
+
+**The kick-off rule.** A body moving upward with
+`dot(velocity, plane.normal) > 10` qu/s is not standing on that plane, even
+though the trace still finds it an eighth of a unit below. Without it the tick a
+jump starts on still counts as grounded, friction is applied to a player who has
+already left the floor, and every jump comes out shorter than the last in a way
+no constant will fix.
+
+### §2.6 The speed clamp
+
+| Constant | Value | Source |
+| -------- | ----- | ------ |
+| `MAX_MOVE_SPEED` | 3000 qu/s | `packages/sim/src/slidemove.ts` |
+
+Not physics — a safety clamp, and the number comes from the geometry rather
+than from the feel. At 3000 qu/s a body covers 24 units in one tick, still under
+the 30-unit width of a player, so a sweep spans at most two broadphase cells per
+axis and the four-bump budget has room to resolve a corner. Nothing in normal
+play approaches it; a good rocket jump peaks around 1000.
+
+It exists because velocity is an *input* from elsewhere — splash damage, a
+knockback, a malicious client's reconciliation — and one absurd value should not
+be able to put a body outside the world. It scales the whole vector rather than
+each axis, so the direction of travel survives; per-axis clamping (Quake 1's
+`sv_maxvelocity`) turns a fast diagonal into a differently-aimed one.
+
+### §2.7 The gate
+
+`packages/sim/src/property.test.ts` walks a player-shaped body through a
+committed arena for 10,000 ticks from a committed seed, driving it with random
+impulses up to the clamp, and asserts after every tick that it is penetrating
+solid geometry by no more than **0.03 qu**. The geometry, the seed, the
+iteration count and the tolerance are all in the repository, because a fuzz test
+whose inputs are not committed is a different test every time it runs.

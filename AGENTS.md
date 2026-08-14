@@ -152,18 +152,35 @@ carry it for free.
 
 ### One name per number
 
-The timestep is `tick.ts`; the movement constants are `pmove.ts`; angles are
-angle units, defined in `usercmd.ts`; sine and cosine are `trig.ts`. The kernel
-imports all four rather than restating any of them. Two names for one number is
-the drift everything else in this file exists to prevent, so if you find
-yourself adding a `constants.ts`, put the constant next to the code that owns
-it instead.
+The timestep is `tick.ts`; the movement constants are `pmove.ts`; the player
+bounding box is `bbox.ts`; the collision constants — `OVERCLIP`, `STEP_SIZE`,
+`MIN_WALK_NORMAL`, the trace epsilon — are `slidemove.ts` and `trace.ts`;
+angles are angle units, defined in `usercmd.ts`; sine and cosine are `trig.ts`.
+Everything else imports rather than restating. Two names for one number is the
+drift everything else in this file exists to prevent, so if you find yourself
+adding a `constants.ts`, put the constant next to the code that owns it
+instead.
 
 `packages/sim` currently holds two worlds: `GameState`/`tick()` (the kernel)
 and `PlayerState`/`pmove()` (the walking skeleton's one-player stub, which the
 deployed client and server still run). They share the timestep, the plane and
 the movement constants deliberately, so they do not disagree about physics.
 GLAD-0B1GDS folds the second into the first.
+
+### The collision layer
+
+`collide.ts` (the brush world and its broadphase), `trace.ts` (the swept-AABB
+trace) and `slidemove.ts` (`SlideMove`, `StepSlideMove`, the ground trace) are
+a third thing again: a *pure* layer that neither world is wired to yet.
+`MoveBody` is the shape a body has to be to be moved, `CollisionWorld` is level
+data loaded once, and nothing in there touches `GameState`. GLAD-0B1GDS is what
+joins the two up. Numbers and reasoning: `docs/physics-spec.md` §2.
+
+They mutate in place and reuse module-level scratch, for the same reason and
+under the same guarantee as `hashState` — single-threaded and synchronous, with
+`await` a lint error in this package. Two consequences worth knowing before you
+call them: a `TraceResult` may not alias a trace's `start` or `end`, and a trace
+may not be interleaved with another query on the same world.
 
 ### The golden replay
 
