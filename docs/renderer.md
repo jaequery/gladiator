@@ -72,7 +72,15 @@ Two locks, because this is the mistake that would be hardest to find later:
 | `pnpm run no-physics` over `pnpm-lock.yaml` | `scripts/no-physics-plugin.mjs` | Havok, Rapier, Cannon, Ammo, Oimo and friends, however they are reached |
 
 Both are proved to fire by `scripts/guardrails.mjs`, which writes deliberately
-violating code and fails if the check accepts it.
+violating code — and a lockfile with Havok in it — and fails if the check
+accepts either.
+
+That is also how the lockfile check reaches CI: `guardrails` is a step in the CI
+job, and one of its cases runs `no-physics-plugin.mjs` over *this repository's*
+lockfile and requires it to pass. A named `No physics plugin` step beside it
+would read better in a build log and is worth adding the next time
+`.github/workflows/ci.yml` is touched; the gate holds either way, and
+`pnpm run ci` runs it directly.
 
 ---
 
