@@ -38,6 +38,10 @@
 import { hashInit, hashString, hashUint32, hashFloat64, formatHash } from '../hash.ts'
 import { createCollisionWorld } from '../collide.ts'
 import type { CollisionWorld } from '../collide.ts'
+import { vec3 } from '../math.ts'
+import { EntityKind, createGameState, spawnEntity } from '../state.ts'
+import type { GameState } from '../state.ts'
+import { SURFACE_CLIP_EPSILON } from '../trace.ts'
 import { mapCollisionBrushes } from './collide.ts'
 import { MAP_FORMAT_VERSION } from './schema.ts'
 import type {
@@ -345,4 +349,37 @@ export function loadMap(value: unknown): LoadedMap {
     world: createCollisionWorld(brushes),
     sourceBrush,
   }
+}
+
+/**
+ * One player, spawned into a map's first spawn point.
+ *
+ * The counterpart to `arena.ts`'s `createSkeletonState`, for the world a client
+ * and a server actually load. It lives in the simulation rather than in either
+ * of them because the two peers hash the *whole* state at every tick: a spawn
+ * point computed twice, in two packages, is a desync waiting for someone to
+ * change one of them.
+ *
+ * Spawn *policy* — which of a map's points, facing where, and what to do about
+ * a telefrag — is GLAD-AKODBZ. This is the placeholder it replaces: the first
+ * point, every time.
+ *
+ * The feet go `SURFACE_CLIP_EPSILON` above the floor rather than on it. A spawn
+ * point names a *floor height*, and a body resting on a floor sits an eighth of
+ * a unit clear of it (`docs/physics-spec.md` §2.2); placing the feet exactly on
+ * the surface would start the player one rounding error inside the world.
+ */
+export function createMapState(map: MapSource, seed: number): GameState {
+  const spawn = map.spawns[0]
+  if (spawn === undefined) {
+    fail(`map "${map.name}"`, 'it has no spawn points, so there is nowhere to put a player.')
+  }
+  const state = createGameState(seed)
+  spawnEntity(state, {
+    kind: EntityKind.Player,
+    slot: 0,
+    origin: vec3(spawn.origin[0], spawn.origin[1], spawn.origin[2] + SURFACE_CLIP_EPSILON),
+    health: 100,
+  })
+  return state
 }

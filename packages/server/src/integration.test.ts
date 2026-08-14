@@ -10,12 +10,12 @@ import { randomUUID } from 'node:crypto'
 
 import {
   PROTOCOL_VERSION,
-  SKELETON_ARENA,
+  SKELETON_SEED,
   TICK_RATE,
   type GameState,
   type ServerMessage,
   type UserCmd,
-  createSkeletonState,
+  createMapState,
   describeMapMismatch,
   describeVersionMismatch,
   encodeCmd,
@@ -28,7 +28,7 @@ import { WebSocket } from 'ws'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { readConfig } from './config.ts'
-import { SERVER_MAP_HASH } from './map.ts'
+import { SERVER_MAP, SERVER_MAP_HASH } from './map.ts'
 import { startServer, type GladiatorServer } from './server.ts'
 import { CLOSE_MAP_MISMATCH, CLOSE_VERSION_MISMATCH } from './session.ts'
 
@@ -260,7 +260,7 @@ describe('cross-environment hash agreement', () => {
 
       // Simulate locally exactly as the browser does, and send the commands on
       // in frame-sized batches — the same shape of traffic a 60 Hz client makes.
-      const state: GameState = createSkeletonState()
+      const state: GameState = createMapState(SERVER_MAP.source, SKELETON_SEED)
       let tick = 0
       while (tick < TICKS) {
         const batch = []
@@ -269,7 +269,7 @@ describe('cross-environment hash agreement', () => {
         for (let i = 0; i < size; i += 1) {
           tick += 1
           const cmd = scriptedCommand(tick)
-          simTick(state, [cmd], SKELETON_ARENA)
+          simTick(state, [cmd], SERVER_MAP.world)
           ourHashes.set(tick, hashState(state))
           batch.push(encodeCmd(cmd))
         }

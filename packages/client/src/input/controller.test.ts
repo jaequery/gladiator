@@ -1,7 +1,7 @@
 import { BUTTON_JUMP, MAX_PITCH_UNITS, yawUnitsFromDegrees } from '@gladiator/sim'
 import { describe, expect, it } from 'vitest'
 
-import { commandFrom } from './input.ts'
+import { commandFrom } from './controller.ts'
 
 const LEVEL = { yawDegrees: 0, pitchDegrees: 0 }
 

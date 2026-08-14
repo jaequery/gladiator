@@ -81,6 +81,7 @@ export { mapGeometry } from './map/geometry.ts'
 export type { MapGeometry, SurfaceGroup } from './map/geometry.ts'
 
 export {
+  createMapState,
   hashMapSource,
   loadMap,
   mapHashOf,

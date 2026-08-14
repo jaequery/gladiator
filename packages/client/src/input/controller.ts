@@ -1,6 +1,7 @@
 /**
- * Keyboard, mouse and pointer lock — everything between a human and a
- * `UserCmd`.
+ * Keyboard and mouse — everything between a human and a `UserCmd`. Pointer
+ * lock itself, and the raw-input flag that makes it usable, is
+ * [`pointerLock.ts`](./pointerLock.ts).
  *
  * The view angles are kept here as floating-point degrees and quantised to
  * Quake's 16-bit angle units only when a command is built. That ordering
@@ -14,6 +15,8 @@ import {
   pitchUnitsFromDegrees,
   yawUnitsFromDegrees,
 } from '@gladiator/sim'
+
+import { createPointerLock } from './pointerLock.ts'
 
 /** Degrees of view rotation per unit of raw mouse movement. Quake's `m_yaw`. */
 export const DEGREES_PER_COUNT = 0.022
@@ -46,6 +49,8 @@ export type ViewAngles = {
 export type InputController = {
   /** Whether the pointer is currently locked to the canvas. */
   readonly locked: boolean
+  /** Whether the browser is giving us unaccelerated mouse deltas. */
+  readonly raw: boolean
   readonly angles: ViewAngles
   /** Build the command for the tick about to be simulated. */
   sample(): UserCmd
@@ -89,8 +94,7 @@ export function createInputController(
   const sensitivity = options.sensitivity ?? DEFAULT_SENSITIVITY
   const held = new Set<string>()
   const angles: ViewAngles = { yawDegrees: 0, pitchDegrees: 0 }
-  const lockListeners: Array<(locked: boolean) => void> = []
-  let locked = false
+  const pointer = createPointerLock(canvas)
 
   const onKeyDown = (event: KeyboardEvent) => {
     if (!TRACKED_KEYS.has(event.code)) return
@@ -107,7 +111,7 @@ export function createInputController(
   }
 
   const onMouseMove = (event: MouseEvent) => {
-    if (!locked) return
+    if (!pointer.locked) return
     angles.yawDegrees -= event.movementX * DEGREES_PER_COUNT * sensitivity
     angles.pitchDegrees -= event.movementY * DEGREES_PER_COUNT * sensitivity
     // Keep yaw in a band a float can hold precisely over a long session.
@@ -116,44 +120,36 @@ export function createInputController(
     if (angles.pitchDegrees < -89) angles.pitchDegrees = -89
   }
 
-  const onLockChange = () => {
-    locked = document.pointerLockElement === canvas
-    // Keys held when focus is lost would otherwise stay held forever, and the
-    // player returns to find themselves sprinting into a wall.
-    if (!locked) held.clear()
-    for (const listener of lockListeners) listener(locked)
-  }
-
   const onBlur = () => held.clear()
+
+  // Keys held when the lock is released would otherwise stay held forever, and
+  // the player returns to find themselves sprinting into a wall.
+  pointer.onChange((locked) => {
+    if (!locked) held.clear()
+  })
 
   window.addEventListener('keydown', onKeyDown)
   window.addEventListener('keyup', onKeyUp)
   window.addEventListener('blur', onBlur)
   document.addEventListener('mousemove', onMouseMove)
-  document.addEventListener('pointerlockchange', onLockChange)
 
   return {
     get locked() {
-      return locked
+      return pointer.locked
+    },
+    get raw() {
+      return pointer.raw
     },
     angles,
     sample: () => commandFrom(held, angles),
-    requestLock: () => {
-      // Chrome returns a promise and rejects if the gesture was not trusted;
-      // Safari returns undefined. Swallowing the rejection keeps a failed lock
-      // from becoming an unhandled rejection in the console.
-      const result: unknown = canvas.requestPointerLock()
-      if (result instanceof Promise) result.catch(() => undefined)
-    },
-    onLockChange: (listener) => {
-      lockListeners.push(listener)
-    },
+    requestLock: () => pointer.request(),
+    onLockChange: (listener) => pointer.onChange(listener),
     dispose: () => {
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
       window.removeEventListener('blur', onBlur)
       document.removeEventListener('mousemove', onMouseMove)
-      document.removeEventListener('pointerlockchange', onLockChange)
+      pointer.dispose()
     },
   }
 }

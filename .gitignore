@@ -12,3 +12,4 @@ coverage/
 # surviving a crashed run can never be committed. ESLint and tsc still see it —
 # neither reads .gitignore — which is the whole point of the file.
 **/__guardrail_probe__.ts
+__guardrail_lock__.yaml

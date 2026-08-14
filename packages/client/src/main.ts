@@ -1,5 +1,5 @@
 /**
- * The walking skeleton's entry point.
+ * The client's entry point.
  *
  * One frame does, in order:
  *
@@ -12,38 +12,76 @@
  * decides where anything is; the network never advances the world. Everything
  * this project adds later — prediction, lag compensation, a bot — hangs off
  * this shape.
+ *
+ * The clock is read **once**, here, and the elapsed interval is passed to
+ * everything that needs it. A renderer that read `performance.now()` itself
+ * would be a second opinion about what a frame is.
  */
 import {
   EntityFlag,
-  SKELETON_ARENA,
+  SKELETON_SEED,
   TICK_RATE,
-  angleUnitsToRadians,
   cloneGameState,
-  createSkeletonState,
+  createMapState,
   findPlayer,
-  hashState,
-  onSpeedClamp,
   type GameState,
+  hashState,
+  mapGeometry,
+  onSpeedClamp,
   type Vec3,
   tick as simTick,
 } from '@gladiator/sim'
 
 import { createHud } from './hud.ts'
-import { createInputController } from './input.ts'
+import { createInputController } from './input/controller.ts'
 import { advance, alphaOf } from './loop.ts'
 import { CLIENT_MAP, CLIENT_MAP_HASH } from './map.ts'
 import { createNetClient, mustHoldStill, resolveServerUrl } from './net.ts'
-import { createRenderer, type Renderer } from './render.ts'
+import { FRAME_BUDGET_MS, type FrameVerdict } from './render/frameStats.ts'
+import { type Renderer, createRenderer } from './render/renderer.ts'
+import { REFERENCE_VIEW, interpolateOrigin } from './render/view.ts'
 
 const BUILD = import.meta.env.VITE_BUILD ?? 'dev'
+
+/**
+ * How often the readout is refreshed, in milliseconds.
+ *
+ * Ten times a second, not once a frame, and the reason is measured rather than
+ * assumed: writing the panel's dozen `textContent`s every frame dirties the
+ * overlay, and a dirty overlay makes the browser recomposite the whole page on
+ * top of the canvas. At 320x200 in headless Chromium that alone took the loop
+ * from a flat 16.7 ms to a mean of 18 ms with a 50 ms 99th percentile — a
+ * stutter caused entirely by *displaying* the frame rate.
+ *
+ * Ten hertz also happens to be the fastest a number is worth reading. The real
+ * HUD is GLAD-BHNPOE; this constant is the constraint it inherits.
+ */
+const HUD_INTERVAL_MS = 100
+
+/** What the renderer is doing, for the HUD and the browser smoke test. */
+export type RenderSnapshot = {
+  /** `webgpu`, `webgl2` or `webgl1` — which context actually came up. */
+  readonly backend: string
+  readonly description: string
+  /** `scene.isReady(true)` has resolved: every shader compiled, every texture in. */
+  readonly ready: boolean
+  readonly frames: number
+  readonly pixelRatio: number
+  readonly triangles: number
+  readonly meanMs: number
+  readonly medianMs: number
+  readonly p99Ms: number
+  readonly worstMs: number
+}
 
 /**
  * A read-only view of the running client, for the browser smoke test.
  *
  * `scripts/e2e.mjs` drives a real headless browser and has to be able to answer
- * "did the box actually move" and "do the hashes agree" without scraping pixels
- * or parsing the HUD's prose. Deliberately a snapshot function rather than live
- * references: nothing outside can reach in and change the simulation.
+ * "did the box actually move", "do the hashes agree" and "is the frame pacing
+ * within budget" without scraping pixels or parsing the HUD's prose.
+ * Deliberately a snapshot function rather than live references: nothing outside
+ * can reach in and change the simulation.
  */
 export type DebugSnapshot = {
   readonly build: string
@@ -55,12 +93,23 @@ export type DebugSnapshot = {
   readonly onGround: boolean
   readonly clientHash: number
   readonly locked: boolean
+  readonly raw: boolean
+  readonly render: RenderSnapshot
   readonly net: ReturnType<ReturnType<typeof createNetClient>['snapshot']>
 }
 
 declare global {
   interface Window {
-    __gladiator?: { snapshot(): DebugSnapshot }
+    __gladiator?: {
+      snapshot(): DebugSnapshot
+      /** Judge the frames since {@link resetFrameStats} against a budget. */
+      frameVerdict(budgetMs: number): FrameVerdict
+      resetFrameStats(): void
+      /** The last frame, scaled — for the reference-screenshot comparison. */
+      capture(width: number, height: number): ImageData
+      /** The same frame as a `data:image/png` URL, for re-shooting it. */
+      captureDataUrl(width: number, height: number): string
+    }
   }
 }
 
@@ -78,8 +127,19 @@ function mapHashOverride(search: string): string | undefined {
   return raw !== null && /^[0-9a-f]{8}$/.test(raw) ? raw : undefined
 }
 
-function lerp(a: number, b: number, t: number): number {
-  return a + (b - a) * t
+/**
+ * `?shot=1` — the reference-screenshot mode.
+ *
+ * A page with nothing moving in it: no socket, no simulation, no HUD, no
+ * adaptive quality, one device pixel per CSS pixel, and the camera pinned to
+ * {@link REFERENCE_VIEW}. A reference screenshot of a page that is doing
+ * anything at all is a reference to nothing.
+ *
+ * It also pins the backend to WebGL, so the committed image does not depend on
+ * whether the machine that took it happened to offer WebGPU.
+ */
+function shotMode(search: string): boolean {
+  return new URLSearchParams(search).get('shot') !== null
 }
 
 /** The one player this client simulates. Two players is GLAD-FHKBN8. */
@@ -95,9 +155,7 @@ function originOf(state: GameState): Vec3 {
 
 function velocityOf(state: GameState): Vec3 {
   const player = findPlayer(state, LOCAL_SLOT)
-  return player === null
-    ? NOWHERE
-    : [player.velocity[0], player.velocity[1], player.velocity[2]]
+  return player === null ? NOWHERE : [player.velocity[0], player.velocity[1], player.velocity[2]]
 }
 
 function onGroundIn(state: GameState): boolean {
@@ -105,17 +163,7 @@ function onGroundIn(state: GameState): boolean {
   return player !== null && (player.flags & EntityFlag.OnGround) !== 0
 }
 
-function interpolate(previous: GameState, current: GameState, alpha: number): Vec3 {
-  const from = originOf(previous)
-  const to = originOf(current)
-  return [
-    lerp(from[0], to[0], alpha),
-    lerp(from[1], to[1], alpha),
-    lerp(from[2], to[2], alpha),
-  ]
-}
-
-function boot(): void {
+async function boot(): Promise<void> {
   const app = document.querySelector<HTMLElement>('#app')
   if (app === null) throw new Error('no #app element to mount into')
 
@@ -126,19 +174,32 @@ function boot(): void {
   app.append(canvas, overlay)
 
   const hud = createHud(overlay)
+  const shot = shotMode(window.location.search)
+  if (shot) overlay.hidden = true
 
   let renderer: Renderer
   try {
-    renderer = createRenderer(canvas)
+    renderer = await createRenderer({
+      canvas,
+      map: CLIENT_MAP.source,
+      // Derived from the collision brushes, never authored beside them:
+      // `packages/sim/src/map/geometry.ts`.
+      geometry: mapGeometry(CLIENT_MAP.source),
+      ...(shot
+        ? { adaptQuality: false, pixelRatio: 1, preserveDrawingBuffer: true, forceWebGL: true }
+        : {}),
+    })
   } catch (cause) {
     // A blank page with a console error is the worst possible outcome of a
     // deploy. Say what happened, on the page.
-    hud.fail(`could not start the renderer: ${String(cause)}. WebGL2 may be unavailable here.`)
+    hud.fail(
+      `could not start the renderer: ${String(cause)}. Neither WebGPU nor WebGL2 is available here.`,
+    )
     return
   }
 
   const input = createInputController(canvas)
-  canvas.addEventListener('click', () => input.requestLock())
+  if (!shot) canvas.addEventListener('click', () => input.requestLock())
   window.addEventListener('resize', () => renderer.resize())
 
   const override = protocolOverride(window.location.search)
@@ -150,9 +211,18 @@ function boot(): void {
     ...(override === undefined ? {} : { protocolOverride: override }),
     ...(mapOverride === undefined ? {} : { mapHashOverride: mapOverride }),
   })
-  net.connect()
+  if (!shot) net.connect()
 
-  const state = createSkeletonState()
+  // The world, and the world drawn, are now the same list of brushes.
+  //
+  // `arena.ts` kept the simulation on its own hard-coded box while the renderer
+  // still drew one, and said out loud that moving the sim onto a map nothing
+  // drew would trade a cosmetic gap for invisible walls. This ticket is what
+  // makes that condition false: the renderer draws `testbed`'s brushes, so the
+  // simulation traces against `testbed`'s brushes, and the server does the same
+  // from the same artifact. `SKELETON_ARENA` stays as the sim's own default and
+  // as the golden replay's world.
+  const state = createMapState(CLIENT_MAP.source, SKELETON_SEED)
   // `tick()` advances the world in place, so the frame before is a *copy* —
   // `AGENTS.md` says this out loud because holding a reference instead is a bug
   // that only shows up as a rendering stutter.
@@ -168,6 +238,22 @@ function boot(): void {
     console.warn(`gladiator: clamped a velocity of ${speed.toFixed(0)} qu/s`)
   })
 
+  const renderSnapshot = (): RenderSnapshot => {
+    const stats = renderer.frameStats()
+    return {
+      backend: renderer.backend,
+      description: renderer.description,
+      ready: renderer.ready,
+      frames: renderer.frames,
+      pixelRatio: renderer.pixelRatio,
+      triangles: renderer.triangles,
+      meanMs: stats.meanMs,
+      medianMs: stats.medianMs,
+      p99Ms: stats.p99Ms,
+      worstMs: stats.worstMs,
+    }
+  }
+
   window.__gladiator = {
     snapshot: () => ({
       build: BUILD,
@@ -179,17 +265,36 @@ function boot(): void {
       onGround: onGroundIn(state),
       clientHash,
       locked: input.locked,
+      raw: input.raw,
+      render: renderSnapshot(),
       net: net.snapshot(),
     }),
+    frameVerdict: (budgetMs: number) => renderer.verdict(budgetMs),
+    resetFrameStats: () => renderer.resetFrameStats(),
+    capture: (width: number, height: number) => {
+      const shotCanvas = renderer.capture(width, height)
+      const context = shotCanvas.getContext('2d')
+      if (context === null) throw new Error('no 2d context to read back')
+      return context.getImageData(0, 0, width, height)
+    },
+    captureDataUrl: (width: number, height: number) =>
+      renderer.capture(width, height).toDataURL('image/png'),
   }
 
   // A rolling estimate, so the HUD reads a rate rather than one frame's noise.
   let fps = 0
+  let hudDueMs = 0
 
   const frame = (nowMs: number) => {
     const elapsedMs = nowMs - lastFrameMs
     lastFrameMs = nowMs
     fps = elapsedMs > 0 ? fps * 0.9 + (1000 / elapsedMs) * 0.1 : fps
+
+    if (shot) {
+      renderer.render(REFERENCE_VIEW, elapsedMs)
+      window.requestAnimationFrame(frame)
+      return
+    }
 
     // Input is sampled once per frame, not once per tick: a browser only
     // delivers mouse and key events between frames, so a per-tick sample would
@@ -202,8 +307,8 @@ function boot(): void {
       // with — and stop it again if we turn out to be holding a different map
       // than the one it is authoritative over. See `mustHoldStill`.
       //
-      // This is not politeness, it is the bug this ticket was built to catch:
-      // a socket takes a handful of frames to open, and a client that
+      // This is not politeness, it is the bug the walking skeleton was built to
+      // catch: a socket takes a handful of frames to open, and a client that
       // simulates during them has advanced ticks whose commands nobody
       // received. The server then numbers *its* first command tick 1 while the
       // client is already at tick 40, and every hash after that is compared
@@ -215,7 +320,7 @@ function boot(): void {
       accumulatorMs = step.accumulatorMs
       for (let i = 0; i < step.ticks; i += 1) {
         previous = cloneGameState(state)
-        simTick(state, [cmd], SKELETON_ARENA)
+        simTick(state, [cmd], CLIENT_MAP.world)
         clientHash = hashState(state)
         net.record(state.tick, clientHash)
         net.queue(state.tick, cmd)
@@ -223,16 +328,38 @@ function boot(): void {
       net.flush()
     }
 
-    renderer.render({
-      origin: interpolate(previous, state, alphaOf(accumulatorMs)),
-      yawRadians: angleUnitsToRadians(cmd.yaw),
-      pitchRadians: angleUnitsToRadians(cmd.pitch),
-    })
+    renderer.render(
+      {
+        origin: interpolateOrigin(
+          { origin: originOf(previous) },
+          { origin: originOf(state) },
+          alphaOf(accumulatorMs),
+        ),
+        // The view angle is the freshest thing the frame has; interpolating it
+        // would add latency to aim. `render/view.ts`.
+        yawUnits: cmd.yaw,
+        pitchUnits: cmd.pitch,
+      },
+      elapsedMs,
+    )
+
+    hudDueMs -= elapsedMs
+    if (hudDueMs > 0) {
+      window.requestAnimationFrame(frame)
+      return
+    }
+    hudDueMs = HUD_INTERVAL_MS
+    // A percentile costs a sort of the whole window, so it is computed here,
+    // ten times a second, rather than once a frame. Measuring frame pacing is
+    // not allowed to be the thing that costs a frame.
+    const p99Ms = renderer.frameStats().p99Ms
 
     hud.update({
       build: BUILD,
       mapName: CLIENT_MAP.source.name,
-      renderer: renderer.description,
+      renderer: `${renderer.description} · ${renderer.pixelRatio}x`,
+      frameBudgetMs: FRAME_BUDGET_MS,
+      p99Ms,
       fps,
       tick: state.tick,
       ticksPerSecond: TICK_RATE,
@@ -247,4 +374,7 @@ function boot(): void {
   window.requestAnimationFrame(frame)
 }
 
-boot()
+boot().catch((cause: unknown) => {
+  const app = document.querySelector<HTMLElement>('#app')
+  if (app !== null) createHud(app).fail(`could not start: ${String(cause)}`)
+})
