@@ -65,7 +65,8 @@ button bits. The *only* way anything gets into the simulation. A human's
 keyboard produces these; so does the bot, which is what makes the bot fair.
 
 **`pmove`** — the player movement function, ported from Quake: friction,
-acceleration, air control, velocity snapping (GLAD-0B1GDS).
+acceleration, jump, gravity and integer velocity snapping.
+`packages/sim/src/pmove/`; `docs/physics-spec.md` §1.
 
 **Trace** — a swept query: "move this box from A to B and tell me what it hit,
 and when". The primitive all collision and hitscan is built on.

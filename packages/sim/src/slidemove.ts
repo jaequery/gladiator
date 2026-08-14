@@ -4,7 +4,7 @@
  *
  * This is the layer between "where would the body like to go" and "where does
  * the world let it go". It never decides *what* the velocity should be — that
- * is `pmove`'s job (GLAD-0B1GDS) — only how a velocity survives contact.
+ * is `pmove`'s job (`pmove/`) — only how a velocity survives contact.
  *
  * Three behaviours in here look like bugs and are not. Each is load-bearing for
  * something a Quake player can feel, and each is called out where it happens:

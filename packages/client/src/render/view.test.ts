@@ -3,13 +3,15 @@ import { Vector3 } from '@babylonjs/core/Maths/math.vector'
 import {
   BUTTON_JUMP,
   PLAYER_VIEW_HEIGHT,
-  SPAWN_STATE,
-  type PlayerState,
+  SKELETON_ARENA,
   type UserCmd,
+  type Vec3,
   angleUnitsToRadians,
+  createSkeletonState,
+  findPlayer,
   pitchUnitsFromDegrees,
-  pmove,
   quakeToEngine,
+  tick as simTick,
   yawUnitsFromDegrees,
 } from '@gladiator/sim'
 import { describe, expect, it } from 'vitest'
@@ -46,8 +48,14 @@ const RUNNING: UserCmd = {
  * identical rather than "close".
  */
 function driveAt(cadenceMs: number, frames: number, pose: (view: RenderView) => CameraPose) {
-  let state: PlayerState = SPAWN_STATE
-  let previous: PlayerState = SPAWN_STATE
+  const state = createSkeletonState()
+  // `tick()` advances in place and reuses the same vectors, so the previous
+  // frame has to be *copied out* rather than referenced. `AGENTS.md`.
+  const originNow = (): Vec3 => {
+    const player = findPlayer(state, 0)
+    return player === null ? [0, 0, 0] : [player.origin[0], player.origin[1], player.origin[2]]
+  }
+  let previous: Vec3 = originNow()
   let accumulatorMs = 0
   const samples = new Map<number, CameraPose>()
 
@@ -55,12 +63,16 @@ function driveAt(cadenceMs: number, frames: number, pose: (view: RenderView) => 
     const step = advance(accumulatorMs, cadenceMs)
     accumulatorMs = step.accumulatorMs
     for (let i = 0; i < step.ticks; i += 1) {
-      previous = state
-      state = pmove(state, RUNNING)
+      previous = originNow()
+      simTick(state, [RUNNING], SKELETON_ARENA)
     }
     samples.set(frame * cadenceMs, {
       ...pose({
-        origin: interpolateOrigin(previous, state, alphaOf(accumulatorMs)),
+        origin: interpolateOrigin(
+          { origin: previous },
+          { origin: originNow() },
+          alphaOf(accumulatorMs),
+        ),
         yawUnits: RUNNING.yaw,
         pitchUnits: RUNNING.pitch,
       }),

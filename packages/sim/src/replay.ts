@@ -25,6 +25,7 @@ import { vec3 } from './math.ts'
 import { EntityFlag, EntityKind, createGameState, hashState, spawnEntity } from './state.ts'
 import type { GameState } from './state.ts'
 import { TICK_INTERVAL_MS, TICK_RATE } from './tick.ts'
+import { SURFACE_CLIP_EPSILON } from './trace.ts'
 import { pitchUnitsFromDegrees, yawUnitsFromDegrees } from './usercmd.ts'
 import type { UserCmd } from './usercmd.ts'
 
@@ -98,7 +99,15 @@ export function createReplayState(replay: Replay): GameState {
       // Spawned already standing, so the first tick of the script is a tick
       // the player can act on rather than one spent falling onto the floor.
       flags: EntityFlag.OnGround,
-      origin: vec3(spawn.origin[0], spawn.origin[1], spawn.origin[2]),
+      // A spawn point names a floor height, and a body resting on a floor sits
+      // `SURFACE_CLIP_EPSILON` clear of it (`docs/physics-spec.md` §2.2).
+      // Authoring the epsilon into every fixture instead would put a number
+      // that belongs to the trace into files that know nothing about it.
+      origin: vec3(
+        spawn.origin[0],
+        spawn.origin[1],
+        spawn.origin[2] + SURFACE_CLIP_EPSILON,
+      ),
       angles: vec3(0, yawUnitsFromDegrees(spawn.yawDeg), 0),
       health: spawn.health,
     })

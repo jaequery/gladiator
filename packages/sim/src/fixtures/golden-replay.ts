@@ -10,8 +10,8 @@
  * ## What a failure here means
  *
  * The trace changed. That is not automatically a bug: any ticket that changes
- * what a sub-step *does* — `pmove` (GLAD-0B1GDS), tracing (GLAD-3SCN0U),
- * weapons (GLAD-0QWRYK) — moves this trace, deliberately, and re-baking it is
+ * what a sub-step *does* — `pmove`, tracing, weapons (GLAD-0QWRYK) — moves
+ * this trace, deliberately, and re-baking it is
  * part of that work. What the test buys is that the change is *noticed*, and
  * that a change nobody meant to make cannot ride along with one they did.
  *
@@ -87,25 +87,25 @@ export const GOLDEN_REPLAY: Replay = {
  * 62.5 ticks, rounded to the nearest tick. See `sampleTicks`.
  */
 export const GOLDEN_TRACE: readonly TraceSample[] = [
-  { tick: 0, timeMs: 0, hash: '4acb9129' },
-  { tick: 63, timeMs: 504, hash: 'd4109112' },
-  { tick: 125, timeMs: 1000, hash: 'c0a7e919' },
-  { tick: 188, timeMs: 1504, hash: 'bda631c5' },
-  { tick: 250, timeMs: 2000, hash: '64296d40' },
-  { tick: 313, timeMs: 2504, hash: 'de6ccca0' },
-  { tick: 375, timeMs: 3000, hash: 'ae60e27c' },
-  { tick: 438, timeMs: 3504, hash: '6fe41e31' },
-  { tick: 500, timeMs: 4000, hash: '21e452f5' },
-  { tick: 563, timeMs: 4504, hash: '2601926c' },
-  { tick: 625, timeMs: 5000, hash: '92d7bc57' },
-  { tick: 688, timeMs: 5504, hash: '4897ace4' },
-  { tick: 750, timeMs: 6000, hash: '2db12b5b' },
-  { tick: 813, timeMs: 6504, hash: '75042616' },
-  { tick: 875, timeMs: 7000, hash: '7f03cc38' },
-  { tick: 938, timeMs: 7504, hash: 'e071145e' },
-  { tick: 1000, timeMs: 8000, hash: '3f56325c' },
-  { tick: 1063, timeMs: 8504, hash: '9e386b57' },
-  { tick: 1125, timeMs: 9000, hash: '9550fabe' },
-  { tick: 1188, timeMs: 9504, hash: 'bddbcb99' },
-  { tick: 1250, timeMs: 10000, hash: 'f160fc94' },
+  { tick: 0, timeMs: 0, hash: '2a04d1eb' },
+  { tick: 63, timeMs: 504, hash: 'a39e8064' },
+  { tick: 125, timeMs: 1000, hash: '6c328975' },
+  { tick: 188, timeMs: 1504, hash: '8af842b9' },
+  { tick: 250, timeMs: 2000, hash: '23b50f53' },
+  { tick: 313, timeMs: 2504, hash: 'a588e493' },
+  { tick: 375, timeMs: 3000, hash: 'ca5155df' },
+  { tick: 438, timeMs: 3504, hash: '874e0fa7' },
+  { tick: 500, timeMs: 4000, hash: '3a84c356' },
+  { tick: 563, timeMs: 4504, hash: '8ebf3eac' },
+  { tick: 625, timeMs: 5000, hash: '8d8a1cf4' },
+  { tick: 688, timeMs: 5504, hash: 'ea4346f2' },
+  { tick: 750, timeMs: 6000, hash: '601ee83d' },
+  { tick: 813, timeMs: 6504, hash: '73848aef' },
+  { tick: 875, timeMs: 7000, hash: 'a09399ab' },
+  { tick: 938, timeMs: 7504, hash: '5978421c' },
+  { tick: 1000, timeMs: 8000, hash: '5737fd6a' },
+  { tick: 1063, timeMs: 8504, hash: '365df550' },
+  { tick: 1125, timeMs: 9000, hash: 'fe2ad56f' },
+  { tick: 1188, timeMs: 9504, hash: 'e2485a7f' },
+  { tick: 1250, timeMs: 10000, hash: '465d685d' },
 ]

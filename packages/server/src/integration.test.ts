@@ -10,23 +10,25 @@ import { randomUUID } from 'node:crypto'
 
 import {
   PROTOCOL_VERSION,
-  SPAWN_STATE,
+  SKELETON_SEED,
   TICK_RATE,
-  type PlayerState,
+  type GameState,
   type ServerMessage,
   type UserCmd,
+  createMapState,
   describeMapMismatch,
   describeVersionMismatch,
   encodeCmd,
-  hashPlayerState,
+  findPlayer,
+  hashState,
   parseServerMessage,
-  pmove,
+  tick as simTick,
 } from '@gladiator/sim'
 import { WebSocket } from 'ws'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { readConfig } from './config.ts'
-import { SERVER_MAP_HASH } from './map.ts'
+import { SERVER_MAP, SERVER_MAP_HASH } from './map.ts'
 import { startServer, type GladiatorServer } from './server.ts'
 import { CLOSE_MAP_MISMATCH, CLOSE_VERSION_MISMATCH } from './session.ts'
 
@@ -258,7 +260,7 @@ describe('cross-environment hash agreement', () => {
 
       // Simulate locally exactly as the browser does, and send the commands on
       // in frame-sized batches — the same shape of traffic a 60 Hz client makes.
-      let state: PlayerState = SPAWN_STATE
+      const state: GameState = createMapState(SERVER_MAP.source, SKELETON_SEED)
       let tick = 0
       while (tick < TICKS) {
         const batch = []
@@ -267,8 +269,8 @@ describe('cross-environment hash agreement', () => {
         for (let i = 0; i < size; i += 1) {
           tick += 1
           const cmd = scriptedCommand(tick)
-          state = pmove(state, cmd)
-          ourHashes.set(tick, hashPlayerState(tick, state))
+          simTick(state, [cmd], SERVER_MAP.world)
+          ourHashes.set(tick, hashState(state))
           batch.push(encodeCmd(cmd))
         }
         socket.send(JSON.stringify({ t: 'cmds', startTick: batchStart, cmds: batch }))
@@ -288,7 +290,9 @@ describe('cross-environment hash agreement', () => {
 
       // And the run actually went somewhere, rather than agreeing about a
       // player who never moved.
-      expect(Math.abs(state.origin[0]) + Math.abs(state.origin[1])).toBeGreaterThan(100)
+      const player = findPlayer(state, 0)
+      if (player === null) throw new Error('the local world lost its player')
+      expect(Math.abs(player.origin[0]) + Math.abs(player.origin[1])).toBeGreaterThan(100)
     },
   )
 

@@ -4,7 +4,7 @@
  * One frame does, in order:
  *
  *   1. read the clock once, and turn elapsed wall-clock into whole ticks
- *   2. for each tick: sample input, `pmove`, hash, queue the command
+ *   2. for each tick: sample input, `tick()`, hash, queue the command
  *   3. flush the queued commands as one frame to the server
  *   4. draw the interpolated result
  *
@@ -18,12 +18,18 @@
  * would be a second opinion about what a frame is.
  */
 import {
-  SPAWN_STATE,
+  EntityFlag,
+  SKELETON_SEED,
   TICK_RATE,
-  hashPlayerState,
+  cloneGameState,
+  createMapState,
+  findPlayer,
+  type GameState,
+  hashState,
   mapGeometry,
+  onSpeedClamp,
   type Vec3,
-  pmove,
+  tick as simTick,
 } from '@gladiator/sim'
 
 import { createHud } from './hud.ts'
@@ -136,6 +142,27 @@ function shotMode(search: string): boolean {
   return new URLSearchParams(search).get('shot') !== null
 }
 
+/** The one player this client simulates. Two players is GLAD-FHKBN8. */
+const LOCAL_SLOT = 0
+
+/** `[0, 0, 0]` if the player has somehow gone missing, rather than throwing in a frame. */
+const NOWHERE: Vec3 = [0, 0, 0]
+
+function originOf(state: GameState): Vec3 {
+  const player = findPlayer(state, LOCAL_SLOT)
+  return player === null ? NOWHERE : [player.origin[0], player.origin[1], player.origin[2]]
+}
+
+function velocityOf(state: GameState): Vec3 {
+  const player = findPlayer(state, LOCAL_SLOT)
+  return player === null ? NOWHERE : [player.velocity[0], player.velocity[1], player.velocity[2]]
+}
+
+function onGroundIn(state: GameState): boolean {
+  const player = findPlayer(state, LOCAL_SLOT)
+  return player !== null && (player.flags & EntityFlag.OnGround) !== 0
+}
+
 async function boot(): Promise<void> {
   const app = document.querySelector<HTMLElement>('#app')
   if (app === null) throw new Error('no #app element to mount into')
@@ -186,16 +213,30 @@ async function boot(): Promise<void> {
   })
   if (!shot) net.connect()
 
-  // The walking skeleton's world: one player on a flat plane. Where a round
-  // actually starts a player is GLAD-AKODBZ's, and the client and the server
-  // have to agree on it to the bit — so it stays `SPAWN_STATE` until the ticket
-  // that owns it moves both ends at once.
-  let state = SPAWN_STATE
-  let previous = SPAWN_STATE
-  let tick = 0
-  let clientHash = hashPlayerState(tick, state)
+  // The world, and the world drawn, are now the same list of brushes.
+  //
+  // `arena.ts` kept the simulation on its own hard-coded box while the renderer
+  // still drew one, and said out loud that moving the sim onto a map nothing
+  // drew would trade a cosmetic gap for invisible walls. This ticket is what
+  // makes that condition false: the renderer draws `testbed`'s brushes, so the
+  // simulation traces against `testbed`'s brushes, and the server does the same
+  // from the same artifact. `SKELETON_ARENA` stays as the sim's own default and
+  // as the golden replay's world.
+  const state = createMapState(CLIENT_MAP.source, SKELETON_SEED)
+  // `tick()` advances the world in place, so the frame before is a *copy* —
+  // `AGENTS.md` says this out loud because holding a reference instead is a bug
+  // that only shows up as a rendering stutter.
+  let previous = cloneGameState(state)
+  let clientHash = hashState(state)
   let accumulatorMs = 0
   let lastFrameMs = performance.now()
+
+  // The sim has no `console`, so the §2.6 safety rail reports through a seam.
+  // If this ever prints, something upstream handed the simulation a velocity no
+  // amount of movement could produce.
+  onSpeedClamp((speed) => {
+    console.warn(`gladiator: clamped a velocity of ${speed.toFixed(0)} qu/s`)
+  })
 
   const renderSnapshot = (): RenderSnapshot => {
     const stats = renderer.frameStats()
@@ -218,10 +259,10 @@ async function boot(): Promise<void> {
       build: BUILD,
       mapName: CLIENT_MAP.source.name,
       mapHash: CLIENT_MAP_HASH,
-      tick,
-      origin: state.origin,
-      velocity: state.velocity,
-      onGround: state.onGround,
+      tick: state.tick,
+      origin: originOf(state),
+      velocity: velocityOf(state),
+      onGround: onGroundIn(state),
       clientHash,
       locked: input.locked,
       raw: input.raw,
@@ -278,19 +319,22 @@ async function boot(): Promise<void> {
       const step = advance(accumulatorMs, elapsedMs)
       accumulatorMs = step.accumulatorMs
       for (let i = 0; i < step.ticks; i += 1) {
-        previous = state
-        state = pmove(state, cmd)
-        tick += 1
-        clientHash = hashPlayerState(tick, state)
-        net.record(tick, clientHash)
-        net.queue(tick, cmd)
+        previous = cloneGameState(state)
+        simTick(state, [cmd], CLIENT_MAP.world)
+        clientHash = hashState(state)
+        net.record(state.tick, clientHash)
+        net.queue(state.tick, cmd)
       }
       net.flush()
     }
 
     renderer.render(
       {
-        origin: interpolateOrigin(previous, state, alphaOf(accumulatorMs)),
+        origin: interpolateOrigin(
+          { origin: originOf(previous) },
+          { origin: originOf(state) },
+          alphaOf(accumulatorMs),
+        ),
         // The view angle is the freshest thing the frame has; interpolating it
         // would add latency to aim. `render/view.ts`.
         yawUnits: cmd.yaw,
@@ -317,7 +361,7 @@ async function boot(): Promise<void> {
       frameBudgetMs: FRAME_BUDGET_MS,
       p99Ms,
       fps,
-      tick,
+      tick: state.tick,
       ticksPerSecond: TICK_RATE,
       clientHash,
       locked: input.locked,

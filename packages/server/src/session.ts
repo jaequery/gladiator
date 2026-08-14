@@ -12,15 +12,18 @@
  */
 import {
   PROTOCOL_VERSION,
-  SPAWN_STATE,
+  SKELETON_SEED,
   type ClientMessage,
-  type PlayerState,
+  type GameState,
   type ServerMessage,
+  createMapState,
   decodeCmd,
-  hashPlayerState,
+  hashState,
   parseClientMessage,
-  pmove,
+  tick as simTick,
 } from '@gladiator/sim'
+
+import { SERVER_MAP } from './map.ts'
 
 /**
  * What the server tells a client about itself at the handshake.
@@ -38,8 +41,16 @@ export type ServerIdentity = {
 
 export type SessionState = {
   readonly id: string
-  readonly state: PlayerState
-  /** The last tick this session has simulated. */
+  /**
+   * This session's world.
+   *
+   * `readonly` on the *reference* only: `tick()` advances a `GameState` in
+   * place (see `AGENTS.md`), so the object a step returns is the same object it
+   * was given, with new numbers in it. A caller that needs the state as it was
+   * before calls `cloneGameState` itself.
+   */
+  readonly state: GameState
+  /** The last tick this session has simulated. Always `state.tick`. */
   readonly tick: number
   readonly greeted: boolean
   /** Set once the client has proven it is not the deploy we are: wrong
@@ -72,7 +83,7 @@ export const CLOSE_MAP_MISMATCH = 4004
 export function createSession(id: string): SessionState {
   return {
     id,
-    state: SPAWN_STATE,
+    state: createMapState(SERVER_MAP.source, SKELETON_SEED),
     tick: 0,
     greeted: false,
     rejected: false,
@@ -161,22 +172,22 @@ export function applyMessage(
   // exists to expose.
   const gapped = message.startTick !== session.tick + 1
 
-  let state = session.state
-  let tick = session.tick
+  // One command per sub-step, into slot 0 — the only slot a session has. Two
+  // players sharing one world is GLAD-FHKBN8.
+  const state = session.state
   for (const wire of message.cmds) {
-    state = pmove(state, decodeCmd(wire))
-    tick += 1
+    simTick(state, [decodeCmd(wire)], SERVER_MAP.world)
   }
 
   return {
     session: {
       ...session,
       state,
-      tick,
+      tick: state.tick,
       gaps: session.gaps + (gapped ? 1 : 0),
       commands: session.commands + message.cmds.length,
     },
-    replies: [{ t: 'hash', tick, hash: hashPlayerState(tick, state) }],
+    replies: [{ t: 'hash', tick: state.tick, hash: hashState(state) }],
   }
 }
 

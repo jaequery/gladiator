@@ -22,11 +22,11 @@
  * would report a desync they do not have.
  *
  * This file is the digest itself. The hash over the *full* sim state is
- * `hashState` in `state.ts`, which folds `hashBytes` over a canonical encoding;
- * `hashPlayerState` below is the walking skeleton's one-player version, and
- * goes when the skeleton's `pmove` stub does (GLAD-0B1GDS).
+ * `hashState` in `state.ts`, which folds `hashBytes` over a canonical encoding.
+ * There is deliberately no second, smaller digest over "just the player" — the
+ * walking skeleton had one, and two definitions of "the state" is exactly the
+ * drift a desync hides in.
  */
-import type { PlayerState } from './pmove.ts'
 
 /** FNV-1a 32-bit offset basis. */
 export const FNV_OFFSET_BASIS = 0x811c9dc5
@@ -103,14 +103,6 @@ export function hashString(text: string, digest: number = FNV_OFFSET_BASIS): num
     next = hashByte(next, unit >>> 8)
   }
   return next
-}
-
-/** The digest of one player's state at `tick`. */
-export function hashPlayerState(tick: number, state: PlayerState): number {
-  let digest = hashUint32(hashInit(), tick)
-  for (const value of state.origin) digest = hashFloat64(digest, value)
-  for (const value of state.velocity) digest = hashFloat64(digest, value)
-  return hashUint32(digest, state.onGround ? 1 : 0)
 }
 
 /** A digest as eight lowercase hex digits — the form that goes on screen. */

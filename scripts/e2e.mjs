@@ -537,10 +537,14 @@ try {
     final.net.dropped === 0,
     `dropped ${final.net.dropped}`,
   )
+  // Displacement from where this session actually began, not from the world
+  // origin: the player spawns where the map says, so distance from (0, 0) would
+  // be true before a key was pressed.
+  const travelled = Math.hypot(final.origin[0] - before.origin[0], final.origin[1] - before.origin[1])
   check(
-    'the box ended up somewhere other than where it started',
-    Math.abs(final.origin[0]) + Math.abs(final.origin[1]) > 50,
-    `origin ${final.origin.map((v) => v.toFixed(1)).join(', ')}`,
+    'the player ended up somewhere other than where they started',
+    travelled > 50,
+    `moved ${travelled.toFixed(1)} qu from ${before.origin.map((v) => v.toFixed(1)).join(', ')}`,
   )
   check(
     'the page logged no console errors',
