@@ -17,6 +17,7 @@ messages. Most of them are still to be written:
 | 2.x | Tracing: swept AABB, `SlideMove`, step-up     | **below**    |
 | 3.x | Weapons: rockets, splash, railgun             | GLAD-0QWRYK  |
 | 4.x | The map format, its baker and its validator   | **below**    |
+| 5.x | Reachability: the climbs a level is built around | **below**  |
 
 ---
 
@@ -811,3 +812,138 @@ Vercel deploy work with no bake step in front of them. `tools/bake-map.test.ts`
 re-bakes every map in memory and fails if what is committed is stale, so the
 tree cannot hold a map nobody can reproduce. `pnpm map:bake --check` is the same
 question from the command line.
+
+---
+
+## §5 Reachability
+
+Four numbers, and the machine check that holds a level to them.
+
+A duel arena is designed *around* the movement or it is decoration with a
+player in it. This section states how high the movement climbs, where each
+number comes from, and how `pnpm map:bake` refuses a map with a ledge outside
+them.
+
+Code: `packages/sim/src/map/reachability.ts` (the metrics and the analysis),
+`packages/sim/src/map/validate.ts` (the rule), `maps/arena1.ts` (the arena built
+to it, GLAD-B8DI4J).
+
+### §5.1 A climb is measured from the feet, in whole units
+
+The quantity a level designer needs is: **how far above the surface I am
+standing on can the next surface be, and still be one I can get on to.**
+
+- Measured at the **feet**, because the origin is the feet (§0.2) and a ledge's
+  height in a map file is the `z` of its top face. Nothing here is measured at
+  the eye or at the middle of the box.
+- Rounded **down** to a whole unit. A map is authored in whole units (§4.1), and
+  a ledge at the apex to three decimal places is a ledge nobody lands on twice.
+- Stated as the **apex**: how high the feet get. Step-up is not counted, and
+  §5.5 says why that slack is deliberately left on the table.
+
+### §5.2 Everything closed-form uses the *felt* gravity, 750
+
+`GRAVITY` is 800 and no player has ever experienced 800. `GRAVITY * TICK_DT` is
+6.4 qu/s of downward velocity per sub-step; `snapVelocity` rounds the result to
+a whole number every tick, and a whole number minus 6.4 always rounds up, so the
+velocity actually lost is **6**, every tick, in both directions (§1.6).
+
+```
+FELT_GRAVITY = round(GRAVITY * TICK_DT) / TICK_DT = 6 / 0.008 = 750
+```
+
+It is `pmove/index.ts`'s `FELT_GRAVITY`, derived rather than typed, so a change
+to the timestep or to the snapping carries it. Every closed form below is
+written in terms of it:
+
+| Quantity | Closed form | Why it is that one |
+| -------- | ----------- | ------------------ |
+| apex of a launch `v` | `v² / (2g)` | how high the feet get |
+| horizontal reach at climb `h` | `RUN_SPEED * (v + √(v² − 2gh)) / g` | the *later* root: the last moment the ledge is still below you is the last moment you can land on it |
+
+The horizontal reach is worth one line of sanity check: at `h = 0` it is the
+whole flight, and at the apex it is exactly half of it. Both fall out of the
+formula, and `reachability.test.ts` asserts them.
+
+### §5.3 The rocket jump launches at 500 qu/s
+
+Quake 3's arithmetic, transcribed. `G_Damage` pushes the victim by
+`g_knockback * knockback / mass` — `1000 * knockback / 200` — and a rocket that
+lands under your own feet does its full 100 points of splash, so the push is
+`100 * 5 = 500` qu/s straight up.
+
+A jump *assigns* `velocity[2] = 270` (§1.5), it does not add, so a jump and a
+rocket on the same tick compose to `270 + 500 = 770` rather than to 500.
+
+**GLAD-0QWRYK owns the rocket.** `ROCKET_JUMP_LAUNCH` lives in
+`map/reachability.ts` because that is what needs it first; when the weapon lands
+it imports this number rather than restating it, and the day it wants a
+different one is the day every ledge height in `maps/` is re-checked.
+
+### §5.4 The four climbs
+
+| Climb | Technique | Launch | Where the number comes from |
+| ----- | --------- | ------ | --------------------------- |
+| **18** | a step | — | `STEP_SIZE`. `StepSlideMove` lifts a blocked move by this and retries (§2.5) |
+| **48** | a jump | 270 | `⌊270² / 1500⌋` = ⌊48.6⌋ |
+| **166** | a standing rocket jump | 500 | `⌊500² / 1500⌋` = ⌊166.67⌋ |
+| **395** | a jump-plus-rocket | 770 | `⌊770² / 1500⌋` = ⌊395.27⌋ |
+
+`reachability.test.ts` measures every one of them against the real `pmove`
+rather than against this table: it launches a body, records the highest its feet
+get, and asserts the floor of the measurement is the number above. It then puts
+a ledge of exactly that height in a world and drives a running player at it.
+
+> The rocket-jump number is **166**, not the 167 you get by rounding 166.67 to
+> nearest. The apex the simulation actually reaches is 166.657, so a ledge at
+> 167 is one unit too tall. Rounding a reachability bound up is how a map ships
+> with a ledge that is reachable in the spreadsheet and not in the game.
+
+Two notes on the last row. It assumes the splash lands on the **same tick** as
+the jump, which is the best case; every tick of delay between the two costs
+about four units of apex. And nothing in play goes higher — a jump-plus-rocket
+peaks a little over 1000 qu/s of total speed, which is why `MAX_MOVE_SPEED`
+(§2.6) sits at three times that and has never fired.
+
+### §5.5 What the bake checks
+
+`analyzeReachability` samples every place in a map a player can stand, joins the
+ones a player can walk between, floods out from the spawns, and labels
+everything left over with the cheapest of the four techniques that gets on to
+it. A surface no technique reaches is `unreachable-ledge` and the bake refuses
+it (§4.4).
+
+**Standing** is asked with the real player box and the real trace — the box has
+to be clear, and the box has to be *dropped* on to the surface rather than
+placed on it. Those are not the same on a slope: an axis-aligned box rests on
+its uphill edge, so its origin sits half a box-width's worth of rise above the
+plane under it, 7.5 units on a 1:2 ramp and 15 on a 1:1. Placing the sample on
+the analytic surface instead puts it inside the geometry and makes every ramp in
+every map read as unwalkable.
+
+**Samples are 16 units apart**, which is not a resolution knob: a 1:1 ramp — the
+steepest thing the format has — climbs exactly 16 across that, which is under
+`STEP_SIZE`, so a ramp is a run of ordinary walk edges rather than a special
+case. Adjacency reaches **two** columns, because the player is 30 units wide:
+the sample one column short of a riser is one where the box is already inside
+it, so the last standable sample below a step and the first one above it are 32
+apart.
+
+**Dropping does not count as reaching.** The flood uses walk edges and climbs,
+never falls. That is stricter than the movement, on purpose: with no items and
+no teleporters, a ledge you can only fall on to is a ledge you can only leave,
+and a player who takes it is stuck there until somebody kills them.
+
+What it proves is that the *geometry* is inside the movement's envelope. It does
+not trace the arc, so a pillar in the middle of a jump is not modelled, and it
+assumes `RUN_SPEED` horizontally, which is the slowest a moving player goes.
+Both make it optimistic about a jump that is possible and awkward; neither lets
+an unreachable ledge through.
+
+The slack that makes designing to the bare apex safe is **step-up on the way
+down**. `StepSlideMove` refuses to step while rising — deliberately, or a jump
+would grab a free 18 units at the apex — but it steps happily while falling, so
+a player arriving at a ledge face on the way down mantles up to `STEP_SIZE`
+above their apex. That is measured, not assumed: the test asserts each technique
+gets on to a ledge of exactly its height and fails on one
+`STEP_SIZE + 8` above it.
