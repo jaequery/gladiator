@@ -1,0 +1,58 @@
+{
+  "format": 1,
+  "hash": "a484bc85",
+  "map": {
+    "name": "arena1",
+    "title": "Crucible",
+    "author": "Gladiator",
+    "surfaces": [
+      { "name": "floor", "material": "concrete", "tint": [0.3, 0.31, 0.33] },
+      { "name": "wall", "material": "concrete", "tint": [0.22, 0.23, 0.26] },
+      { "name": "metal", "material": "metal", "tint": [0.44, 0.41, 0.37] },
+      { "name": "accent", "material": "metal", "tint": [0.5, 0.28, 0.22] }
+    ],
+    "brushes": [
+      { "kind": "box", "surface": "floor", "mins": [-576, -576, -64], "maxs": [576, 576, 0] },
+      { "kind": "box", "surface": "wall", "mins": [-576, -576, 512], "maxs": [576, 576, 576] },
+      { "kind": "box", "surface": "wall", "mins": [512, -576, -64], "maxs": [576, 576, 576] },
+      { "kind": "box", "surface": "wall", "mins": [-576, -576, -64], "maxs": [-512, 576, 576] },
+      { "kind": "box", "surface": "wall", "mins": [-576, 512, -64], "maxs": [576, 576, 576] },
+      { "kind": "box", "surface": "wall", "mins": [-576, -576, -64], "maxs": [576, -512, 576] },
+      { "kind": "box", "surface": "floor", "mins": [-192, -192, 0], "maxs": [192, 192, 48] },
+      { "kind": "box", "surface": "wall", "mins": [-96, -96, 48], "maxs": [96, 96, 320] },
+      { "kind": "box", "surface": "metal", "mins": [-336, -64, 0], "maxs": [-288, 64, 16] },
+      { "kind": "box", "surface": "metal", "mins": [-288, -64, 0], "maxs": [-240, 64, 32] },
+      { "kind": "box", "surface": "metal", "mins": [-240, -64, 0], "maxs": [-192, 64, 48] },
+      { "kind": "box", "surface": "metal", "mins": [288, -64, 0], "maxs": [336, 64, 16] },
+      { "kind": "box", "surface": "metal", "mins": [240, -64, 0], "maxs": [288, 64, 32] },
+      { "kind": "box", "surface": "metal", "mins": [192, -64, 0], "maxs": [240, 64, 48] },
+      {
+        "kind": "ramp",
+        "surface": "metal",
+        "mins": [-64, -288, -32],
+        "maxs": [64, -192, 48],
+        "rise": "+y",
+        "slope": "1:2"
+      },
+      {
+        "kind": "ramp",
+        "surface": "metal",
+        "mins": [-64, 192, -32],
+        "maxs": [64, 288, 48],
+        "rise": "-y",
+        "slope": "1:2"
+      },
+      { "kind": "box", "surface": "floor", "mins": [288, -512, 0], "maxs": [512, -288, 128] },
+      { "kind": "box", "surface": "floor", "mins": [-512, 288, 0], "maxs": [-288, 512, 128] },
+      { "kind": "box", "surface": "accent", "mins": [192, -448, 0], "maxs": [288, -352, 40] },
+      { "kind": "box", "surface": "accent", "mins": [-288, 352, 0], "maxs": [-192, 448, 40] }
+    ],
+    "spawns": [{ "origin": [-352, -352, 0], "yaw": 8192 }, { "origin": [352, 352, 0], "yaw": 40960 }],
+    "lights": [
+      { "origin": [0, 0, 480], "color": [1, 0.96, 0.88], "intensity": 1, "radius": 1400 },
+      { "origin": [352, -352, 320], "color": [0.9, 0.85, 1], "intensity": 0.8, "radius": 900 },
+      { "origin": [-352, 352, 320], "color": [0.9, 0.85, 1], "intensity": 0.8, "radius": 900 }
+    ],
+    "props": []
+  }
+}

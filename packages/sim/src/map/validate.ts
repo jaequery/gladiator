@@ -24,6 +24,7 @@ import { PLAYER_HALF_WIDTH, PLAYER_MAXS, PLAYER_MINS } from '../bbox.ts'
 import { boxPenetration } from '../collide.ts'
 import { createTrace, traceBox } from '../trace.ts'
 import { createMapWorld, rampLowHeight } from './collide.ts'
+import { MAX_CLIMB, TECHNIQUES, analyzeReachability } from './reachability.ts'
 import { MIN_SPAWN_HEADROOM, MIN_SPAWN_SEPARATION, RAMP_SLOPES } from './schema.ts'
 import type { MapSource } from './schema.ts'
 
@@ -320,14 +321,49 @@ function geometricDiagnostics(map: MapSource): MapDiagnostic[] {
 }
 
 /**
+ * Is there a way on to every ledge. `docs/physics-spec.md` §5, and
+ * `reachability.ts` for the analysis this reads the answer out of.
+ *
+ * The rule is one sentence: every surface a player can stand on has to be one
+ * they can get to from a spawn, by walking and by the four techniques the
+ * movement actually has. A ledge that fails it is a room nobody visits, or —
+ * worse, because it looks fine in the editor — a ledge a player can drop on to
+ * and then cannot leave.
+ */
+function reachabilityDiagnostics(map: MapSource): MapDiagnostic[] {
+  const analysis = analyzeReachability(map)
+  const found: MapDiagnostic[] = []
+
+  for (const ledge of analysis.unreachable) {
+    // Rounded: a sample stands an epsilon clear of the surface it is on, and
+    // "420.125" in an error message reads as precision the author does not have.
+    const at = `(${Math.round(ledge.origin[0])}, ${Math.round(ledge.origin[1])}, ${Math.round(ledge.origin[2])})`
+    const ways = TECHNIQUES.map((t) => `${t.height} (${t.label})`).join(', ')
+    found.push({
+      code: 'unreachable-ledge',
+      where: 'brushes',
+      detail: `a player can stand at ${at} and cannot get there. The climbs the movement makes are ${ways} — every ledge has to be within one of them of something below it, and dropping on to a ledge does not count as reaching it because a player who does cannot get back off. Nothing in this map climbs more than ${MAX_CLIMB} units.`,
+    })
+  }
+
+  return found
+}
+
+/**
  * Everything wrong with a map. Empty means it bakes.
  *
  * @see structuralDiagnostics for why the two passes are not interleaved.
+ *
+ * Three passes now, and the third is the expensive one: reachability samples
+ * the whole map and traces against it, which is worth a fraction of a second at
+ * bake time and nothing at all at run time — `loadMap` never calls this.
  */
 export function validateMap(map: MapSource): MapDiagnostic[] {
   const structural = structuralDiagnostics(map)
   if (structural.length > 0) return structural
-  return geometricDiagnostics(map)
+  const geometric = geometricDiagnostics(map)
+  if (geometric.length > 0) return geometric
+  return reachabilityDiagnostics(map)
 }
 
 /** Diagnostics as the lines a baker prints. One per line, no trailing newline. */

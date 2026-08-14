@@ -86,6 +86,20 @@ export { snapVelocity } from './snap.ts'
  */
 export const GRAVITY = 800
 
+/**
+ * The gravity a player *feels*, in qu/s². 750.
+ *
+ * Not a second gravity constant — a derived one, and the derivation is the
+ * point. `GRAVITY * TICK_DT` is 6.4 qu/s of downward velocity per sub-step, and
+ * `snapVelocity` rounds the result to a whole number every tick, which always
+ * costs exactly 6. So the acceleration that actually accumulates is 750, and
+ * every closed-form statement about the movement — the jump apex, the air time,
+ * how far you travel while rising — has to be written in terms of this rather
+ * than of {@link GRAVITY}. `snap.ts` has the full derivation; the ledge heights
+ * an arena is designed around come out of it (`map/reachability.ts`).
+ */
+export const FELT_GRAVITY = Math.round(GRAVITY * TICK_DT) / TICK_DT
+
 /** Ground speed, in qu/s. Quake 3's `g_speed`, and `PM_CmdScale`'s `ps->speed`. */
 export const RUN_SPEED = 320
 

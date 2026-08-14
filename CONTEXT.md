@@ -23,7 +23,8 @@ lose a round by dying. Gladiator reproduces its format, not its assets.
 
 **Match** — a sequence of rounds, first to *N*. Rules in GLAD-L4SYN9.
 
-**Arena** — the map a match is played on. Gladiator ships one (GLAD-B8DI4J).
+**Arena** — the map a match is played on. Gladiator ships one: `arena1`,
+"Crucible" (GLAD-B8DI4J).
 
 **Self-damage** — taking splash from your own rocket. Gladiator supports three
 modes because the choice changes the skill ceiling, not just the numbers
@@ -203,6 +204,24 @@ both, by construction. §4.2.
 
 **Prop** — a glTF reference in a map's `props[]`: decoration that affects
 neither collision nor the derived render mesh, and that the sim never parses.
+
+**Ledge** — a patch of surface a player can stand on: the box fits, the ground
+under it is walkable, and there is arena above it rather than sky. What a map is
+checked ledge by ledge for is *reachability*.
+
+**Climb** — how far up it is from one standable surface to the next. The
+movement makes exactly four: **18** stepped, **48** jumped, **166**
+rocket-jumped, **395** with a jump and a rocket. Every ledge in a map has to be
+within one of them of something below it. `docs/physics-spec.md` §5.4.
+
+**Reachability** — the bake-time question "can a player get to every ledge in
+this map, from a spawn, without falling on to it". Answered by sampling the map
+with the real player box and flooding out from the spawns
+(`map/reachability.ts`); a map with an answer of no does not bake. §5.5.
+
+**Felt gravity** — 750 qu/s², what `GRAVITY` (800) becomes once velocity
+snapping has rounded 6.4 down to 6 every tick. The number every closed form
+about the movement is written in. §5.2.
 
 **Map hash** — eight hex digits over a baked map's content, recomputed at load
 and exchanged in the handshake. Two peers that disagree about it refuse to play
