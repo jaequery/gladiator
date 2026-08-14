@@ -44,9 +44,10 @@
  * here. Two names for one number is the drift this repo is built to prevent.
  */
 
+import { PLAYER_HALF_WIDTH } from './bbox.ts'
 import { angleVectors, vec3 } from './math.ts'
 import type { MutVec3 } from './math.ts'
-import { GRAVITY, JUMP_VELOCITY, PLANE_HALF_EXTENT, PLAYER_HALF_WIDTH, RUN_SPEED } from './pmove.ts'
+import { GRAVITY, JUMP_VELOCITY, PLANE_HALF_EXTENT, RUN_SPEED } from './pmove.ts'
 import { advanceRng } from './rng.ts'
 import { EntityFlag, EntityKind } from './state.ts'
 import type { GameState } from './state.ts'

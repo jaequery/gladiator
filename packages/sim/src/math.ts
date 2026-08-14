@@ -7,6 +7,7 @@
  * never leaves the Quake frame.
  */
 
+import type { Vec3 } from './axis.ts'
 import { cosRad, sinRad } from './trig.ts'
 import { angleUnitsToRadians } from './usercmd.ts'
 
@@ -19,7 +20,7 @@ export function vec3(x = 0, y = 0, z = 0): MutVec3 {
 }
 
 /** `out = v`. Returns `out`. */
-export function copyVec3(out: MutVec3, v: MutVec3): MutVec3 {
+export function copyVec3(out: MutVec3, v: Vec3): MutVec3 {
   out[0] = v[0]
   out[1] = v[1]
   out[2] = v[2]
@@ -35,13 +36,83 @@ export function setVec3(out: MutVec3, x: number, y: number, z: number): MutVec3 
 }
 
 /** `|v|`. `Math.hypot` is banned in the sim — it is implementation-approximated. */
-export function lengthVec3(v: MutVec3): number {
+export function lengthVec3(v: Vec3): number {
   return Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
 }
 
 /** `|v|` ignoring `z`. Horizontal speed is what the movement rules are about. */
-export function lengthVec2(v: MutVec3): number {
+export function lengthVec2(v: Vec3): number {
   return Math.sqrt(v[0] * v[0] + v[1] * v[1])
+}
+
+/** `a . b`. */
+export function dotVec3(a: Vec3, b: Vec3): number {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+/** `out = a - b`. Returns `out`. */
+export function subVec3(out: MutVec3, a: Vec3, b: Vec3): MutVec3 {
+  out[0] = a[0] - b[0]
+  out[1] = a[1] - b[1]
+  out[2] = a[2] - b[2]
+  return out
+}
+
+/** `out = v * s`. Returns `out`. */
+export function scaleVec3(out: MutVec3, v: Vec3, s: number): MutVec3 {
+  out[0] = v[0] * s
+  out[1] = v[1] * s
+  out[2] = v[2] * s
+  return out
+}
+
+/** Quake's `VectorMA`: `out = a + b * s`. Returns `out`. */
+export function addScaledVec3(out: MutVec3, a: Vec3, b: Vec3, s: number): MutVec3 {
+  out[0] = a[0] + b[0] * s
+  out[1] = a[1] + b[1] * s
+  out[2] = a[2] + b[2] * s
+  return out
+}
+
+/**
+ * `out = a x b`. Returns `out`.
+ *
+ * `SlideMove` needs this for exactly one thing: the crease between two clip
+ * planes is their cross product, and sliding along it is what stops a player
+ * wedged into a corner from jittering.
+ */
+export function crossVec3(out: MutVec3, a: Vec3, b: Vec3): MutVec3 {
+  // Written into locals first so `crossVec3(v, v, w)` is not a silent bug.
+  const x = a[1] * b[2] - a[2] * b[1]
+  const y = a[2] * b[0] - a[0] * b[2]
+  const z = a[0] * b[1] - a[1] * b[0]
+  out[0] = x
+  out[1] = y
+  out[2] = z
+  return out
+}
+
+/**
+ * `out = v / |v|`, returning the original `|v|`.
+ *
+ * A zero-length vector comes back as the zero vector rather than as NaN, which
+ * is Quake's `VectorNormalize` and matters here: a NaN in a velocity poisons
+ * the state hash for the rest of the match, and a stationary player is a
+ * perfectly ordinary thing to normalise.
+ */
+export function normalizeVec3(out: MutVec3, v: Vec3): number {
+  const length = Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
+  if (length === 0) {
+    out[0] = 0
+    out[1] = 0
+    out[2] = 0
+    return 0
+  }
+  const inverse = 1 / length
+  out[0] = v[0] * inverse
+  out[1] = v[1] * inverse
+  out[2] = v[2] * inverse
+  return length
 }
 
 /**

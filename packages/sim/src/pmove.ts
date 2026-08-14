@@ -17,6 +17,7 @@
  * Constants are Quake 3's, in Quake units per second, so that GLAD-0B1GDS
  * inherits numbers rather than replacing invented ones.
  */
+import { PLAYER_HALF_WIDTH } from './bbox.ts'
 import { TICK_DT } from './tick.ts'
 import { cosRad, sinRad } from './trig.ts'
 import { angleUnitsToRadians, BUTTON_JUMP, type UserCmd } from './usercmd.ts'
@@ -33,12 +34,6 @@ export const JUMP_VELOCITY = 270
 
 /** Half-width of the square plane the skeleton runs on, in Quake units. */
 export const PLANE_HALF_EXTENT = 1024
-
-/** Half-width of the player box. The real bounding box is GLAD-3SCN0U. */
-export const PLAYER_HALF_WIDTH = 16
-
-/** Height of the player box, in Quake units. Quake 3's standing height. */
-export const PLAYER_HEIGHT = 56
 
 /** How far the player's centre may get from the middle of the plane. */
 const MOVE_LIMIT = PLANE_HALF_EXTENT - PLAYER_HALF_WIDTH
