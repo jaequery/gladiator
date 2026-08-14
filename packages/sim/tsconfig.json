@@ -1,0 +1,18 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    /* ES2023 and nothing else. No `DOM`, so `window` and `document` are
+     * "Cannot find name" errors in the editor, not review comments. */
+    "lib": ["ES2023"],
+
+    /* No ambient `@types/*` at all. `process`, `Buffer`, `setTimeout` and
+     * every other Node global are undefined here — including the ones a
+     * dependency's `.d.ts` would otherwise drag in. */
+    "types": [],
+
+    /* A file under `src` cannot import one that isn't: reaching sideways
+     * into another package by relative path is TS6059, not a lint nit. */
+    "rootDir": "./src"
+  },
+  "include": ["src/**/*.ts"]
+}

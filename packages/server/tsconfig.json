@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    /* No `DOM`: the server shares the simulation with the browser, and the
+     * fastest way to break that is to let a `window` reference compile here. */
+    "lib": ["ES2023"],
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"]
+}

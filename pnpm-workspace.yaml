@@ -1,0 +1,28 @@
+packages:
+  - packages/*
+
+# ---------------------------------------------------------------------------
+# These two are load-bearing, not tidiness.
+#
+# pnpm's default `hoistPattern` links every transitive dependency into
+# `node_modules/.pnpm/node_modules`, which sits on the Node resolution path for
+# every package in the workspace. With that in place, `packages/sim` could
+# `import '@babylonjs/core'` and it would *resolve* — because Babylon is a
+# dependency of `packages/client` and got hoisted into the shared bucket.
+#
+# Emptying both patterns means a package can only resolve what it declares.
+# `packages/sim` declares nothing, so it can import nothing. That is the whole
+# boundary, and it is the only layer of it that cannot be argued with.
+# ---------------------------------------------------------------------------
+hoistPattern: []
+publicHoistPattern: []
+
+# Workspace packages are consumed as source through `workspace:*`, never from
+# the registry.
+linkWorkspacePackages: true
+
+# pnpm 10 refuses to run dependency install scripts unless they are named here.
+# esbuild's postinstall is what puts its native binary on disk, so the server
+# build needs it; nothing else in the tree runs one.
+onlyBuiltDependencies:
+  - esbuild

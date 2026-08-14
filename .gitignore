@@ -1,0 +1,14 @@
+node_modules/
+dist/
+coverage/
+.vite/
+*.tsbuildinfo
+*.log
+.DS_Store
+.env
+.env.local
+
+# Written and deleted again by `pnpm run guardrails`. Ignored so that a probe
+# surviving a crashed run can never be committed. ESLint and tsc still see it —
+# neither reads .gitignore — which is the whole point of the file.
+**/__guardrail_probe__.ts
