@@ -10,43 +10,47 @@
  * lines of identical commands is not a thing a human can review, and a fixture
  * nobody can read is a fixture nobody will notice going wrong.
  *
+ * Angles are authored in **degrees** and converted to the angle units a
+ * `UserCmd` carries at expansion time. Degrees because a keyframe is read by a
+ * person; units because that is what crosses the network.
+ *
  * Allocation here is unapologetic — `commandSourceFor` builds a fresh array
  * every tick. Replays run in tests and in tooling, never in a match.
  */
 
-import { TICK_HZ, TICK_MS } from './constants.ts'
-import { hashHex } from './hash.ts'
+import { formatHash } from './hash.ts'
 import { advanceHost, advanceTicks, createKernel } from './kernel.ts'
 import type { CommandSource, TickInputs } from './kernel.ts'
 import { vec3 } from './math.ts'
-import { IDLE_CMD, Weapon } from './proto/usercmd.ts'
-import type { UserCmd } from './proto/usercmd.ts'
 import { EntityFlag, EntityKind, createGameState, hashState, spawnEntity } from './state.ts'
 import type { GameState } from './state.ts'
+import { TICK_INTERVAL_MS, TICK_RATE } from './tick.ts'
+import { pitchUnitsFromDegrees, yawUnitsFromDegrees } from './usercmd.ts'
+import type { UserCmd } from './usercmd.ts'
 
 /**
  * "From this tick onward, this slot is holding this."
  *
  * A frame applies until the next frame for the same slot. A slot with no frame
- * at or before a tick sends nothing, and the kernel treats that as `IDLE_CMD`.
+ * at or before a tick sends nothing, and the kernel treats that as `NULL_CMD`.
  */
 export type ScriptFrame = {
   readonly tick: number
   readonly slot: number
+  /** -1 back, 0, +1 forward. */
   readonly forwardMove: number
-  readonly rightMove: number
-  readonly upMove: number
-  readonly pitch: number
-  readonly yaw: number
+  /** -1 left, 0, +1 right. */
+  readonly sideMove: number
+  readonly yawDeg: number
+  readonly pitchDeg: number
   readonly buttons: number
-  readonly weapon: number
 }
 
 /** A player present in the world at tick 0. Not a spawn *policy* — GLAD-AKODBZ. */
 export type ReplaySpawn = {
   readonly slot: number
   readonly origin: readonly [number, number, number]
-  readonly angles: readonly [number, number, number]
+  readonly yawDeg: number
   readonly health: number
 }
 
@@ -74,7 +78,7 @@ export type TraceSample = {
  * IEEE 754 (62.5 is 125/2), so the schedule is the same everywhere.
  */
 export function sampleTicks(durationTicks: number): number[] {
-  const perSample = TICK_HZ / 2
+  const perSample = TICK_RATE / 2
   const ticks: number[] = []
   for (let k = 0; ; k++) {
     const at = Math.round(k * perSample)
@@ -95,7 +99,7 @@ export function createReplayState(replay: Replay): GameState {
       // the player can act on rather than one spent falling onto the floor.
       flags: EntityFlag.OnGround,
       origin: vec3(spawn.origin[0], spawn.origin[1], spawn.origin[2]),
-      angles: vec3(spawn.angles[0], spawn.angles[1], spawn.angles[2]),
+      angles: vec3(0, yawUnitsFromDegrees(spawn.yawDeg), 0),
       health: spawn.health,
     })
   }
@@ -123,20 +127,13 @@ function latestFrame(
   return best
 }
 
-function cmdFrom(frame: ScriptFrame, atTick: number): UserCmd {
+function cmdFrom(frame: ScriptFrame): UserCmd {
   return {
-    seq: atTick,
-    tick: atTick,
     forwardMove: frame.forwardMove,
-    rightMove: frame.rightMove,
-    upMove: frame.upMove,
-    pitch: frame.pitch,
-    yaw: frame.yaw,
-    // Humans do not roll their heads. The renderer's view roll never reaches
-    // the simulation.
-    roll: IDLE_CMD.roll,
+    sideMove: frame.sideMove,
+    yaw: yawUnitsFromDegrees(frame.yawDeg),
+    pitch: pitchUnitsFromDegrees(frame.pitchDeg),
     buttons: frame.buttons,
-    weapon: frame.weapon === Weapon.None ? IDLE_CMD.weapon : frame.weapon,
   }
 }
 
@@ -147,7 +144,7 @@ export function commandSourceFor(replay: Replay): CommandSource {
     const inputs: (UserCmd | null)[] = []
     for (let slot = 0; slot < slotCount; slot++) {
       const frame = latestFrame(replay.script, slot, atTick)
-      inputs.push(frame === null ? null : cmdFrom(frame, atTick))
+      inputs.push(frame === null ? null : cmdFrom(frame))
     }
     return inputs
   }
@@ -157,7 +154,11 @@ function sampler(replay: Replay, into: TraceSample[]): (state: GameState) => voi
   const wanted = new Set(sampleTicks(replay.durationTicks))
   return (state: GameState) => {
     if (!wanted.has(state.tick)) return
-    into.push({ tick: state.tick, timeMs: state.tick * TICK_MS, hash: hashHex(hashState(state)) })
+    into.push({
+      tick: state.tick,
+      timeMs: state.tick * TICK_INTERVAL_MS,
+      hash: formatHash(hashState(state)),
+    })
   }
 }
 
@@ -205,7 +206,7 @@ export function runReplayHosted(
 
     // A schedule that never accumulates a whole sub-step would spin forever;
     // say so rather than hang a test runner.
-    if (dtMs <= 0 && kernel.remainderMs < TICK_MS) {
+    if (dtMs <= 0 && kernel.remainderMs < TICK_INTERVAL_MS) {
       throw new RangeError(`runReplayHosted: frame schedule never advances (dtMs=${dtMs})`)
     }
   }
@@ -258,8 +259,12 @@ export function firstDivergence(
     index,
     tick: missing?.tick ?? -1,
     timeMs: missing?.timeMs ?? -1,
-    expected: expected.length > shared ? `t=${expected[index]?.tick} ${expected[index]?.hash}` : '<end of trace>',
-    actual: actual.length > shared ? `t=${actual[index]?.tick} ${actual[index]?.hash}` : '<end of trace>',
+    expected:
+      expected.length > shared
+        ? `t=${expected[index]?.tick} ${expected[index]?.hash}`
+        : '<end of trace>',
+    actual:
+      actual.length > shared ? `t=${actual[index]?.tick} ${actual[index]?.hash}` : '<end of trace>',
   }
 }
 

@@ -55,7 +55,11 @@ export type EntityState = {
   origin: MutVec3
   /** Velocity in Quake units per second. */
   velocity: MutVec3
-  /** `[pitch, yaw, roll]` in degrees. */
+  /**
+   * `[pitch, yaw, roll]` in **angle units** — 1/65536 of a turn, the same
+   * representation `UserCmd` carries. Integers, so an angle survives the
+   * network and the state hash exactly rather than approximately.
+   */
   angles: MutVec3
   health: number
   /** The entity that is responsible for this one — a rocket's shooter. */

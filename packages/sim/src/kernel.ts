@@ -31,29 +31,34 @@
  *
  * ## What is *not* here yet
  *
- * Gameplay. The step below applies input, gravity and a flat floor, and that
- * is on purpose — this ticket is the engine, not the game. `pmove` proper
- * (GLAD-0B1GDS) replaces `applyCommands`; swept-AABB tracing (GLAD-3SCN0U)
- * replaces the floor plane in `integrate`; weapons (GLAD-0QWRYK) and round
- * rules (GLAD-L4SYN9) add phases. The phase order below is the contract those
- * tickets build against, and each of them will move the golden trace — which
- * is what the golden trace is for.
+ * Gameplay. The step below applies input, gravity and the walking skeleton's
+ * flat plane, and that is on purpose — this ticket is the engine, not the
+ * game. `pmove` proper (GLAD-0B1GDS) replaces `applyCommands` and folds the
+ * `pmove.ts` stub into it; swept-AABB tracing (GLAD-3SCN0U) replaces the plane
+ * clamp in `integrate`; weapons (GLAD-0QWRYK) and round rules (GLAD-L4SYN9)
+ * add phases. The phase order below is the contract those tickets build
+ * against, and each of them will move the golden trace — which is what the
+ * golden trace is for.
+ *
+ * The constants come from `tick.ts` and `pmove.ts` rather than being restated
+ * here. Two names for one number is the drift this repo is built to prevent.
  */
 
-import { DT, GRAVITY, JUMP_VELOCITY, MAX_HOST_FRAME_MS, TICK_MS } from './constants.ts'
-import { angleVectors, vec3, wrapAngle } from './math.ts'
+import { angleVectors, vec3 } from './math.ts'
 import type { MutVec3 } from './math.ts'
-import { Button, IDLE_CMD, MOVE_AXIS_MAX, isPressed } from './proto/usercmd.ts'
-import type { UserCmd } from './proto/usercmd.ts'
+import { GRAVITY, JUMP_VELOCITY, PLANE_HALF_EXTENT, PLAYER_HALF_WIDTH, RUN_SPEED } from './pmove.ts'
 import { advanceRng } from './rng.ts'
 import { EntityFlag, EntityKind } from './state.ts'
 import type { GameState } from './state.ts'
+import { MAX_HOST_FRAME_MS, TICK_DT, TICK_INTERVAL_MS } from './tick.ts'
+import { BUTTON_JUMP, NULL_CMD } from './usercmd.ts'
+import type { UserCmd } from './usercmd.ts'
 
 /**
  * The commands for one sub-step, indexed by player slot.
  *
  * A `null` or missing entry means that slot sent nothing and is treated as
- * `IDLE_CMD` — the world advances regardless, or two peers would end up having
+ * `NULL_CMD` — the world advances regardless, or two peers would end up having
  * simulated different numbers of ticks.
  */
 export type TickInputs = readonly (UserCmd | null | undefined)[]
@@ -78,7 +83,7 @@ export type Kernel = {
   /**
    * Wall-clock milliseconds accumulated but not yet worth a sub-step.
    *
-   * Always in `[0, TICK_MS)`. Exactly, not approximately: `TICK_MS` is 8, a
+   * Always in `[0, TICK_INTERVAL_MS)`. Exactly, not approximately: `TICK_INTERVAL_MS` is 8, a
    * power of two, so `r / 8`, `Math.floor(r / 8)` and `steps * 8` are all
    * exact in IEEE 754 and the subtraction below introduces no error at all.
    */
@@ -100,7 +105,7 @@ export function createKernel(state: GameState): Kernel {
  *
  * A scheduler should run its measured delta through this before calling
  * `advanceHost`. `advanceHost` deliberately does not do it itself: its whole
- * contract is "exactly `floor(accumulated / TICK_MS)` sub-steps", and a hidden
+ * contract is "exactly `floor(accumulated / TICK_INTERVAL_MS)` sub-steps", and a hidden
  * clamp would make that contract a lie in exactly the situation — a long
  * hitch — where someone is trying to work out why the two peers disagree.
  *
@@ -116,7 +121,7 @@ export function clampHostDelta(dtMs: number): number {
 /**
  * Advance the world by `dtMs` of host time.
  *
- * Runs exactly `floor((remainderMs + dtMs) / TICK_MS)` sub-steps and carries
+ * Runs exactly `floor((remainderMs + dtMs) / TICK_INTERVAL_MS)` sub-steps and carries
  * what is left over into the next call. Returns the number of sub-steps run.
  *
  * `onTick` is called after each sub-step, not once per host frame. The server
@@ -139,8 +144,8 @@ export function advanceHost(
   }
 
   const accumulated = kernel.remainderMs + dtMs
-  const steps = Math.floor(accumulated / TICK_MS)
-  kernel.remainderMs = accumulated - steps * TICK_MS
+  const steps = Math.floor(accumulated / TICK_INTERVAL_MS)
+  kernel.remainderMs = accumulated - steps * TICK_INTERVAL_MS
 
   for (let i = 0; i < steps; i++) {
     tick(kernel.state, commands(kernel.state.tick + 1))
@@ -190,24 +195,25 @@ function applyCommands(state: GameState, inputs: TickInputs): void {
     if (entity.kind !== EntityKind.Player) continue
     if (entity.slot < 0) continue
 
-    const cmd = inputs[entity.slot] ?? IDLE_CMD
+    const cmd = inputs[entity.slot] ?? NULL_CMD
 
-    entity.angles[0] = wrapAngle(cmd.pitch)
-    entity.angles[1] = wrapAngle(cmd.yaw)
-    entity.angles[2] = wrapAngle(cmd.roll)
+    // Angle units in, angle units stored. `sanitizeUserCmd` has already wrapped
+    // yaw and clamped pitch, so there is nothing to normalise here — which is
+    // the point of quantising angles at the door rather than in the sim.
+    entity.angles[0] = cmd.pitch
+    entity.angles[1] = cmd.yaw
+    entity.angles[2] = 0
 
     // Movement is horizontal, so the wish direction is taken from yaw alone —
     // looking at the floor must not slow you down. `pmove` does the same.
-    angleVectors(0, entity.angles[1], 0, scratchForward, scratchRight, null)
+    angleVectors(0, cmd.yaw, 0, scratchForward, scratchRight, null)
 
-    const forwardAxis = cmd.forwardMove / MOVE_AXIS_MAX
-    const rightAxis = cmd.rightMove / MOVE_AXIS_MAX
+    let wishX = scratchForward[0] * cmd.forwardMove + scratchRight[0] * cmd.sideMove
+    let wishY = scratchForward[1] * cmd.forwardMove + scratchRight[1] * cmd.sideMove
 
-    let wishX = scratchForward[0] * forwardAxis + scratchRight[0] * rightAxis
-    let wishY = scratchForward[1] * forwardAxis + scratchRight[1] * rightAxis
-
-    // Normalise so diagonals are not faster, but only past unit length: a
-    // half-pressed stick should still be half speed.
+    // Normalise past unit length so a diagonal is not faster than a straight
+    // line. Quake normalises unconditionally; this is the same for the -1/0/+1
+    // axes a `UserCmd` carries.
     const wishLength = Math.sqrt(wishX * wishX + wishY * wishY)
     if (wishLength > 1) {
       wishX /= wishLength
@@ -217,12 +223,13 @@ function applyCommands(state: GameState, inputs: TickInputs): void {
     const onGround = (entity.flags & EntityFlag.OnGround) !== 0
 
     if (onGround) {
-      // No acceleration curve, no friction, no air control. All of that is the
-      // point of GLAD-0B1GDS; none of it belongs in the kernel.
-      entity.velocity[0] = wishX * PLACEHOLDER_SPEED
-      entity.velocity[1] = wishY * PLACEHOLDER_SPEED
+      // No acceleration curve, no friction, no air control, no velocity
+      // snapping. All of that is the point of GLAD-0B1GDS; none of it belongs
+      // in the kernel.
+      entity.velocity[0] = wishX * RUN_SPEED
+      entity.velocity[1] = wishY * RUN_SPEED
 
-      if (isPressed(cmd, Button.Jump)) {
+      if ((cmd.buttons & BUTTON_JUMP) !== 0) {
         entity.velocity[2] = JUMP_VELOCITY
         entity.flags &= ~EntityFlag.OnGround
       }
@@ -231,25 +238,31 @@ function applyCommands(state: GameState, inputs: TickInputs): void {
 }
 
 /**
- * Gravity, Euler integration, and a floor.
+ * Gravity, Euler integration, and the walking skeleton's square plane.
  *
- * **Placeholder floor.** `FLOOR_Z` stands in for the world until swept-AABB
- * tracing lands (GLAD-3SCN0U), at which point the clamp below becomes a
- * `StepSlideMove` against real geometry.
+ * **Placeholder world.** The plane is the same one `pmove.ts` runs on, so the
+ * kernel and the skeleton do not disagree about where the ground is. Swept-AABB
+ * tracing (GLAD-3SCN0U) replaces both clamps below with a `StepSlideMove`
+ * against real geometry.
  */
 function integrate(state: GameState): void {
   for (const entity of state.entities) {
     if (entity.kind === EntityKind.None) continue
 
     if ((entity.flags & EntityFlag.OnGround) === 0) {
-      entity.velocity[2] -= GRAVITY * DT
+      entity.velocity[2] -= GRAVITY * TICK_DT
     }
 
-    entity.origin[0] += entity.velocity[0] * DT
-    entity.origin[1] += entity.velocity[1] * DT
-    entity.origin[2] += entity.velocity[2] * DT
+    entity.origin[0] += entity.velocity[0] * TICK_DT
+    entity.origin[1] += entity.velocity[1] * TICK_DT
+    entity.origin[2] += entity.velocity[2] * TICK_DT
 
-    if (entity.kind === EntityKind.Player && entity.origin[2] <= FLOOR_Z) {
+    if (entity.kind !== EntityKind.Player) continue
+
+    entity.origin[0] = clampToPlane(entity.origin[0])
+    entity.origin[1] = clampToPlane(entity.origin[1])
+
+    if (entity.origin[2] <= FLOOR_Z) {
       entity.origin[2] = FLOOR_Z
       if (entity.velocity[2] < 0) entity.velocity[2] = 0
       entity.flags |= EntityFlag.OnGround
@@ -257,6 +270,13 @@ function integrate(state: GameState): void {
       entity.flags &= ~EntityFlag.OnGround
     }
   }
+}
+
+/** Keep a player's centre inside the square plane. */
+function clampToPlane(value: number): number {
+  if (value > MOVE_LIMIT) return MOVE_LIMIT
+  if (value < -MOVE_LIMIT) return -MOVE_LIMIT
+  return value
 }
 
 /**
@@ -277,16 +297,15 @@ function expire(state: GameState): void {
 }
 
 /* --------------------------------------------------------------------------
- * Placeholder constants
+ * The placeholder world
  *
- * Kept here rather than in `constants.ts` so nothing mistakes them for the
- * authored physics numbers. They exist only to give the kernel something to
- * simulate before GLAD-0B1GDS and GLAD-3SCN0U land, and they will be deleted
- * with the functions above.
+ * Derived from `pmove.ts` rather than invented, so the kernel's stand-in world
+ * and the walking skeleton's are the same world. Both go when GLAD-3SCN0U
+ * lands a real trace.
  * ----------------------------------------------------------------------- */
 
-/** Flat ground speed, Quake units per second. */
-const PLACEHOLDER_SPEED = 320
+/** How far a player's centre may get from the middle of the plane. */
+const MOVE_LIMIT = PLANE_HALF_EXTENT - PLAYER_HALF_WIDTH
 
 /** The height of the stand-in floor plane, in Quake units. */
 const FLOOR_Z = 0

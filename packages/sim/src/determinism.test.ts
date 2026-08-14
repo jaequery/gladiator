@@ -26,16 +26,10 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { DT, GRAVITY, JUMP_VELOCITY, MAX_HOST_FRAME_MS, TICK_HZ, TICK_MS } from './constants.ts'
 import { GOLDEN_REPLAY, GOLDEN_TRACE } from './fixtures/golden-replay.ts'
-import { hashHex } from './hash.ts'
-import {
-  NO_INPUTS,
-  advanceHost,
-  clampHostDelta,
-  createKernel,
-  tick,
-} from './kernel.ts'
+import { formatHash } from './hash.ts'
+import { NO_INPUTS, advanceHost, clampHostDelta, createKernel, tick } from './kernel.ts'
+import { GRAVITY, JUMP_VELOCITY } from './pmove.ts'
 import {
   commandSourceFor,
   createReplayState,
@@ -58,6 +52,7 @@ import {
   removeEntity,
   spawnEntity,
 } from './state.ts'
+import { MAX_HOST_FRAME_MS, TICK_DT, TICK_INTERVAL_MS, TICK_RATE } from './tick.ts'
 
 const noCommands = () => NO_INPUTS
 
@@ -126,7 +121,7 @@ describe('host independence', () => {
   const reference = runReplay(GOLDEN_REPLAY)
 
   const schedules: readonly (readonly [string, number | ((frame: number) => number)])[] = [
-    ['one sub-step per frame (8 ms)', TICK_MS],
+    ['one sub-step per frame (8 ms)', TICK_INTERVAL_MS],
     ['60 Hz (16.666… ms)', 1000 / 60],
     ['30 Hz (33.333… ms)', 1000 / 30],
     ['144 Hz (6.944… ms — slower than the sim)', 1000 / 144],
@@ -228,21 +223,21 @@ describe('sub-step accounting', () => {
       const steps = advanceHost(kernel, dtMs, noCommands)
       supplied += dtMs
 
-      expect(steps).toBe(Math.floor(accumulated / TICK_MS))
+      expect(steps).toBe(Math.floor(accumulated / TICK_INTERVAL_MS))
       expect(kernel.remainderMs).toBeGreaterThanOrEqual(0)
-      expect(kernel.remainderMs).toBeLessThan(TICK_MS)
-      // `TICK_MS` is a power of two, so this accounting is exact, not close.
-      expect(steps * TICK_MS + kernel.remainderMs).toBe(accumulated)
+      expect(kernel.remainderMs).toBeLessThan(TICK_INTERVAL_MS)
+      // `TICK_INTERVAL_MS` is a power of two, so this accounting is exact, not close.
+      expect(steps * TICK_INTERVAL_MS + kernel.remainderMs).toBe(accumulated)
     }
 
     expect(kernel.state.tick).toBe(kernel.steps)
-    expect(kernel.steps * TICK_MS + kernel.remainderMs).toBeCloseTo(supplied, 3)
+    expect(kernel.steps * TICK_INTERVAL_MS + kernel.remainderMs).toBeCloseTo(supplied, 3)
   })
 
   it('simulates one second of wall clock as exactly 125 sub-steps', () => {
     const kernel = freshKernel()
     for (let frame = 0; frame < 60; frame++) advanceHost(kernel, 1000 / 60, noCommands)
-    expect(kernel.state.tick).toBe(TICK_HZ)
+    expect(kernel.state.tick).toBe(TICK_RATE)
     expect(kernel.remainderMs).toBeCloseTo(0, 9)
   })
 
@@ -347,8 +342,8 @@ describe('the state hash', () => {
   it('is stable across a clone and formats as fixed-width hex', () => {
     const state = runReplayState()
     expect(hashState(cloneGameState(state))).toBe(hashState(state))
-    expect(hashHex(hashState(state))).toMatch(/^[0-9a-f]{8}$/)
-    expect(hashHex(0)).toBe('00000000')
+    expect(formatHash(hashState(state))).toMatch(/^[0-9a-f]{8}$/)
+    expect(formatHash(0)).toBe('00000000')
   })
 
   function runReplayState() {
@@ -430,19 +425,19 @@ describe('the 8 ms sub-step, and what it buys', () => {
   // than quietly changing every jump in the game.
 
   it('is exactly 8 ms, exactly 125 Hz, and exact in floating point', () => {
-    expect(TICK_MS).toBe(8)
-    expect(TICK_HZ).toBe(125)
-    expect(DT).toBe(1 / 125)
-    expect(DT).toBe(8 / 1000)
+    expect(TICK_INTERVAL_MS).toBe(8)
+    expect(TICK_RATE).toBe(125)
+    expect(TICK_DT).toBe(1 / 125)
+    expect(TICK_DT).toBe(8 / 1000)
     // A power of two, which is what makes the host accumulator exact.
-    expect(Math.log2(TICK_MS) % 1).toBe(0)
+    expect(Math.log2(TICK_INTERVAL_MS) % 1).toBe(0)
   })
 
   it('turns gravity 800 into an effective 750 under integer velocity snapping', () => {
     // `pmove` snaps velocity to whole units every sub-step (GLAD-0B1GDS).
     // Gravity costs 6.4 units of velocity per sub-step; rounded to the nearest
     // integer that is 6, every time, in both directions.
-    const perStep = GRAVITY * DT
+    const perStep = GRAVITY * TICK_DT
     expect(perStep).toBeCloseTo(6.4, 12)
 
     let velocity = JUMP_VELOCITY
@@ -454,7 +449,7 @@ describe('the 8 ms sub-step, and what it buys', () => {
     }
 
     expect([...decrements]).toEqual([6])
-    expect(6 / DT).toBe(750)
+    expect(6 / TICK_DT).toBe(750)
   })
 
   it('puts the jump apex at 48.6 units', () => {

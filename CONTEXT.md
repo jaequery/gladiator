@@ -99,6 +99,11 @@ the state, advanced by the tick, identical on both peers. This is why
 **Quake units** — the distance unit the movement constants are expressed in.
 Kept rather than converted, because converting them is how the feel gets lost.
 
+**Angle units** — the *angle* unit: 1/65536 of a turn, Quake's 16-bit angles.
+Integers, so an angle is the same number on both peers by construction rather
+than by luck, and hashes exactly. Degrees appear only where a human authors or
+reads one.
+
 **Quake frame / engine frame** — the two coordinate systems and the one matrix
 between them. `docs/physics-spec.md` §0.3.
 

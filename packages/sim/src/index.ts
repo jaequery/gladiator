@@ -2,16 +2,6 @@ export { QUAKE_TO_ENGINE, applyMat3, determinant3, quakeToEngine } from './axis.
 export type { Mat3, Vec3 } from './axis.ts'
 
 export {
-  DT,
-  GRAVITY,
-  JUMP_VELOCITY,
-  MAX_HOST_FRAME_MS,
-  TICKS_PER_SECOND,
-  TICK_HZ,
-  TICK_MS,
-} from './constants.ts'
-
-export {
   createWriter,
   resetWriter,
   writeF64,
@@ -23,13 +13,16 @@ export {
 export type { ByteWriter } from './encoding.ts'
 
 export {
-  FNV_OFFSET_BASIS_32,
-  FNV_PRIME_32,
-  fnv1aByte,
-  fnv1aFinish,
+  FNV_OFFSET_BASIS,
+  FNV_PRIME,
+  formatHash,
+  hashByte,
   hashBytes,
-  hashHex,
+  hashFloat64,
+  hashInit,
+  hashPlayerState,
   hashString,
+  hashUint32,
 } from './hash.ts'
 
 export {
@@ -42,34 +35,41 @@ export {
 } from './kernel.ts'
 export type { CommandSource, Kernel, TickInputs, TickObserver } from './kernel.ts'
 
-export {
-  DEG_TO_RAD,
-  angleVectors,
-  copyVec3,
-  lengthVec2,
-  lengthVec3,
-  setVec3,
-  vec3,
-  wrapAngle,
-} from './math.ts'
+export { angleVectors, copyVec3, lengthVec2, lengthVec3, setVec3, vec3 } from './math.ts'
 export type { MutVec3 } from './math.ts'
 
-export { snapshotOf } from './proto/snapshot.ts'
-export type { Snapshot } from './proto/snapshot.ts'
-
-export { CloseReason, TransportState, messageSize } from './proto/transport.ts'
-export type { Transport, TransportHandlers, TransportMessage } from './proto/transport.ts'
+export {
+  GRAVITY,
+  JUMP_VELOCITY,
+  PLANE_HALF_EXTENT,
+  PLAYER_HALF_WIDTH,
+  PLAYER_HEIGHT,
+  RUN_SPEED,
+  SPAWN_STATE,
+  pmove,
+} from './pmove.ts'
+export type { PlayerState } from './pmove.ts'
 
 export {
-  Button,
-  IDLE_CMD,
-  MOVE_AXIS_MAX,
-  Weapon,
-  clampMoveAxis,
-  isPressed,
-  wasJustPressed,
-} from './proto/usercmd.ts'
-export type { UserCmd } from './proto/usercmd.ts'
+  MAX_CMDS_PER_BATCH,
+  PROTOCOL_VERSION,
+  decodeCmd,
+  describeVersionMismatch,
+  encodeCmd,
+  parseClientMessage,
+  parseServerMessage,
+} from './protocol.ts'
+export type {
+  ClientCmds,
+  ClientHello,
+  ClientMessage,
+  ServerFault,
+  ServerHash,
+  ServerMessage,
+  ServerVersionMismatch,
+  ServerWelcome,
+  WireCmd,
+} from './protocol.ts'
 
 export {
   commandSourceFor,
@@ -80,13 +80,7 @@ export {
   runReplayHosted,
   sampleTicks,
 } from './replay.ts'
-export type {
-  Replay,
-  ReplaySpawn,
-  ScriptFrame,
-  TraceDivergence,
-  TraceSample,
-} from './replay.ts'
+export type { Replay, ReplaySpawn, ScriptFrame, TraceDivergence, TraceSample } from './replay.ts'
 
 export {
   advanceRng,
@@ -101,6 +95,9 @@ export {
   seedRng,
 } from './rng.ts'
 export type { RngHolder, RngState } from './rng.ts'
+
+export { snapshotOf } from './snapshot.ts'
+export type { Snapshot } from './snapshot.ts'
 
 export {
   EntityFlag,
@@ -119,3 +116,24 @@ export {
   spawnEntity,
 } from './state.ts'
 export type { EntityInit, EntityState, GameState } from './state.ts'
+
+export { MAX_HOST_FRAME_MS, TICK_DT, TICK_INTERVAL_MS, TICK_RATE } from './tick.ts'
+
+export { CloseReason, TransportState, messageSize } from './transport.ts'
+export type { Transport, TransportHandlers, TransportMessage } from './transport.ts'
+
+export { cosRad, sinRad } from './trig.ts'
+
+export {
+  ANGLE_UNITS,
+  ANGLE_UNITS_PER_DEGREE,
+  BUTTON_JUMP,
+  MAX_PITCH_UNITS,
+  NULL_CMD,
+  RADIANS_PER_ANGLE_UNIT,
+  angleUnitsToRadians,
+  pitchUnitsFromDegrees,
+  sanitizeUserCmd,
+  yawUnitsFromDegrees,
+} from './usercmd.ts'
+export type { UserCmd } from './usercmd.ts'

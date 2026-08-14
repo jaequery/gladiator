@@ -1,19 +1,19 @@
 /**
- * The small amount of vector maths the kernel needs, plus the one place the
- * simulation is allowed to call a transcendental.
+ * The small amount of vector maths the kernel needs, and the one function that
+ * turns view angles into a basis.
  *
  * `axis.ts` holds the Quake -> engine change of basis and is about the
  * *renderer* boundary. This file is about the simulation's own arithmetic and
  * never leaves the Quake frame.
  */
 
+import { cosRad, sinRad } from './trig.ts'
+import { angleUnitsToRadians } from './usercmd.ts'
+
 /** A mutable 3-vector. The sim mutates in place; see `kernel.ts`. */
 export type MutVec3 = [number, number, number]
 
-/** Degrees to radians. Quake's `M_PI * 2 / 360`, which is the same double. */
-export const DEG_TO_RAD = Math.PI / 180
-
-/** A fresh zero vector. */
+/** A fresh vector. */
 export function vec3(x = 0, y = 0, z = 0): MutVec3 {
   return [x, y, z]
 }
@@ -45,21 +45,11 @@ export function lengthVec2(v: MutVec3): number {
 }
 
 /**
- * Wrap an angle into `[-180, 180)`.
+ * Quake's `AngleVectors`: view angles to a basis, in the Quake frame.
  *
- * Yaw accumulates without bound as a player spins; left alone it eventually
- * loses mantissa bits, and two peers that lost different bits are desynced.
- * Wrapping keeps every angle in a range where the spacing between
- * representable doubles is the same for both of them.
- */
-export function wrapAngle(degrees: number): number {
-  const wrapped = degrees - Math.floor((degrees + 180) / 360) * 360
-  // `-0` and `0` are the same angle; only one of them should reach the hash.
-  return wrapped === 0 ? 0 : wrapped
-}
-
-/**
- * Quake's `AngleVectors`: view angles (degrees) to a basis, in the Quake frame.
+ * Angles are in **angle units** — 1/65536 of a turn, the representation
+ * `UserCmd` carries (`usercmd.ts`). Integers, so an angle survives the network
+ * and the state hash exactly, rather than approximately.
  *
  * Pass `null` for any output you do not need. Outputs are written in place, so
  * a caller in the tick loop can hold three scratch vectors and allocate
@@ -70,39 +60,36 @@ export function wrapAngle(degrees: number): number {
  * - `yaw` is counter-clockwise from `+x`, because `+y` is left.
  * - `right` is `-y` at rest, for the same reason.
  *
- * ## The one transcendental seam
+ * ## One trig seam, and it is already deterministic
  *
- * `Math.sin` and `Math.cos` are "implementation-approximated" in ECMA-262:
- * V8 and JavaScriptCore are both free to be a fraction of an ULP off, and
- * differently. Every trig call in the simulation goes through this function so
- * that the exposure is one function wide rather than scattered.
+ * Every trig call in the simulation goes through this function, and this
+ * function goes through `trig.ts`, whose `sinRad`/`cosRad` are built from
+ * IEEE-exact operations only. `Math.sin` and `Math.cos` are
+ * "implementation-approximated" in ECMA-262 and are lint errors inside this
+ * package for exactly that reason.
  *
- * We are *not* pre-empting that with a lookup table. A 65536-entry Float32
- * table is 256 KB of payload to buy cross-engine bit-exactness, and this
- * project has deliberately demoted cross-engine bit-exactness to a
- * warning-level check — a browser-vs-server mismatch shows up as a
- * self-splash mispredict, and the canary for that lands with GLAD-5QGO11. If
- * the canary ever fires, the table goes in here, behind this signature, and
- * nothing else changes. That is the whole point of the seam.
+ * So there is no lookup table here and there does not need to be one: a table
+ * would be 256 KB of payload bought to purchase cross-engine bit-exactness
+ * that `trig.ts` already provides from arithmetic.
  */
 export function angleVectors(
-  pitchDeg: number,
-  yawDeg: number,
-  rollDeg: number,
+  pitchUnits: number,
+  yawUnits: number,
+  rollUnits: number,
   forward: MutVec3 | null,
   right: MutVec3 | null,
   up: MutVec3 | null,
 ): void {
-  const p = pitchDeg * DEG_TO_RAD
-  const y = yawDeg * DEG_TO_RAD
-  const r = rollDeg * DEG_TO_RAD
+  const p = angleUnitsToRadians(pitchUnits)
+  const y = angleUnitsToRadians(yawUnits)
+  const r = angleUnitsToRadians(rollUnits)
 
-  const sp = Math.sin(p)
-  const cp = Math.cos(p)
-  const sy = Math.sin(y)
-  const cy = Math.cos(y)
-  const sr = Math.sin(r)
-  const cr = Math.cos(r)
+  const sp = sinRad(p)
+  const cp = cosRad(p)
+  const sy = sinRad(y)
+  const cy = cosRad(y)
+  const sr = sinRad(r)
+  const cr = cosRad(r)
 
   if (forward !== null) {
     forward[0] = cp * cy

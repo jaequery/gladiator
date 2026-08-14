@@ -26,21 +26,22 @@ messages. Most of them are still to be written:
 | Quantity | Unit | Notes |
 | -------- | ---- | ----- |
 | Distance | Quake unit (qu) | ~ 0.75 inch, but the conversion is never applied. Kept because every constant below was measured in it. |
-| Time     | second | The simulation counts *ticks* and multiplies by `DT`; it has no clock. |
+| Time     | second | The simulation counts *ticks* and multiplies by `TICK_DT`; it has no clock. |
 | Velocity | qu/s | |
 | Acceleration | qu/s² | |
-| Angles   | degrees | `[pitch, yaw, roll]`, Quake frame. Pitch is positive **downward**. |
+| Angles   | angle units | 1/65536 of a turn. `[pitch, yaw, roll]`, Quake frame, pitch positive **downward**. Integers, so an angle survives the network and the state hash exactly. Degrees appear only where a human authors or reads one. |
 
 ### The timestep
 
 | Constant | Value | Source |
 | -------- | ----- | ------ |
-| `TICK_HZ` | 125 | `packages/sim/src/constants.ts` |
-| `TICK_MS` | 8 | |
-| `DT` | `1 / 125` = 0.008 s | |
-| `GRAVITY` | 800 qu/s² | |
-| `JUMP_VELOCITY` | 270 qu/s | |
+| `TICK_RATE` | 125 | `packages/sim/src/tick.ts` |
+| `TICK_INTERVAL_MS` | 8 | |
+| `TICK_DT` | 0.008 s = `1 / 125` | |
 | `MAX_HOST_FRAME_MS` | 250 | scheduler policy, not physics |
+| `GRAVITY` | 800 qu/s² | `packages/sim/src/pmove.ts` |
+| `JUMP_VELOCITY` | 270 qu/s | |
+| `RUN_SPEED` | 320 qu/s | |
 
 The simulation advances in sub-steps of **exactly 8.000 ms**. Not "about 8" and
 not "one host frame": the step length is a *feel* constant, and the next
@@ -49,7 +50,7 @@ section is why.
 ### Why 8 ms is not a performance knob
 
 Quake's `pmove` snaps velocity to whole units every step. Gravity costs
-`GRAVITY · DT` = **6.4 qu/s** of vertical velocity per sub-step, and the
+`GRAVITY · TICK_DT` = **6.4 qu/s** of vertical velocity per sub-step, and the
 snap rounds that to the nearest integer, which is **6** — every step, in both
 directions, because a whole number minus 6.4 always has a fractional part of
 0.6 and always rounds up.
@@ -92,9 +93,9 @@ arrive late and in bursts — so the sim would end up correcting for jitter that
 sub-stepping simply absorbs. Quake's own `Pmove()` sub-steps for the same
 reason.
 
-`TICK_MS` being **8, a power of two**, is what makes the accumulator exact
-rather than approximate: `r / 8`, `Math.floor(r / 8)` and `steps * 8` are all
-exact in IEEE 754, so the carried remainder is the true remainder and never
+`TICK_INTERVAL_MS` being **8, a power of two**, is what makes the accumulator
+exact rather than approximate: `r / 8`, `Math.floor(r / 8)` and `steps * 8` are
+all exact in IEEE 754, so the carried remainder is the true remainder and never
 drifts, however many frames go by.
 
 ### Time is ticks
@@ -103,8 +104,8 @@ drifts, however many frames go by.
 notion of time inside `packages/sim`. Wall-clock milliseconds are an input to
 the scheduler and never to the simulation — which is why `Date.now()` and
 `performance.now()` are lint errors in that package. A tick converts to
-milliseconds by multiplying by `TICK_MS`, and that conversion belongs to
-whatever is displaying or scheduling, not to the sim.
+milliseconds by multiplying by `TICK_INTERVAL_MS`, and that conversion belongs
+to whatever is displaying or scheduling, not to the sim.
 
 ---
 

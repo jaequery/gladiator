@@ -8,9 +8,9 @@
  * message does *not* have. See the reliability contract in `transport.ts`.
  */
 
-import { cloneEntity } from '../state.ts'
-import type { EntityState, GameState } from '../state.ts'
-import { hashState } from '../state.ts'
+import { cloneEntity } from './state.ts'
+import type { EntityState, GameState } from './state.ts'
+import { hashState } from './state.ts'
 
 export type Snapshot = {
   /** The sub-step this is the state at. */

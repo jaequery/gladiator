@@ -1,11 +1,11 @@
 /**
  * The golden replay: a committed input stream and the hash trace it produces.
  *
- * Ten seconds — 1250 sub-steps — of two players moving, turning, jumping and
- * holding buttons, sampled every half second. Between them the keyframes below
- * touch every field of a `UserCmd` the kernel reads, cross a yaw wrap in both
- * directions, spend time airborne and time at rest, and leave both players
- * somewhere other than where they started.
+ * Ten seconds — 1250 sub-steps — of two players moving, turning and jumping,
+ * sampled every half second. Between them the keyframes below touch every
+ * field of a `UserCmd` the kernel reads, cross a yaw wrap in both directions,
+ * spend time airborne and time at rest, and leave both players somewhere other
+ * than where they started.
  *
  * ## What a failure here means
  *
@@ -23,19 +23,17 @@
  * ready-to-paste literal when it fails. Paste it over `GOLDEN_TRACE`, and say
  * in the commit message *why* the physics moved.
  *
- * ## What this fixture does not prove
+ * ## Why these hashes are portable
  *
- * It was baked on V8. `angleVectors` calls `Math.sin`/`Math.cos`, which
- * ECMA-262 leaves implementation-approximated, so a hypothetical
- * JavaScriptCore CI could legitimately produce a different trace. That is a
- * known, accepted, warning-level risk — see the seam note in `math.ts`. The
- * assertions that matter for cross-peer determinism (same seed, same inputs,
- * different host frame patterns) compare two runs *in the same engine* and are
- * unaffected by it.
+ * Every operation behind them is one IEEE 754 specifies exactly. The trig goes
+ * through `trig.ts`, never `Math.sin` — which the specification only requires
+ * to be "implementation-approximated", and which is a lint error inside this
+ * package for that reason. So this trace is a claim about the simulation, not
+ * about the engine that happened to bake it.
  */
 
-import { Button, Weapon } from '../proto/usercmd.ts'
 import type { Replay, TraceSample } from '../replay.ts'
+import { BUTTON_JUMP } from '../usercmd.ts'
 
 export const GOLDEN_REPLAY: Replay = {
   name: 'two-players-10s',
@@ -44,43 +42,43 @@ export const GOLDEN_REPLAY: Replay = {
   durationTicks: 1250,
 
   spawns: [
-    { slot: 0, origin: [-320, 0, 0], angles: [0, 0, 0], health: 100 },
-    { slot: 1, origin: [320, 0, 0], angles: [0, 180, 0], health: 100 },
+    { slot: 0, origin: [-320, 0, 0], yawDeg: 0, health: 100 },
+    { slot: 1, origin: [320, 0, 0], yawDeg: 180, health: 100 },
   ],
 
   /**
    * Each frame holds until the next frame for the same slot. The single-tick
-   * gaps after a jump (t=40 then t=41) are deliberate: a jump that stays held
-   * would be a different test, and holding it is not how anyone plays.
+   * gaps after a jump (t=40, then t=41) are deliberate: a jump that stays held
+   * would be testing something else, and holding it is not how anyone plays.
    */
   script: [
     /* ---- slot 0 ---- */
-    { tick: 1, slot: 0, forwardMove: 127, rightMove: 0, upMove: 0, pitch: 0, yaw: 0, buttons: 0, weapon: Weapon.RocketLauncher },
-    { tick: 40, slot: 0, forwardMove: 127, rightMove: 127, upMove: 0, pitch: 0, yaw: 0, buttons: Button.Jump, weapon: Weapon.RocketLauncher },
-    { tick: 41, slot: 0, forwardMove: 127, rightMove: 127, upMove: 0, pitch: 0, yaw: 0, buttons: 0, weapon: Weapon.RocketLauncher },
-    { tick: 120, slot: 0, forwardMove: 127, rightMove: 127, upMove: 0, pitch: 0, yaw: 45, buttons: 0, weapon: Weapon.RocketLauncher },
-    { tick: 200, slot: 0, forwardMove: 0, rightMove: -127, upMove: 0, pitch: -12, yaw: 90, buttons: Button.Attack, weapon: Weapon.RocketLauncher },
-    { tick: 300, slot: 0, forwardMove: -127, rightMove: 0, upMove: 0, pitch: -20, yaw: 135, buttons: 0, weapon: Weapon.RocketLauncher },
-    { tick: 400, slot: 0, forwardMove: 127, rightMove: 0, upMove: 0, pitch: 0, yaw: 200, buttons: Button.Jump, weapon: Weapon.RocketLauncher },
-    { tick: 401, slot: 0, forwardMove: 127, rightMove: 0, upMove: 0, pitch: 0, yaw: 200, buttons: 0, weapon: Weapon.RocketLauncher },
-    { tick: 600, slot: 0, forwardMove: 0, rightMove: 0, upMove: 0, pitch: 0, yaw: 200, buttons: 0, weapon: Weapon.RocketLauncher },
-    { tick: 700, slot: 0, forwardMove: 127, rightMove: 64, upMove: 0, pitch: 8, yaw: 320, buttons: Button.Zoom, weapon: Weapon.Railgun },
-    { tick: 900, slot: 0, forwardMove: 127, rightMove: -64, upMove: 0, pitch: 0, yaw: 15, buttons: Button.Jump, weapon: Weapon.Railgun },
-    { tick: 901, slot: 0, forwardMove: 127, rightMove: -64, upMove: 0, pitch: 0, yaw: 15, buttons: 0, weapon: Weapon.Railgun },
-    { tick: 1100, slot: 0, forwardMove: 0, rightMove: 0, upMove: 0, pitch: 0, yaw: 15, buttons: 0, weapon: Weapon.Railgun },
+    { tick: 1, slot: 0, forwardMove: 1, sideMove: 0, yawDeg: 0, pitchDeg: 0, buttons: 0 },
+    { tick: 40, slot: 0, forwardMove: 1, sideMove: 1, yawDeg: 0, pitchDeg: 0, buttons: BUTTON_JUMP },
+    { tick: 41, slot: 0, forwardMove: 1, sideMove: 1, yawDeg: 0, pitchDeg: 0, buttons: 0 },
+    { tick: 120, slot: 0, forwardMove: 1, sideMove: 1, yawDeg: 45, pitchDeg: 0, buttons: 0 },
+    { tick: 200, slot: 0, forwardMove: 0, sideMove: -1, yawDeg: 90, pitchDeg: -12, buttons: 0 },
+    { tick: 300, slot: 0, forwardMove: -1, sideMove: 0, yawDeg: 135, pitchDeg: -20, buttons: 0 },
+    { tick: 400, slot: 0, forwardMove: 1, sideMove: 0, yawDeg: 200, pitchDeg: 0, buttons: BUTTON_JUMP },
+    { tick: 401, slot: 0, forwardMove: 1, sideMove: 0, yawDeg: 200, pitchDeg: 0, buttons: 0 },
+    { tick: 600, slot: 0, forwardMove: 0, sideMove: 0, yawDeg: 200, pitchDeg: 0, buttons: 0 },
+    { tick: 700, slot: 0, forwardMove: 1, sideMove: 1, yawDeg: 320, pitchDeg: 8, buttons: 0 },
+    { tick: 900, slot: 0, forwardMove: 1, sideMove: -1, yawDeg: 15, pitchDeg: 0, buttons: BUTTON_JUMP },
+    { tick: 901, slot: 0, forwardMove: 1, sideMove: -1, yawDeg: 15, pitchDeg: 0, buttons: 0 },
+    { tick: 1100, slot: 0, forwardMove: 0, sideMove: 0, yawDeg: 15, pitchDeg: 0, buttons: 0 },
 
     /* ---- slot 1 ---- */
-    { tick: 1, slot: 1, forwardMove: 127, rightMove: 0, upMove: 0, pitch: 0, yaw: 180, buttons: 0, weapon: Weapon.RocketLauncher },
-    { tick: 60, slot: 1, forwardMove: 127, rightMove: -127, upMove: 0, pitch: 0, yaw: 180, buttons: Button.Jump, weapon: Weapon.RocketLauncher },
-    { tick: 61, slot: 1, forwardMove: 127, rightMove: -127, upMove: 0, pitch: 0, yaw: 180, buttons: 0, weapon: Weapon.RocketLauncher },
-    { tick: 150, slot: 1, forwardMove: 127, rightMove: -127, upMove: 0, pitch: 0, yaw: 250, buttons: 0, weapon: Weapon.RocketLauncher },
-    { tick: 250, slot: 1, forwardMove: -64, rightMove: 127, upMove: 0, pitch: 25, yaw: 300, buttons: Button.Attack, weapon: Weapon.RocketLauncher },
-    { tick: 350, slot: 1, forwardMove: 127, rightMove: 0, upMove: 0, pitch: 15, yaw: 0, buttons: 0, weapon: Weapon.RocketLauncher },
-    { tick: 500, slot: 1, forwardMove: 127, rightMove: 0, upMove: 0, pitch: 0, yaw: 0, buttons: Button.Jump, weapon: Weapon.RocketLauncher },
-    { tick: 501, slot: 1, forwardMove: 127, rightMove: 0, upMove: 0, pitch: 0, yaw: 0, buttons: 0, weapon: Weapon.RocketLauncher },
-    { tick: 800, slot: 1, forwardMove: 0, rightMove: 127, upMove: 0, pitch: 0, yaw: 90, buttons: 0, weapon: Weapon.Railgun },
-    { tick: 1000, slot: 1, forwardMove: 127, rightMove: 127, upMove: 0, pitch: -30, yaw: -120, buttons: Button.Jump, weapon: Weapon.Railgun },
-    { tick: 1001, slot: 1, forwardMove: 127, rightMove: 127, upMove: 0, pitch: -30, yaw: -120, buttons: 0, weapon: Weapon.Railgun },
+    { tick: 1, slot: 1, forwardMove: 1, sideMove: 0, yawDeg: 180, pitchDeg: 0, buttons: 0 },
+    { tick: 60, slot: 1, forwardMove: 1, sideMove: -1, yawDeg: 180, pitchDeg: 0, buttons: BUTTON_JUMP },
+    { tick: 61, slot: 1, forwardMove: 1, sideMove: -1, yawDeg: 180, pitchDeg: 0, buttons: 0 },
+    { tick: 150, slot: 1, forwardMove: 1, sideMove: -1, yawDeg: 250, pitchDeg: 0, buttons: 0 },
+    { tick: 250, slot: 1, forwardMove: -1, sideMove: 1, yawDeg: 300, pitchDeg: 25, buttons: 0 },
+    { tick: 350, slot: 1, forwardMove: 1, sideMove: 0, yawDeg: 0, pitchDeg: 15, buttons: 0 },
+    { tick: 500, slot: 1, forwardMove: 1, sideMove: 0, yawDeg: 0, pitchDeg: 0, buttons: BUTTON_JUMP },
+    { tick: 501, slot: 1, forwardMove: 1, sideMove: 0, yawDeg: 0, pitchDeg: 0, buttons: 0 },
+    { tick: 800, slot: 1, forwardMove: 0, sideMove: 1, yawDeg: 90, pitchDeg: 0, buttons: 0 },
+    { tick: 1000, slot: 1, forwardMove: 1, sideMove: 1, yawDeg: -120, pitchDeg: -30, buttons: BUTTON_JUMP },
+    { tick: 1001, slot: 1, forwardMove: 1, sideMove: 1, yawDeg: -120, pitchDeg: -30, buttons: 0 },
   ],
 }
 
@@ -89,25 +87,25 @@ export const GOLDEN_REPLAY: Replay = {
  * 62.5 ticks, rounded to the nearest tick. See `sampleTicks`.
  */
 export const GOLDEN_TRACE: readonly TraceSample[] = [
-  { tick: 0, timeMs: 0, hash: 'a90ce277' },
-  { tick: 63, timeMs: 504, hash: '0cd36507' },
-  { tick: 125, timeMs: 1000, hash: 'c7fbc8ce' },
-  { tick: 188, timeMs: 1504, hash: 'acdf106c' },
-  { tick: 250, timeMs: 2000, hash: 'baf1fbc7' },
-  { tick: 313, timeMs: 2504, hash: '00eab484' },
-  { tick: 375, timeMs: 3000, hash: '1dfb109d' },
-  { tick: 438, timeMs: 3504, hash: 'b82999b4' },
-  { tick: 500, timeMs: 4000, hash: '9d64df34' },
-  { tick: 563, timeMs: 4504, hash: '11274398' },
-  { tick: 625, timeMs: 5000, hash: '5b742cdc' },
-  { tick: 688, timeMs: 5504, hash: '88c061e8' },
-  { tick: 750, timeMs: 6000, hash: '5233928e' },
-  { tick: 813, timeMs: 6504, hash: '3f64f880' },
-  { tick: 875, timeMs: 7000, hash: 'f3609d05' },
-  { tick: 938, timeMs: 7504, hash: 'f4d6ff2e' },
-  { tick: 1000, timeMs: 8000, hash: 'cd2babfb' },
-  { tick: 1063, timeMs: 8504, hash: 'd44c53b3' },
-  { tick: 1125, timeMs: 9000, hash: '2e9c90de' },
-  { tick: 1188, timeMs: 9504, hash: '0f0c51c0' },
-  { tick: 1250, timeMs: 10000, hash: '6d6b29e7' },
+  { tick: 0, timeMs: 0, hash: '4acb9129' },
+  { tick: 63, timeMs: 504, hash: 'd4109112' },
+  { tick: 125, timeMs: 1000, hash: 'c0a7e919' },
+  { tick: 188, timeMs: 1504, hash: 'bda631c5' },
+  { tick: 250, timeMs: 2000, hash: '64296d40' },
+  { tick: 313, timeMs: 2504, hash: 'de6ccca0' },
+  { tick: 375, timeMs: 3000, hash: 'ae60e27c' },
+  { tick: 438, timeMs: 3504, hash: '6fe41e31' },
+  { tick: 500, timeMs: 4000, hash: '21e452f5' },
+  { tick: 563, timeMs: 4504, hash: '2601926c' },
+  { tick: 625, timeMs: 5000, hash: '92d7bc57' },
+  { tick: 688, timeMs: 5504, hash: '4897ace4' },
+  { tick: 750, timeMs: 6000, hash: '2db12b5b' },
+  { tick: 813, timeMs: 6504, hash: 'bd8b39de' },
+  { tick: 875, timeMs: 7000, hash: 'efc8c4d0' },
+  { tick: 938, timeMs: 7504, hash: '4ff3c01e' },
+  { tick: 1000, timeMs: 8000, hash: 'fa34446c' },
+  { tick: 1063, timeMs: 8504, hash: '2b7c96c7' },
+  { tick: 1125, timeMs: 9000, hash: '98263a5e' },
+  { tick: 1188, timeMs: 9504, hash: 'c7179e59' },
+  { tick: 1250, timeMs: 10000, hash: '614dba2c' },
 ]

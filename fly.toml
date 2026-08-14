@@ -1,0 +1,56 @@
+app = "gladiator"
+
+# The owner's nearest region, for now. A room-code game means the other player
+# may be on another continent, and whichever of the two is further eats the
+# whole round-trip. Picking properly needs a latency budget by geography, which
+# is GLAD-G41FQ9 — this is deliberately a placeholder, not a decision.
+primary_region = "iad"
+
+kill_signal = "SIGTERM"
+
+# Fly sends SIGTERM, waits this long, then SIGKILLs. The server closes its
+# sockets with 1001 "going away" on SIGTERM so a client can tell a deploy apart
+# from a crash; 30s is room for that plus a round in flight.
+kill_timeout = "30s"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8080"
+  NODE_ENV = "production"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+
+  # Load-bearing, and the single most likely thing to be "tidied up" later.
+  #
+  # Fly decides whether to stop a machine from a concurrency soft-limit
+  # calculation, and two players standing between rounds look exactly like zero
+  # load. A stopped machine takes every live WebSocket with it, so the duel ends
+  # because the scheduler got bored. `"off"` is the only correct value while a
+  # connection is a match rather than a request.
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+  [http_service.concurrency]
+    # Connections, not requests: a WebSocket is one connection for the length of
+    # a match, so a request-based limit measures nothing.
+    type = "connections"
+    soft_limit = 150
+    hard_limit = 200
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "15s"
+    method = "GET"
+    path = "/healthz"
+    protocol = "http"
+    timeout = "2s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
