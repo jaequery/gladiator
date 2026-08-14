@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   ci:
-    name: typecheck · lint · test · build · guardrails
+    name: typecheck · lint · test · build · lockfile · guardrails
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -31,8 +31,8 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
-      # The four checks are separate steps rather than one `pnpm run ci` so a
-      # red build says which of them went red without anyone opening the log.
+      # The checks are separate steps rather than one `pnpm run ci` so a red
+      # build says which of them went red without anyone opening the log.
       - name: Typecheck
         run: pnpm run typecheck
 
@@ -45,8 +45,17 @@ jobs:
       - name: Build
         run: pnpm run build
 
-      # Proves the simulation boundary rejects violations, rather than assuming
-      # it does because nothing has violated it yet. See scripts/guardrails.mjs.
+      # Gladiator has no physics engine, on purpose: movement is `pmove` in
+      # packages/sim and has to be bit-identical in two JavaScript engines. A
+      # WASM physics blob cannot promise that. Lint bans the API inside
+      # packages/client; this is the fence that cannot be walked around, because
+      # an engine cannot be used without being installed.
+      - name: No physics plugin
+        run: pnpm run no-physics
+
+      # Proves the simulation and renderer boundaries reject violations, rather
+      # than assuming they do because nothing has violated them yet. See
+      # scripts/guardrails.mjs.
       - name: Guardrails
         run: pnpm run guardrails
 

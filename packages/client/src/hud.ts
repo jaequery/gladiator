@@ -20,6 +20,9 @@ export type HudModel = {
   readonly mapName: string
   readonly renderer: string
   readonly fps: number
+  /** 99th-percentile frame interval, and what it is allowed to be. */
+  readonly p99Ms: number
+  readonly frameBudgetMs: number
   readonly tick: number
   readonly ticksPerSecond: number
   readonly clientHash: number
@@ -31,6 +34,22 @@ export type Hud = {
   update(model: HudModel): void
   /** A fatal message, in place of everything else. */
   fail(message: string): void
+}
+
+/**
+ * Assign only when the value changed.
+ *
+ * Writing the same string back into `textContent` still dirties the node, and
+ * a dirty node in the overlay means the browser recomposites the whole page on
+ * top of the canvas. Most of this readout is unchanged most of the time.
+ */
+function setText(element: HTMLElement, value: string): void {
+  if (element.textContent !== value) element.textContent = value
+}
+
+/** The same, for a `data-` attribute the smoke test reads. */
+function setState(element: HTMLElement, value: string): void {
+  if (element.dataset['state'] !== value) element.dataset['state'] = value
 }
 
 function field(parent: HTMLElement, key: string, label: string): HTMLElement {
@@ -62,6 +81,7 @@ export function createHud(root: HTMLElement): Hud {
   const mapValue = field(panel, 'map', 'arena')
   const rendererValue = field(panel, 'renderer', 'renderer')
   const rateValue = field(panel, 'rate', 'fps / tickrate')
+  const paceValue = field(panel, 'pace', 'p99 / budget')
   const tickValue = field(panel, 'tick', 'tick')
   const clientValue = field(panel, 'client-hash', 'client hash')
   const serverValue = field(panel, 'server-hash', 'server hash')
@@ -83,37 +103,51 @@ export function createHud(root: HTMLElement): Hud {
 
   return {
     update(model) {
-      buildValue.textContent = model.build
-      rendererValue.textContent = model.renderer
-      rateValue.textContent = `${Math.round(model.fps)} / ${model.ticksPerSecond}`
-      tickValue.textContent = String(model.tick)
-      clientValue.textContent = formatHash(model.clientHash)
+      setText(buildValue, model.build)
+      setText(rendererValue, model.renderer)
+      setText(rateValue, `${Math.round(model.fps)} / ${model.ticksPerSecond}`)
+      // The frame *rate* is an average and averages hide hitches; the
+      // percentile beside it is the number that says whether it stutters.
+      // `render/frameStats.ts`.
+      setText(paceValue, `${model.p99Ms.toFixed(1)} / ${model.frameBudgetMs.toFixed(1)} ms`)
+      setState(
+        paceValue,
+        model.p99Ms === 0 ? 'unknown' : model.p99Ms <= model.frameBudgetMs ? 'match' : 'mismatch',
+      )
+      setText(tickValue, String(model.tick))
+      setText(clientValue, formatHash(model.clientHash))
 
       const { net } = model
       // The server's arena beside ours, so "are we on the same map" is a
       // question the page answers rather than one the console has to.
       const ours = `${model.mapName} ${net.mapHash}`
-      mapValue.textContent =
+      setText(
+        mapValue,
         net.serverMapHash === null || net.serverMapHash === net.mapHash
           ? ours
-          : `${ours} · server has ${net.serverMapHash}`
+          : `${ours} · server has ${net.serverMapHash}`,
+      )
 
-      serverValue.textContent =
-        net.serverHash === null ? '—' : `${formatHash(net.serverHash)} @ ${net.serverTick}`
+      setText(
+        serverValue,
+        net.serverHash === null ? '—' : `${formatHash(net.serverHash)} @ ${net.serverTick}`,
+      )
 
       if (net.agree === null) {
-        agreementValue.textContent = '—'
-        agreementValue.dataset['state'] = 'unknown'
+        setText(agreementValue, '—')
+        setState(agreementValue, 'unknown')
       } else {
-        agreementValue.textContent =
+        setText(
+          agreementValue,
           `${net.agree ? 'MATCH' : 'MISMATCH'} · ${net.compared} compared, ${net.mismatched} mismatched` +
-          (net.dropped > 0 ? `, ${net.dropped} dropped` : '')
-        agreementValue.dataset['state'] = net.agree && net.mismatched === 0 ? 'match' : 'mismatch'
+            (net.dropped > 0 ? `, ${net.dropped} dropped` : ''),
+        )
+        setState(agreementValue, net.agree && net.mismatched === 0 ? 'match' : 'mismatch')
       }
 
-      rttValue.textContent = net.rttMs === null ? '—' : `${Math.round(net.rttMs)} ms`
-      statusValue.textContent = net.message
-      statusValue.dataset['state'] = net.status
+      setText(rttValue, net.rttMs === null ? '—' : `${Math.round(net.rttMs)} ms`)
+      setText(statusValue, net.message)
+      setState(statusValue, net.status)
 
       // A version or map mismatch is worth interrupting the player for:
       // nothing they do will work until they reload.
@@ -123,10 +157,10 @@ export function createHud(root: HTMLElement): Hud {
         net.status === 'unconfigured'
           ? net.message
           : null
-      banner.hidden = shout === null
-      banner.textContent = shout ?? ''
+      if (banner.hidden !== (shout === null)) banner.hidden = shout === null
+      setText(banner, shout ?? '')
 
-      prompt.hidden = model.locked
+      if (prompt.hidden !== model.locked) prompt.hidden = model.locked
     },
 
     fail(message) {

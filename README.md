@@ -63,9 +63,10 @@ packages/client   Babylon renderer, prediction, input
 packages/server   authoritative tick loop, rooms, WebSocket transport
 maps/             hand-authored maps, and the baked JSON both ends load
 tools/            bake-map.ts — compiles, validates and hashes maps/*.ts
-scripts/          guardrails.mjs — proves the sim boundary rejects violations
-                  e2e.mjs        — the browser smoke test
-docs/             physics-spec.md, deploy.md
+scripts/          guardrails.mjs        — proves the boundaries reject violations
+                  no-physics-plugin.mjs — fails if a physics engine is installed
+                  e2e.mjs               — the browser smoke test
+docs/             physics-spec.md, renderer.md, deploy.md
 Dockerfile        the Fly.io image for packages/server
 fly.toml          the Fly.io app
 vercel.json       how Vercel builds packages/client from the repo root
@@ -77,6 +78,12 @@ than by convention — see **The simulation boundary** in
 [`AGENTS.md`](./AGENTS.md), which is also where the coordinate-system matrix
 and the TypeScript conventions live. Vocabulary is in
 [`CONTEXT.md`](./CONTEXT.md).
+
+`packages/client` draws that simulation and decides nothing about it: the
+camera is written from sim state every frame and never read back, and Babylon's
+own collision system and physics API are banned by lint and by a lockfile check
+so a second, disagreeing physics cannot quietly appear. Settings and reasoning:
+[`docs/renderer.md`](./docs/renderer.md).
 
 ## Deploying
 

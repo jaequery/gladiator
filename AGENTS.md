@@ -6,7 +6,8 @@ a railgun. It runs the same simulation in the browser and on the server. Almost
 every convention below exists to protect that one sentence.
 
 Vocabulary is in [`CONTEXT.md`](./CONTEXT.md). Physics numbers are in
-[`docs/physics-spec.md`](./docs/physics-spec.md).
+[`docs/physics-spec.md`](./docs/physics-spec.md); renderer settings and their
+reasoning are in [`docs/renderer.md`](./docs/renderer.md).
 
 ---
 
@@ -19,9 +20,10 @@ Vocabulary is in [`CONTEXT.md`](./CONTEXT.md). Physics numbers are in
 | `pnpm run lint`      | ESLint over the whole repo                             |
 | `pnpm run test`      | Vitest, once                                           |
 | `pnpm run build`     | Vite (client) and esbuild (server)                     |
-| `pnpm run guardrails`| proves the simulation boundary rejects violations      |
+| `pnpm run no-physics`| fails if a physics engine has appeared in `pnpm-lock.yaml` |
+| `pnpm run guardrails`| proves the boundaries reject violations                |
 | `pnpm run map:bake`  | compiles `maps/*.ts` to `maps/baked/*.json` (`--check` verifies) |
-| `pnpm run ci`        | all five, in that order — what CI runs                 |
+| `pnpm run ci`        | all six, in that order — what CI runs                  |
 | `pnpm run e2e`       | the browser smoke test — needs Chromium, own CI job    |
 
 > `pnpm run ci`, not `pnpm ci`. pnpm reserves the bare `ci` verb
@@ -102,6 +104,45 @@ Banned in `packages/sim` only, each with an error message explaining itself:
 `packages/sim`, runs the check that should reject it, and fails if the check
 passes. It runs in `pnpm run ci`. A guardrail nobody has watched fire is a
 guardrail nobody knows is connected.
+
+---
+
+## The renderer's boundary
+
+The simulation boundary protects `packages/sim` from the outside world. There is
+a second one, pointing the other way, and it protects the outside world from
+*reimplementing* the simulation. Full reasoning:
+[`docs/renderer.md`](./docs/renderer.md).
+
+Babylon ships a collision system that needs no plugin and no dependency, and it
+is what every first-person tutorial reaches for. Using it would not break the
+game — it would produce movement that is *almost* right, which looks like a
+network problem, gets diagnosed as a network problem, and is not one.
+
+Banned in `packages/client` only, by ESLint, each with its reason:
+
+| Banned | Because |
+| ------ | ------- |
+| `checkCollisions`, `moveWithCollisions` | a second collision system; the authoritative one is `packages/sim` |
+| `applyGravity` | gravity is a simulation constant applied in 8 ms sub-steps |
+| `ellipsoid` | the player is a 30x30x56 **box**, and every movement constant was measured against it |
+| `attachControl` | the camera is a puppet; aim is ours and goes into the `UserCmd` |
+| `enablePhysics`, `PhysicsAggregate`, `PhysicsBody` | there is no physics engine here, on purpose |
+
+And `pnpm run no-physics` fails if a physics engine ever appears in
+`pnpm-lock.yaml` — the fence that cannot be walked around, because an engine
+cannot be used without being installed. Both are proved to fire by
+`scripts/guardrails.mjs`.
+
+Two more rules that are not lintable and matter as much:
+
+- **The camera is written from simulation state every frame and never read
+  back.** `inertia = 0`, no input attached, `position` and `rotation` assigned
+  rather than `setTarget`ed. `docs/renderer.md` §1.
+- **`packages/client/reference/testbed.png` is a gate.** A renderer change that
+  legitimately changes the picture ships its new reference in the same commit
+  (`pnpm run e2e -- --update-reference`). A re-shoot in a commit that was not
+  supposed to change the picture is the question the gate exists to ask.
 
 ---
 
