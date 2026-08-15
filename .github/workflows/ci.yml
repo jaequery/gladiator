@@ -82,6 +82,40 @@ jobs:
       - name: End-to-end
         run: pnpm run e2e
 
+  # Does a browser actually hand a page raw mouse deltas? `docs/physics-spec.md`
+  # calls raw input mandatory, so the answer is measured on every push rather
+  # than assumed — and it is measured for every engine that will start, because
+  # `unadjustedMovement` is refused by some of them and silently ignored by
+  # others. `docs/browser-support.md` is the committed matrix.
+  #
+  # It reports rather than gates, and the reason is in the table itself: raw
+  # input is a property of the browser *and* the operating system, so a Linux
+  # runner can only ever confirm the Linux rows. `--check` is for a machine
+  # whose platform the matrix records.
+  raw-input:
+    name: raw mouse input matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Install browsers
+        run: pnpm exec playwright install --with-deps chromium firefox webkit
+
+      - name: Probe
+        run: pnpm run raw-input | tee -a "$GITHUB_STEP_SUMMARY"
+
   # Vercel deploys the client itself, from its own Git integration. Duplicating
   # that here would mean two deploys racing for the same URL, so this job is
   # only the Fly half.

@@ -3,11 +3,11 @@
  * Does this browser, on this operating system, actually give a page raw mouse
  * deltas?
  *
- * `docs/physics-spec.md` calls raw mouse input mandatory and the repository has
- * carried "unverified across browsers" as an open item ever since. This is the
- * thing that verifies it: it opens each browser Playwright can start, takes a
- * real pointer lock from a real click, and records what came back. The table it
- * prints is the one committed in `docs/browser-support.md`.
+ * Raw mouse input is called mandatory all over this repository and which
+ * browsers actually give it was, until this script, nobody's measurement. It
+ * opens each browser Playwright can start, takes a real pointer lock from a
+ * real click, and records what came back. The table it prints is the one
+ * committed in `docs/browser-support.md`.
  *
  *     pnpm run raw-input            # print the table
  *     pnpm run raw-input -- --write # write it into docs/browser-support.md
@@ -128,7 +128,7 @@ const ENGINES = [
 ]
 
 async function probe(engine) {
-  let browser = null
+  let browser
   try {
     browser = await engine.type.launch(engine.options)
   } catch (cause) {
@@ -161,11 +161,18 @@ async function probe(engine) {
   }
 }
 
-/** The verdict a page would reach, which is `input/pointerLock.ts`'s exactly. */
+/**
+ * The verdict a page would reach, in the words a page uses.
+ *
+ * Deliberately `RawInput`'s three spellings from `input/pointerLock.ts` rather
+ * than a vocabulary of this script's own: what this table records is exactly
+ * what the settings screen will tell a player on the same machine, and two
+ * words for one state is how a table stops being read as one.
+ */
 function verdict(result) {
   if (result.note !== undefined) return 'not measured'
   if (result.promise !== true) return 'unknown'
-  return result.resolved === true ? 'raw' : 'accelerated'
+  return result.resolved === true ? 'granted' : 'refused'
 }
 
 function describe(result) {
@@ -204,8 +211,8 @@ function committedVerdicts(markdown) {
 }
 
 const server = await serve()
-let block = ''
-let measured = []
+let block
+const measured = []
 try {
   for (const engine of ENGINES) measured.push(await probe(engine))
   block = table(measured, `${process.platform} ${process.arch}`)

@@ -4,11 +4,12 @@ Which browsers Gladiator is playable in, what each one does with the two APIs a
 duel cannot be played without — **pointer lock** and **raw mouse input** — and
 what the game does where the answer is no.
 
-`docs/physics-spec.md` calls raw mouse input mandatory and this repository
-carried "unverified across browsers" as an open item from the first commit until
-this one. This document is what closes it: the matrix below is measured by a
-script anybody can run, and the fallback for every "no" in it is implemented and
-tested rather than described.
+Raw mouse input has been called mandatory here since the movement was ported,
+and which browsers actually give it has been an open question the whole time —
+[`docs/renderer.md`](./renderer.md) §10 deferred it to "the settings screen can
+be honest about it". This document is what closes it: the matrix below is
+measured by a script anybody can run, and the fallback for every "no" in it is
+implemented and tested rather than described.
 
 Vocabulary is in [`CONTEXT.md`](../CONTEXT.md); the renderer's own backend
 fallback is [`docs/renderer.md`](./renderer.md) §1.
@@ -95,9 +96,30 @@ and macOS columns are the ones most players are on and the ones CI cannot reach;
 run the command there and add the block if you have such a machine.
 
 <!-- probe:start -->
+
+Measured on **linux x64** by `pnpm run raw-input`.
+
+| Engine | Build | Verdict | What the browser did |
+| ------ | ----- | ------- | -------------------- |
+| Chromium | 151.0.7922.34 | `refused` | rejected with NotSupportedError; the plain retry locked |
+| Firefox | 153.0 | `refused` | rejected with NotSupportedError; the plain retry locked |
+| WebKit | — | `not measured` | could not be launched here: Error: browserType.launch: Target page, context or browser has been closed |
+
 <!-- probe:end -->
 
-Two caveats worth knowing before reading too much into a green row:
+**The finding, stated plainly: on Linux there is no raw mouse input, in any
+browser.** Both engines that would start here refused the flag with
+`NotSupportedError` and locked without it — Gecko because it implements the
+option on macOS and Windows only, and Blink for the same reason on the same
+platform. That is not a headless artefact of the kind the caveats below cover:
+it is the request being answered, in words, by the browser. A Linux player gets
+accelerated input, the settings screen says so, and the game plays.
+
+It also means **CI can never see a `granted`**, which is worth knowing before
+reading a green run as coverage. The rows that matter to most players — Windows
+and macOS — are documentation until somebody runs the command on one.
+
+Two caveats worth knowing before reading too much into any row:
 
 - **Playwright's "WebKit" on Linux is not Safari.** It is a WPE build of the same
   engine with different platform code underneath, and raw input is precisely the

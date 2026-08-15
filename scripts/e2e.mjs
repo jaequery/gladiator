@@ -627,6 +627,19 @@ try {
   await tab.setViewportSize(VIEWPORT)
   await tab.evaluate(() => window.dispatchEvent(new Event('resize')))
 
+  // The lock again, because the pacing measurement above took it away: the
+  // baseline runs in a second tab, and a browser drops pointer lock the moment
+  // the page stops being the front one. Nothing below is worth measuring
+  // without it — a client with a loose pointer sends a player who is standing
+  // still (`input/controller.ts`: no lock, no movement), and "the hashes agree
+  // over a minute of movement" would then be a minute of nothing.
+  await tab.locator('#stage').click()
+  const lockedForHashes = await waitFor(
+    'the pointer lock to come back for the hash run',
+    async () => tab.evaluate(() => document.pointerLockElement !== null),
+  )
+  check('the pointer is locked for the hash comparison', lockedForHashes)
+
   // --- hash agreement, for real, for a minute ------------------------------
   console.log(`  ...  moving for ${seconds}s and comparing hashes`)
   const deadline = Date.now() + seconds * 1000

@@ -126,6 +126,20 @@ function button(label: string, hud: string, onClick: () => void): HTMLButtonElem
   return element
 }
 
+/**
+ * Assign only when the value changed.
+ *
+ * The same guard, for the same reason, as `client/src/hud.ts`: writing the same
+ * string back into `textContent` still dirties the node, and a dirty node in
+ * the overlay makes the browser recomposite the whole page on top of the
+ * canvas. The pause screen sits over a match that is still being drawn, and it
+ * is written from the session ten times a second — almost always with exactly
+ * what is already there.
+ */
+function setText(element: HTMLElement, value: string): void {
+  if (element.textContent !== value) element.textContent = value
+}
+
 function paragraph(text: string, className = 'menu-body'): HTMLParagraphElement {
   const element = document.createElement('p')
   element.className = className
@@ -303,7 +317,7 @@ export function createMenu(parent: HTMLElement, hooks: MenuHooks): Menu {
       copyButton.textContent = copyMessage(result)
       copyButton.dataset['state'] = result === 'unavailable' ? 'manual' : 'copied'
       // Selected on both paths: on the failure path it is the only way to copy
-      // it, and on the success path it is the proof that this is what was.
+      // it, and on the success path it shows what went on the clipboard.
       linkInput.select()
     })
   })
@@ -436,29 +450,32 @@ export function createMenu(parent: HTMLElement, hooks: MenuHooks): Menu {
     },
 
     setRoom(code) {
-      roomCode.textContent = code === null ? '······' : formatRoomCode(code)
-      linkInput.value = code === null ? '' : hooks.shareLink(code)
+      const link = code === null ? '' : hooks.shareLink(code)
+      setText(roomCode, code === null ? '······' : formatRoomCode(code))
+      if (linkInput.value !== link) linkInput.value = link
       copyButton.disabled = code === null
-      copyButton.textContent = 'Copy the link'
+      setText(copyButton, 'Copy the link')
       delete copyButton.dataset['state']
     },
 
     setStatus(text) {
-      roomStatus.textContent = text
+      setText(roomStatus, text)
     },
 
     setRawInput(state) {
-      rawRow.textContent = `Mouse input: ${rawInputLabel(state)}`
+      setText(rawRow, `Mouse input: ${rawInputLabel(state)}`)
       const warning = rawInputWarning(state)
-      rawWarning.hidden = warning === null
-      rawWarning.textContent = warning ?? ''
+      if (rawWarning.hidden !== (warning === null)) rawWarning.hidden = warning === null
+      setText(rawWarning, warning ?? '')
     },
 
     setLockDenied(reason) {
-      pauseHint.textContent =
+      setText(
+        pauseHint,
         reason === null
           ? 'The match is still running. Click to take the mouse back.'
-          : `The browser is still holding the mouse (${reason}). Click again in a moment — a fresh click is the only thing that takes the lock back.`
+          : `The browser is still holding the mouse (${reason}). Click again in a moment — a fresh click is the only thing that takes the lock back.`,
+      )
       pauseHint.dataset['state'] = reason === null ? 'ready' : 'denied'
     },
 

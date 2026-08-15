@@ -26,8 +26,17 @@ pnpm --filter @gladiator/server dev    # the authoritative server, on :8787
 pnpm --filter @gladiator/client dev    # the browser client, on :5173
 ```
 
-Open the client, click to lock the pointer, and run around with `W`/`A`/`S`/`D`
-and space. The HUD prints both state hashes and whether they agree.
+Open the client and you land on a menu: play the bot, create a match, or join
+one with a code. Creating a match gets a room code from the host and a link to
+send — whoever opens that link lands in the same room with nothing to type. Then
+`W`/`A`/`S`/`D` and space, escape to give the mouse back, and the HUD prints
+both state hashes and whether they agree.
+
+Three URLs skip the menu, for when you know what you want: `?local=1` is
+single-player against the host in your own tab, `?host=1` opens a room and goes
+straight in, and `?room=H7K2Q9` joins one. Sensitivity is set in cm/360 under
+Settings; which browsers give the raw mouse deltas that number depends on is
+[`docs/browser-support.md`](./docs/browser-support.md).
 
 ```sh
 pnpm run e2e         # the whole acceptance list, in headless Chromium
@@ -77,7 +86,9 @@ scripts/          guardrails.mjs        — proves the boundaries reject violati
                   no-physics-plugin.mjs — fails if a physics engine is installed
                   e2e.mjs               — the browser smoke test
                   audio-check.mjs       — the audio checks, in a real browser
-docs/             physics-spec.md, renderer.md, audio.md, deploy.md
+                  raw-input.mjs         — measures raw mouse input, per browser
+docs/             physics-spec.md, renderer.md, audio.md, deploy.md,
+                  browser-support.md
 CREDITS.md        every shipped asset, its source and its licence
 Dockerfile        the Fly.io image for packages/server
 fly.toml          the Fly.io app
