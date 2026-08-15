@@ -510,12 +510,51 @@ input and moves faster than everyone else.
 ## The bot
 
 **Bot** — `packages/bot`. Single-player opposition. It plays by emitting
-`UserCmd`s, exactly like a human, which is both the fairness guarantee and the
-reason it lives on the same deterministic side of the boundary as the sim.
+`UserCmd`s, exactly like a human, which is the coarsest form of the fairness
+guarantee: whatever it decides, it can only ask for the eight numbers a player
+can ask for. It is a *client* rather than a peer, so it is not required to be
+bit-identical across engines the way the sim is — which is why it may use
+`Math.atan2` and draw noise, both lint errors inside `packages/sim`. Its PRNG is
+still seeded, so a headless bot match replays.
 
 **WorldModel** — what the bot believes about the world: what it can see (FOV,
 line of sight), what it has heard, and what it remembers, decaying over time. It
-is deliberately *not* the sim state (GLAD-V7CMHR).
+is deliberately *not* the sim state, and every layer above the perception one
+reads it rather than `GameState` — which is what makes "the bot is not
+omniscient" a thing a test can assert (GLAD-V7CMHR).
+`packages/bot/src/perception/worldModel.ts` is where the design is argued.
+
+**Perception layer** — `packages/bot/src/perception/`. The only code in
+`packages/bot` allowed to look at the world. `eslint.config.js`'s
+`GROUND_TRUTH_BANS` refuses `GameState`, `EntityState` and `state.entities`
+everywhere else in the package.
+
+**Channel** — one of the four ways something gets into the `WorldModel`: sight,
+sound, damage, and memory. The first three write beliefs; memory is what happens
+to them when nothing refreshes them.
+
+**Visibility fraction** — how much of a body the bot can see, in `[0, 1]`: three
+line-of-sight rays at the feet, chest and eyes, weighted an eighth, a half and
+three eighths. A fraction rather than a boolean so that *acquiring* a contact
+and *keeping* one can be two different thresholds — a quarter and anything above
+zero.
+
+**Contact** — the bot's belief about where the opponent is: a position, an
+uncertainty radius, a confidence, and which channel it came from. Never health,
+armour, ammunition or aim.
+
+**Confidence** — what a belief is worth, in `[0, 1]`. One at a sighting, a half
+for a noise, four tenths for a shove, falling linearly to *exactly* zero 2.2
+seconds after the last thing that confirmed it. At zero the contact is cleared
+rather than kept as a stale position.
+
+**Dead reckoning** — sliding a remembered position along the velocity it was
+last seen moving at, growing its uncertainty at run speed. Traced against the
+map, so a belief never ends up inside a wall.
+
+**Alertness** — the window after being hit during which the sight cone widens
+from 100 degrees to 160. Being shot tells the bot a *direction*, and the widened
+cone is what it does with it.
 
 **Navigation data** — precomputed routing baked from the map, so the bot's
 pathfinding is a lookup rather than a search (GLAD-OB46VC).
@@ -549,8 +588,15 @@ replanning.
 once and stored a bit per pair. Symmetric by construction. It is what makes
 breaking line of sight an O(1) question (GLAD-V7CMHR).
 
-**Fairness harness** — the tests that assert the bot cannot see, hear or aim
-better than the rules allow.
+**Fairness harness** — `packages/bot/src/perception/fairness.test.ts`. The tests
+that assert the bot cannot see, hear or aim better than the rules allow. Its
+strongest claim is the **mutation test**.
+
+**Mutation test** — perturb ground truth the `WorldModel` does not carry and
+require the bot's `UserCmd` stream to come out **bit-identical**. Binary and
+un-gameable, unlike a correlation threshold. A positive control moves the
+opponent somewhere the bot can see and requires the stream to *differ*, so it
+cannot pass by the bot doing nothing.
 
 ---
 
