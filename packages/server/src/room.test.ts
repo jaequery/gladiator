@@ -45,6 +45,15 @@ function helloFrame(over: Record<string, unknown> = {}): string {
 
 const ROOM_CODE = 'H7K2Q9'
 
+/**
+ * The seat token every peer in this file is handed.
+ *
+ * Fixed by pinning the draw, because a token is what a reconnect presents and a
+ * test that could not name it could not reconnect. `lifecycle.ts`.
+ */
+const SEAT_TOKEN = 'deadbeefdeadbeefdeadbeefdeadbeef'
+const FIXED_TOKEN_DRAW = () => 0xdeadbeef
+
 /** A room over a loopback, plus everything the far end has been told. */
 function hosted(options: { capacity?: number; clock?: ReturnType<typeof manualClock> } = {}) {
   const clock = options.clock ?? manualClock()
@@ -56,6 +65,7 @@ function hosted(options: { capacity?: number; clock?: ReturnType<typeof manualCl
     build: 'test-build',
     id: ROOM_CODE,
     peerId: (index) => `peer-${index}`,
+    seatRandom: FIXED_TOKEN_DRAW,
     ...(options.capacity === undefined ? {} : { capacity: options.capacity }),
   })
   const heard: ServerMessage[] = []
@@ -107,6 +117,9 @@ describe('seating a peer', () => {
         // The host's own answer to "which match is this", so a player who
         // created one has something to send their friend.
         room: ROOM_CODE,
+        // And the key to *this side* of it, which is what a reconnect presents
+        // rather than being refused as a third player (`lifecycle.ts`).
+        token: SEAT_TOKEN,
       },
     ])
   })

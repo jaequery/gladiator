@@ -35,6 +35,7 @@ import type { MatchRules } from './match.ts'
 import {
   advanceMatch,
   damageReserve,
+  forfeitMatch,
   isPlayableScore,
   roundOutcome,
   startMatch,
@@ -362,6 +363,97 @@ describe('a headless match', () => {
     const state = createGameState(2)
     startMatch(state, PLAN)
     expect(() => startMatch(state, PLAN)).toThrow(/already in phase/)
+  })
+})
+
+/* --------------------------------------------------------------------------
+ * A match nobody can finish
+ * ----------------------------------------------------------------------- */
+
+describe('forfeiting', () => {
+  it('awards the round in progress and the match with it', () => {
+    // The connection lifecycle's edge into the simulation (GLAD-DVDV6P):
+    // thirty seconds after a socket died, there is nobody to finish the match
+    // against. Awarding only the *round* would start the next one against an
+    // empty seat and award that too, three seconds later, until the score ran
+    // out — the same result, arrived at over half a minute of nothing.
+    const state = createGameState(1, matchRules())
+    const kernel = createKernel(state, WORLD, PLAN)
+    startMatch(state, PLAN)
+    advanceTicks(kernel, 10, idle)
+
+    expect(forfeitMatch(state, DUEL_SLOTS[1])).toBe(true)
+    expect(state.match.phase).toBe(MatchPhase.Over)
+    expect(state.match.winner).toBe(DUEL_SLOTS[1])
+    expect(state.match.lastRoundWinner).toBe(DUEL_SLOTS[1])
+    expect(state.match.wins).toEqual([0, 1])
+  })
+
+  it('gives the match to the player still there, not to the score', () => {
+    // A player who quits while ahead leaves a score that says they were winning
+    // and a match their opponent won. Those two facts disagree because a
+    // forfeit is exactly the situation in which they should.
+    const state = createGameState(1, matchRules())
+    startMatch(state, PLAN)
+    state.match.wins[0] = 2
+    state.match.wins[1] = 0
+
+    forfeitMatch(state, DUEL_SLOTS[1])
+    expect(state.match.wins).toEqual([2, 1])
+    expect(state.match.winner).toBe(DUEL_SLOTS[1])
+  })
+
+  it('does not award a round that has already been scored', () => {
+    const rules = matchRules({ roundTimeLimitTicks: 20 })
+    const state = createGameState(1, rules)
+    const kernel = createKernel(state, WORLD, PLAN)
+    startMatch(state, PLAN)
+    kill(state, DUEL_SLOTS[0])
+    advanceTicks(kernel, 1, idle)
+    expect(state.match.phase).toBe(MatchPhase.Intermission)
+    expect(state.match.wins).toEqual([0, 1])
+
+    // An intermission's round is already on the board, and scoring it twice
+    // would hand the leaver's opponent a round they had already been given.
+    forfeitMatch(state, DUEL_SLOTS[1])
+    expect(state.match.wins).toEqual([0, 1])
+    expect(state.match.winner).toBe(DUEL_SLOTS[1])
+  })
+
+  it('ends a match nobody is left to win with nobody winning it', () => {
+    const state = createGameState(1, matchRules())
+    startMatch(state, PLAN)
+
+    expect(forfeitMatch(state, NO_WINNER)).toBe(true)
+    expect(state.match.phase).toBe(MatchPhase.Over)
+    expect(state.match.winner).toBe(NO_WINNER)
+    expect(state.match.wins).toEqual([0, 0])
+  })
+
+  it('has nothing to end in warmup, or in a match already decided', () => {
+    const warmup = createGameState(1, matchRules())
+    expect(forfeitMatch(warmup, DUEL_SLOTS[0])).toBe(false)
+    expect(warmup.match.phase).toBe(MatchPhase.Warmup)
+
+    const over = createGameState(1, matchRules())
+    startMatch(over, PLAN)
+    forfeitMatch(over, DUEL_SLOTS[0])
+    expect(forfeitMatch(over, DUEL_SLOTS[1])).toBe(false)
+    // The second call changed nothing: the first answer stands.
+    expect(over.match.winner).toBe(DUEL_SLOTS[0])
+  })
+
+  it('takes the rockets in the air with it', () => {
+    const state = createGameState(1, matchRules())
+    startMatch(state, PLAN)
+    const shooter = playerIn(state, DUEL_SLOTS[0])
+    spawnProjectile(state, shooter, WEAPONS[0], [0, 0, 200], [0, 0, 1])
+    expect(state.entities.some((entity) => entity.kind === EntityKind.Projectile)).toBe(true)
+
+    forfeitMatch(state, DUEL_SLOTS[1])
+    // A decided match cannot be un-decided by an explosion that arrives
+    // afterwards — the same rule as a round ending, for the same reason.
+    expect(state.entities.some((entity) => entity.kind === EntityKind.Projectile)).toBe(false)
   })
 })
 

@@ -372,7 +372,44 @@ it. A `waiting` frame says the wait has started, a `matched` frame says it is
 over, and a `timeout` frame — a minute in — says nobody came and hands back the
 code to send a friend. An entry is re-checked against the registry every time it
 is about to be used, so a player who queues and closes the tab is never paired
-with anybody.
+with anybody. That re-check counts **seats**, not sockets: once seats could
+outlive connections, "one peer and room for two" stopped meaning there is a free
+seat, and a room holding one for somebody mid-reconnect must not be paired into.
+
+**Seat** — a *side* of a duel: a slot in the world, a score, a body standing in
+the arena. Deliberately not the same thing as a connection, because a socket
+dies for reasons that have nothing to do with the match. Held by one peer at a
+time, and outliving whoever holds it by the grace window.
+`packages/server/src/lifecycle.ts`.
+
+**Seat token** — the 128-bit key the host mints when a seat is first taken and
+puts in the welcome. A room code says *which match*; a token says *which side of
+it*, which is the whole difference between reconnecting and joining. Bearer, and
+never shown to the other peer.
+
+**Grace window** — how long a seat is held for a peer that has gone:
+`RECONNECT_GRACE_MS`, thirty seconds. Their body stays in the world with no
+input at all — standing still and killable, so rage-quitting cannot deny a frag
+— and the opponent is told immediately, with a countdown.
+
+**Forfeit** — what a grace window running out does: the round in progress is
+awarded and the match with it, to whoever still holds the other seat
+(`forfeitMatch`, `sim/src/match/round.ts`). The score then records the rounds
+that were played and the winner is the player who was still there, and those two
+can disagree.
+
+**Reconnect** — coming back to a seat with its token, on the same URL plus
+`&token=…`. The client throws away everything it predicted across the gap and
+takes the first snapshot whole; which closes are worth retrying, and the
+250 ms-to-4 s backoff, are `packages/client/src/net/reconnect.ts`. A reconnect
+during a **drain** carries `&resume=` as well: the token asks the machine still
+holding the seat, and the ticket tells a machine that was never there what the
+score was.
+
+A **drain** is deliberately *not* a departure, and the two must never be
+confused: closing a room for a deploy vacates no seat, starts no grace window
+and forfeits nobody, or a rolling deploy would decide every match it touched.
+`Room.close` says so with a `closing` flag.
 
 **Drain** — what a machine does between SIGTERM and exiting
 (`packages/server/src/shutdown.ts`). Stops being ready, hands every seated

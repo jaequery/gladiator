@@ -119,8 +119,15 @@ export function mintRoomCode(random: Uint32Source = cryptoUint32): string {
   return code
 }
 
-/** One uniform uint32 out of the platform's CSPRNG. */
-function cryptoUint32(): number {
+/**
+ * One uniform uint32 out of the platform's CSPRNG.
+ *
+ * Exported so that `lifecycle.ts` draws its seat tokens from the same source
+ * rather than writing a second one out — `crypto.getRandomValues` is a global in
+ * Node 22 and in every browser this game supports, which is what lets both the
+ * registry and a room running inside a tab reach it.
+ */
+export function cryptoUint32(): number {
   const buffer = new Uint32Array(1)
   crypto.getRandomValues(buffer)
   return buffer[0] ?? 0

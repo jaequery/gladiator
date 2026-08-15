@@ -104,19 +104,29 @@ describe('the host is isomorphic', () => {
     // purpose. `inputQueue.ts` joined it with the tick scheduler: a room drains
     // one command per peer per sub-step, and the buffer that holds them has to
     // run in a tab as well.
+    //
     // `lagcomp.ts` joined it with lag compensation, for the same reason — a
     // listen server judges a railgun shot exactly as Fly does, or single-player
     // would be a second set of rules after all. And `log.ts` joined it with
     // structured logging, on this side of the line for the same reason
     // `clock.ts` is: the sink and the wall-clock are injected, so the module
     // itself names neither `console` nor `Date.now`.
+    //
+    // `lifecycle.ts` joined it with the connection lifecycle, and `roomCode.ts`
+    // came with it: a seat token is drawn from the same uniform uint32 source a
+    // room code is, and `crypto.getRandomValues` is a global in Node 22 and in
+    // every browser this game supports. Writing a second draw to avoid the
+    // import would be two spellings of one number, which is the drift
+    // `AGENTS.md` exists to prevent.
     expect(names).toEqual([
       'clock.ts',
       'clockSync.ts',
       'inputQueue.ts',
       'lagcomp.ts',
+      'lifecycle.ts',
       'log.ts',
       'room.ts',
+      'roomCode.ts',
       'session.ts',
     ])
   })

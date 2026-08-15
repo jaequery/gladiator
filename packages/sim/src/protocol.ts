@@ -64,8 +64,27 @@ import { sanitizeUserCmd, type UserCmd } from './usercmd.ts'
  * the queue and so is never sent one, which is exactly why the bump is here
  * rather than argued about: this file's rule is that the number moves whenever
  * the shapes do, and a rule with an exception in it is a rule nobody can check.
+ *
+ * Version 9 is the connection lifecycle (GLAD-DVDV6P). {@link ServerWelcome}
+ * grew a `token` — the one thing a returning client can prove a seat with — and
+ * {@link ServerLifecycle} is new, because "your opponent's connection died and
+ * they have 27 seconds to come back" is a sentence no other frame could carry. A
+ * version-8 client is handed a `life` frame it cannot parse and treats the host
+ * as speaking a language it does not know, and, worse, has no token to come back
+ * with: it would reconnect as a stranger and be told the room is full.
+ *
+ * This ticket has now been renumbered twice — it was 7 until G41FQ9 landed a
+ * different 7, and 8 until ZHRFBK landed a different 8 — and both times for the
+ * same reason. `main` is what reaches production: the deploy job runs on a push
+ * to it, so a number that has landed there is spoken for, and a branch still
+ * holding that number is holding somebody else's frames. Handing a client a
+ * `life` frame under a version it believes it understands is the one failure
+ * this constant exists to prevent, and it costs nothing to avoid and cannot be
+ * undone once a client has it. Whoever lands next should expect to do this
+ * again: renumber at the merge rather than guess further ahead, because the
+ * guess is the part that keeps being wrong.
  */
-export const PROTOCOL_VERSION = 8
+export const PROTOCOL_VERSION = 9
 
 /**
  * The most commands one frame may carry. The client's accumulator clamps a
@@ -163,6 +182,70 @@ export type ServerWelcome = {
    * over a voice call.
    */
   readonly room: string
+  /**
+   * The bearer token for this **seat**, minted by the host when the seat was
+   * first taken and reissued verbatim to whoever comes back holding it.
+   *
+   * A room code says which match; a token says which *side* of it, and that is
+   * the whole difference between reconnecting and joining. Without one, a player
+   * whose wifi dropped mid-round would come back to their own match, find both
+   * seats taken — one of them by their own vacant body — and be refused as a
+   * third player (`server/lifecycle.ts`).
+   *
+   * It is a bearer credential, so it is never shown to the other peer and never
+   * put in a frame anybody else receives. It is not a *security* boundary any
+   * more than the room code is: it buys the ability to take a seat in a duel
+   * somebody is already playing, for as long as that duel lasts, and the honest
+   * summary of the threat model is `docs/deploy.md`.
+   */
+  readonly token: string
+}
+
+/**
+ * What happened to somebody's connection. The host's half of the lifecycle.
+ *
+ * Written from the *recipient's* point of view — "your opponent left", not
+ * "slot 1 left" — because the host is the only side that knows who it is
+ * talking to, and a client that had to work out whether an event was about
+ * itself would be a second copy of the seat table to keep in step.
+ *
+ * A `life` frame is an **event**, so it needs the reliability the transport
+ * contract promises (`transport.ts`): there is no later frame that repairs a
+ * dropped "your opponent left", and the countdown it carries is the only reason
+ * the other player knows why nobody is shooting back.
+ */
+export const LifecycleEvent = {
+  /** The other seat was taken. The match starts on the next frame. */
+  OpponentJoined: 'opponent-joined',
+  /**
+   * The other peer's socket has gone. Their body stays in the world, standing
+   * still and killable, until {@link ServerLifecycle.graceMs} runs out.
+   */
+  OpponentLeft: 'opponent-left',
+  /** They reconnected inside the window. Nothing was lost. */
+  OpponentBack: 'opponent-back',
+  /** The window ran out. The match is over and you have it. */
+  Forfeit: 'forfeit',
+} as const
+
+export type LifecycleEvent = (typeof LifecycleEvent)[keyof typeof LifecycleEvent]
+
+export type ServerLifecycle = {
+  readonly t: 'life'
+  readonly event: LifecycleEvent
+  /**
+   * Milliseconds left in the grace window this frame is about, or zero when the
+   * event has no clock attached.
+   *
+   * A duration rather than a deadline, because the two ends have no shared
+   * wall-clock — only a shared *tick* number, and a grace window is measured in
+   * seconds of the host's real time rather than in sub-steps of the world's.
+   * The client counts it down itself from the moment it arrives, which is late
+   * by one one-way trip and honest about it.
+   */
+  readonly graceMs: number
+  /** One line, already written for a human. The HUD prints it verbatim. */
+  readonly detail: string
 }
 
 export type ServerHash = {
@@ -368,6 +451,7 @@ export type ServerMessage =
   | ServerHash
   | ServerPing
   | ServerSnapshot
+  | ServerLifecycle
   | ServerVersionMismatch
   | ServerMapMismatch
   | ServerFault
@@ -443,6 +527,15 @@ function asMapHash(value: unknown): string | null {
   return typeof value === 'string' && /^[0-9a-f]{8}$/.test(value) ? value : null
 }
 
+/** One of the lifecycle events, or nothing. Checked against the table so that
+ *  a new one cannot arrive as a string nobody handles. */
+function asLifecycleEvent(value: unknown): LifecycleEvent | null {
+  for (const event of Object.values(LifecycleEvent)) {
+    if (value === event) return event
+  }
+  return null
+}
+
 /** Parse a client frame, or `null` if it is not one. */
 export function parseClientMessage(raw: string): ClientMessage | null {
   const record = asRecord(raw)
@@ -490,9 +583,26 @@ export function parseServerMessage(raw: string): ServerMessage | null {
     // `server/roomCode.ts`'s business, and a parser in the simulation package
     // that knew the alphabet would be a second copy of it to keep in step.
     const room = asString(record['room'], 32)
+    // Bounded and otherwise opaque, for the same reason as `room`: what a token
+    // is made of is `server/lifecycle.ts`'s business, and a parser that knew its
+    // shape would be a second opinion about it. Empty is refused — a client that
+    // stored one would send it back and be refused as a stranger, which is a
+    // failure worth having at the door rather than a minute later.
+    const token = asString(record['token'], 64)
     if (protocol === null || build === null || session === null || mapHash === null) return null
-    if (room === null) return null
-    return { t: 'welcome', protocol, build, session, mapHash, room }
+    if (room === null || token === null || token === '') return null
+    return { t: 'welcome', protocol, build, session, mapHash, room, token }
+  }
+
+  if (record['t'] === 'life') {
+    const event = asLifecycleEvent(record['event'])
+    const graceMs = asFiniteInteger(record['graceMs'])
+    const detail = asString(record['detail'], 256)
+    if (event === null || graceMs === null || detail === null) return null
+    // A negative countdown is a clock that ran backwards; a client that showed
+    // one would count *up* towards a forfeit that had already happened.
+    if (graceMs < 0) return null
+    return { t: 'life', event, graceMs, detail }
   }
 
   if (record['t'] === 'hash') {

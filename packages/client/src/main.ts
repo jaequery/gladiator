@@ -63,7 +63,15 @@ import { createInputController } from './input/controller.ts'
 import { advance, alphaOf } from './loop.ts'
 import { shouldSnap, slewMs } from './net/clockSync.ts'
 import { CLIENT_MAP, CLIENT_MAP_HASH } from './map.ts'
-import { createNetClient, isFatal, joinUrl, mustHoldStill, resolveServerUrl } from './net/client.ts'
+import {
+  createNetClient,
+  isFatal,
+  joinUrl,
+  mustHoldStill,
+  rejoinUrl,
+  resolveServerUrl,
+  type RedialContext,
+} from './net/client.ts'
 import { createEntityBuffer, createInterpolationClock } from './net/interpolate.ts'
 import { createListenServer } from './net/listenServer.ts'
 import { createPredictor } from './net/prediction.ts'
@@ -602,6 +610,15 @@ async function boot(): Promise<void> {
 
   let transport: Transport | null = null
   let endpoint = 'nowhere'
+  /**
+   * How to get a *new* pipe to the same seat, or `null` when there is no wire to
+   * break.
+   *
+   * A listen server deliberately has none: the host is an object in this tab, so
+   * a closed loopback means the tab is going away and there is nothing on the
+   * other side to reconnect to.
+   */
+  let redial: ((context: RedialContext) => Transport | null) | null = null
   if (listen !== null) {
     transport = listen.transport
     endpoint = 'the host in this tab'
@@ -613,6 +630,11 @@ async function boot(): Promise<void> {
     const url = joinUrl(serverUrl, window.location.search)
     transport = websocketTransport(url)
     endpoint = url
+    // The same URL with the seat's token on it, which is what turns a redial
+    // into a *reconnect* rather than a stranger arriving at a full room
+    // (GLAD-DVDV6P). Built from the original join URL so that a socket which
+    // died before the welcome still retries the room the player asked for.
+    redial = (context) => websocketTransport(rejoinUrl(url, context))
   }
 
   const net = createNetClient({
@@ -651,6 +673,21 @@ async function boot(): Promise<void> {
           `gladiator: correction of ${correction.distance.toFixed(1)} qu at tick ${correction.tick}`,
         )
       }
+    },
+    ...(redial === null ? {} : { redial }),
+    // A reconnect lands in a match that carried on without this tab: the body
+    // was standing still, rockets were fired at it, rounds may have been decided.
+    // So everything this client believed on its own is dropped — the
+    // unacknowledged commands, the correction it was smoothing, and the
+    // opponent's history it was drawing from — and the next snapshot is taken
+    // whole. Replaying input across a gap that long draws a journey nobody made.
+    onResume: () => {
+      const thrown = predictor.discard()
+      renderOffset.clear()
+      opponentHistory.clear()
+      opponentClock.reset()
+      snapped = true
+      console.warn(`gladiator: reconnected, dropped ${thrown} unacknowledged commands`)
     },
     ...(override === undefined ? {} : { protocolOverride: override }),
     ...(mapOverride === undefined ? {} : { mapHashOverride: mapOverride }),
@@ -869,6 +906,12 @@ async function boot(): Promise<void> {
     // housekeeping the clock-sync conversation rides on. On Fly the same two
     // calls are made by `scheduler.ts`; here they are made by the display.
     listen?.beat(nowMs)
+
+    // Whether a dropped connection's backoff has run out. Outside the branch
+    // below on purpose: while a reconnect is pending the world is held still, so
+    // nothing in there runs — including the flush that would otherwise have been
+    // the natural place for this (`net/client.ts`).
+    net.poll()
 
     // Input is sampled once per frame, not once per tick: a browser only
     // delivers mouse and key events between frames, so a per-tick sample would

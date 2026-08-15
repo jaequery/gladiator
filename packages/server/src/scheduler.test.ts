@@ -137,12 +137,17 @@ describe('aiming at the next boundary', () => {
     // whatever the timer did in between. A scheduler that kept its lateness
     // would come out short and the server's tick counter would walk away from
     // every client's estimate of it.
-    const { clock, timer, scheduler } = driven()
+    const { clock, timer, frames, scheduler } = driven()
     scheduler.start()
 
+    // Which frame this is comes off the recorded frames rather than out of
+    // `stats()`. They are the same number, and `stats()` sorts its whole
+    // lateness history to compute a percentile — which is the right cost ten
+    // times a second on `/healthz` and the wrong one 3,750 times in a loop, to
+    // the tune of several seconds of CI per run.
     const jitter = [0, 1, 4, 0, 2, 7, 1, 0, 3, 0, 5, 1]
     while (clock.nowMs() < 60_000) {
-      const late = jitter[scheduler.stats().frames % jitter.length] ?? 0
+      const late = jitter[frames.length % jitter.length] ?? 0
       const delayMs = timer.delayMs ?? HOST_FRAME_MS
       clock.advance(delayMs + late)
       timer.fire()
