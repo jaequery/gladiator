@@ -1,0 +1,264 @@
+/**
+ * The round and match state machine: what a death does, when a round ends, and
+ * what the next one starts from. `docs/physics-spec.md` §7.
+ *
+ * Rocket Arena's format, and it is four states and five edges:
+ *
+ * ```
+ *   Warmup --startMatch--> Live --somebody died------> Intermission --clock--> Live
+ *                            \    or the clock ran out      |
+ *                             \                             \--score reached--> Over
+ *                              \--score reached, or the round cap--------------> Over
+ * ```
+ *
+ * {@link advanceMatch} is a kernel phase and runs at the end of every sub-step,
+ * after damage has been dealt and rockets have been removed. That position is
+ * the contract: a death is visible to the round rules on the tick it happened,
+ * not the tick after, so two peers end the round on the same tick number.
+ *
+ * ## Three decisions worth naming
+ *
+ * **A round is over the instant a player dies — including when both do.** Two
+ * rockets that land on the same sub-step kill both players and the round is a
+ * draw, scored to nobody. It is rare and it is reachable, and the alternative —
+ * picking a winner by entity order — would hand the round to whoever happened
+ * to spawn first.
+ *
+ * **Rockets in the air are removed when a round ends, not detonated.** A round
+ * that has been decided cannot be un-decided by an explosion that arrives
+ * afterwards, and a winner who spends the intermission as a corpse is a winner
+ * the renderer has to draw dead. `explodeProjectile` stays for the fuse, which
+ * is a rocket ending inside a round rather than after one.
+ *
+ * **The clock decides a round on damage taken, not on a coin.** At the time
+ * limit the player with more health *plus armour* wins, because that is the
+ * figure both players actually spent the round trying to reduce. Exactly equal
+ * is a draw — two players who never found each other both have 200 — which is
+ * why {@link MatchRules.maxRounds} exists.
+ *
+ * ## What a round start resets
+ *
+ * All of it, through `spawnRound`: origin, facing, velocity, flags, health,
+ * armour, the weapon in hand, both fire timers and the knockback window. The
+ * entity itself is *reused* — same id, same slot — so a client interpolating an
+ * opponent sees them move rather than seeing one model vanish and a stranger
+ * appear (`spawn.ts`).
+ */
+
+import { EntityFlag, EntityKind, findPlayer, removeEntity } from '../state.ts'
+import type { EntityState, GameState } from '../state.ts'
+import { MatchPhase, NO_DEADLINE, NO_WINNER } from './match.ts'
+import { DUEL_SLOTS, spawnRound } from './spawn.ts'
+import type { SpawnPlan } from './spawn.ts'
+
+/* --------------------------------------------------------------------------
+ * Reading a round
+ * ----------------------------------------------------------------------- */
+
+/** Is this entity a player who is still standing? */
+function isAlive(entity: EntityState | null): entity is EntityState {
+  return entity !== null && (entity.flags & EntityFlag.Dead) === 0
+}
+
+/**
+ * What a player has left to lose: health plus armour.
+ *
+ * The tiebreaker at the time limit, and it is one number rather than two
+ * because armour is not a lesser kind of health here — it absorbs 66% of every
+ * hit (`selfDamage.ts`), so a player on 100/100 and a player on 200/0 are not
+ * equally close to dying, but they have both taken nothing, which is what the
+ * clock is asking about.
+ */
+export function damageReserve(entity: EntityState | null): number {
+  if (entity === null) return 0
+  return entity.health + entity.armor
+}
+
+/**
+ * Who won a round that has just ended, or {@link NO_WINNER} for a draw.
+ *
+ * `null` means the round is not over. Separated from the machine below so that
+ * "when does a round end" is a question with a testable answer rather than a
+ * branch inside a mutation.
+ */
+export function roundOutcome(state: GameState): number | null {
+  const match = state.match
+  const first = findPlayer(state, DUEL_SLOTS[0])
+  const second = findPlayer(state, DUEL_SLOTS[1])
+  const firstAlive = isAlive(first)
+  const secondAlive = isAlive(second)
+
+  // Last man standing, and "nobody standing" is a real answer — a mutual kill
+  // on one sub-step, or a telefrag that went both ways.
+  if (!firstAlive && !secondAlive) return NO_WINNER
+  if (!firstAlive) return DUEL_SLOTS[1]
+  if (!secondAlive) return DUEL_SLOTS[0]
+
+  if (match.phaseEndTick !== NO_DEADLINE && state.tick >= match.phaseEndTick) {
+    const firstReserve = damageReserve(first)
+    const secondReserve = damageReserve(second)
+    if (firstReserve === secondReserve) return NO_WINNER
+    return firstReserve > secondReserve ? DUEL_SLOTS[0] : DUEL_SLOTS[1]
+  }
+
+  return null
+}
+
+/* --------------------------------------------------------------------------
+ * Moving a match
+ * ----------------------------------------------------------------------- */
+
+/** Enter `phase` at the current tick, ending at `endTick`. */
+function enterPhase(state: GameState, phase: MatchPhase, endTick: number): void {
+  const match = state.match
+  match.phase = phase
+  match.phaseStartTick = state.tick
+  match.phaseEndTick = endTick
+}
+
+/**
+ * Remove every projectile in the world.
+ *
+ * Backwards, because removal splices the array being walked — the same reason
+ * the kernel's `expire` runs backwards, and it preserves the ascending-id order
+ * the state hash depends on.
+ */
+function clearProjectiles(state: GameState): void {
+  for (let i = state.entities.length - 1; i >= 0; i -= 1) {
+    const entity = state.entities[i]
+    if (entity === undefined) continue
+    if (entity.kind === EntityKind.Projectile) removeEntity(state, entity.id)
+  }
+}
+
+/**
+ * Start round `match.round + 1`: both bodies up, the clock reset, live.
+ *
+ * The two draws from `state.rng` happen inside `spawnRound`, which is what
+ * makes the whole match a function of the seed.
+ */
+function beginRound(state: GameState, plan: SpawnPlan): void {
+  const match = state.match
+  clearProjectiles(state)
+  spawnRound(state, plan)
+  match.round += 1
+  enterPhase(state, MatchPhase.Live, state.tick + match.rules.roundTimeLimitTicks)
+}
+
+/**
+ * Award a decided round and decide what happens next.
+ *
+ * A draw is scored to nobody and still consumes a round, which is the whole
+ * reason the round cap can be reached at all.
+ */
+function endRound(state: GameState, winner: number): void {
+  const match = state.match
+  const rules = match.rules
+
+  clearProjectiles(state)
+  match.lastRoundWinner = winner
+  if (winner === DUEL_SLOTS[0]) match.wins[0] += 1
+  else if (winner === DUEL_SLOTS[1]) match.wins[1] += 1
+
+  if (match.wins[0] >= rules.roundsToWin || match.wins[1] >= rules.roundsToWin) {
+    endMatch(state)
+    return
+  }
+
+  // The cap. A match that has run this long is one nobody is winning, and it
+  // ends on the score as it stands rather than on the next round that might
+  // also draw. See `maxRoundsFor`.
+  if (match.round >= rules.maxRounds) {
+    endMatch(state)
+    return
+  }
+
+  enterPhase(state, MatchPhase.Intermission, state.tick + rules.intermissionTicks)
+}
+
+/**
+ * End the match on the score as it stands.
+ *
+ * The winner is whoever has more rounds, and {@link NO_WINNER} if they are
+ * level — which only happens at the round cap, because reaching `roundsToWin`
+ * is by construction not a tie.
+ */
+function endMatch(state: GameState): void {
+  const match = state.match
+  match.winner =
+    match.wins[0] === match.wins[1]
+      ? NO_WINNER
+      : match.wins[0] > match.wins[1]
+        ? DUEL_SLOTS[0]
+        : DUEL_SLOTS[1]
+  enterPhase(state, MatchPhase.Over, NO_DEADLINE)
+}
+
+/**
+ * The plan a round needs, or a thrown sentence naming what is missing.
+ *
+ * A match cannot start a round without knowing which points it may start on,
+ * and the plan is a function of the map — level data that lives beside the
+ * state, like the `CollisionWorld` (`kernel.ts`). Throwing rather than quietly
+ * skipping the spawn is the point: a match that silently never started another
+ * round would look like a hung server.
+ */
+function requirePlan(plan: SpawnPlan | null): SpawnPlan {
+  if (plan === null) {
+    throw new RangeError(
+      'gladiator: this world is running a match but was ticked without a spawn plan, so a round has nowhere to start. Pass the plan built from the loaded map (buildSpawnPlan) to tick() or createKernel().',
+    )
+  }
+  return plan
+}
+
+/**
+ * Begin a match: round one, both players up, the clock running.
+ *
+ * The one edge out of {@link MatchPhase.Warmup}, and it is external because the
+ * simulation is not the layer that knows whether both players have arrived —
+ * that is the room's (GLAD-FHKBN8, GLAD-DVDV6P) and the listen server's
+ * (GLAD-4G4W2T). Everything after this happens by itself, in `advanceMatch`.
+ *
+ * Called *between* sub-steps rather than inside one, so the first tick of round
+ * one is a tick both players can act on.
+ */
+export function startMatch(state: GameState, plan: SpawnPlan): void {
+  const match = state.match
+  if (match.phase !== MatchPhase.Warmup) {
+    throw new RangeError(
+      `gladiator: startMatch was called on a match already in phase ${match.phase}; a match runs once and a new one needs a new match state.`,
+    )
+  }
+  match.round = 0
+  match.wins[0] = 0
+  match.wins[1] = 0
+  match.lastRoundWinner = NO_WINNER
+  match.winner = NO_WINNER
+  beginRound(state, plan)
+}
+
+/**
+ * Advance the match by one sub-step. The kernel's last phase.
+ *
+ * Runs after movement, weapons, projectiles and expiry, so everything it reads
+ * — who is dead, what a rocket did — is already true of this tick.
+ *
+ * Does nothing at all in {@link MatchPhase.Warmup} and {@link MatchPhase.Over},
+ * which is what makes a world with no match in it (the golden replay, every
+ * physics test, the walking skeleton) behave exactly as it did before this
+ * ticket existed.
+ */
+export function advanceMatch(state: GameState, plan: SpawnPlan | null = null): void {
+  const match = state.match
+
+  if (match.phase === MatchPhase.Live) {
+    const outcome = roundOutcome(state)
+    if (outcome !== null) endRound(state, outcome)
+    return
+  }
+
+  if (match.phase === MatchPhase.Intermission && state.tick >= match.phaseEndTick) {
+    beginRound(state, requirePlan(plan))
+  }
+}

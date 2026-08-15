@@ -14,9 +14,16 @@
  * is exactly the kind of thing two peers can come to disagree about, and it is
  * cheap to have the determinism gate watch it.
  *
- * The two of them survive the ten seconds on purpose — each ends on 51 health,
- * having paid for one rocket jump — because a fixture whose players are dead
- * halfway through stops exercising anything. Round rules are GLAD-L4SYN9's.
+ * They stand up at 100 health and 100 armour, the way a round starts them, and
+ * each pays for one rocket jump out of the armour — so the trace covers the
+ * armour path and the default `armor_only` self-damage rule as well as the
+ * splash that drives them (`match/selfDamage.ts`). Both survive the ten seconds
+ * on purpose, because a fixture whose players are dead halfway through stops
+ * exercising anything.
+ *
+ * The match itself stays in warmup. This is a fixture about a *sub-step*, and
+ * running rounds through it would mean re-baking the trace every time the round
+ * rules moved; `match/round.test.ts` is where a whole match is driven.
  *
  * ## What a failure here means
  *
@@ -53,8 +60,8 @@ export const GOLDEN_REPLAY: Replay = {
   durationTicks: 1250,
 
   spawns: [
-    { slot: 0, origin: [-320, 0, 0], yawDeg: 0, health: 100 },
-    { slot: 1, origin: [320, 0, 0], yawDeg: 180, health: 100 },
+    { slot: 0, origin: [-320, 0, 0], yawDeg: 0, health: 100, armor: 100 },
+    { slot: 1, origin: [320, 0, 0], yawDeg: 180, health: 100, armor: 100 },
   ],
 
   /**
@@ -107,25 +114,25 @@ export const GOLDEN_REPLAY: Replay = {
  * 62.5 ticks, rounded to the nearest tick. See `sampleTicks`.
  */
 export const GOLDEN_TRACE: readonly TraceSample[] = [
-  { tick: 0, timeMs: 0, hash: 'ac2ae0ad' },
-  { tick: 63, timeMs: 504, hash: '8f0cae48' },
-  { tick: 125, timeMs: 1000, hash: '76b9ecad' },
-  { tick: 188, timeMs: 1504, hash: '6469fe1b' },
-  { tick: 250, timeMs: 2000, hash: 'ace05785' },
-  { tick: 313, timeMs: 2504, hash: '20a6d0e4' },
-  { tick: 375, timeMs: 3000, hash: '952cf287' },
-  { tick: 438, timeMs: 3504, hash: '81913090' },
-  { tick: 500, timeMs: 4000, hash: '41663a37' },
-  { tick: 563, timeMs: 4504, hash: '05efb11f' },
-  { tick: 625, timeMs: 5000, hash: '21af00fc' },
-  { tick: 688, timeMs: 5504, hash: 'cfcd6972' },
-  { tick: 750, timeMs: 6000, hash: '20089882' },
-  { tick: 813, timeMs: 6504, hash: 'da618350' },
-  { tick: 875, timeMs: 7000, hash: '4ff0ec15' },
-  { tick: 938, timeMs: 7504, hash: 'c0819044' },
-  { tick: 1000, timeMs: 8000, hash: '810a76b8' },
-  { tick: 1063, timeMs: 8504, hash: '973f1b02' },
-  { tick: 1125, timeMs: 9000, hash: 'db6bf4f2' },
-  { tick: 1188, timeMs: 9504, hash: '5f347aae' },
-  { tick: 1250, timeMs: 10000, hash: '9e7c44aa' },
+  { tick: 0, timeMs: 0, hash: 'a305dfda' },
+  { tick: 63, timeMs: 504, hash: '582617d3' },
+  { tick: 125, timeMs: 1000, hash: '5bcf39aa' },
+  { tick: 188, timeMs: 1504, hash: '745177d8' },
+  { tick: 250, timeMs: 2000, hash: '6787ceb2' },
+  { tick: 313, timeMs: 2504, hash: 'a8c6c2f3' },
+  { tick: 375, timeMs: 3000, hash: '79f87d50' },
+  { tick: 438, timeMs: 3504, hash: '0abf4ae8' },
+  { tick: 500, timeMs: 4000, hash: '8fe46090' },
+  { tick: 563, timeMs: 4504, hash: '498b9048' },
+  { tick: 625, timeMs: 5000, hash: 'cce1925b' },
+  { tick: 688, timeMs: 5504, hash: '958ca529' },
+  { tick: 750, timeMs: 6000, hash: '00d20e21' },
+  { tick: 813, timeMs: 6504, hash: 'a1a100cf' },
+  { tick: 875, timeMs: 7000, hash: '3d9facce' },
+  { tick: 938, timeMs: 7504, hash: 'd233cba7' },
+  { tick: 1000, timeMs: 8000, hash: '2270d897' },
+  { tick: 1063, timeMs: 8504, hash: '29a7d2ed' },
+  { tick: 1125, timeMs: 9000, hash: '4e458c69' },
+  { tick: 1188, timeMs: 9504, hash: '511346d9' },
+  { tick: 1250, timeMs: 10000, hash: 'f3a5ab1d' },
 ]

@@ -11,10 +11,11 @@ import type { EntityState, GameState } from '../state.ts'
 import { SURFACE_CLIP_EPSILON, createTrace, traceRay } from '../trace.ts'
 import { yawUnitsFromDegrees } from '../usercmd.ts'
 import { NEVER_FIRED, Weapon } from '../weapon.ts'
+import { RESPAWN_DELAY_TICKS } from './match.ts'
 import {
   DUEL_SLOTS,
-  RESPAWN_DELAY_TICKS,
   SIGHT_TARGETS,
+  SPAWN_ARMOR,
   SPAWN_HEALTH,
   SPAWN_PROTECTION_TICKS,
   SPAWN_WEAPON,
@@ -337,8 +338,9 @@ describe('a spawned player', () => {
     expect([player.angles[0], player.angles[1], player.angles[2]]).toEqual([0, point.yaw, 0])
   })
 
-  it('starts at full health, standing still, with no flags carried over', () => {
+  it('starts at full health and armour, standing still, with no flags carried over', () => {
     expect(player.health).toBe(SPAWN_HEALTH)
+    expect(player.armor).toBe(SPAWN_ARMOR)
     expect([player.velocity[0], player.velocity[1], player.velocity[2]]).toEqual([0, 0, 0])
     expect(player.flags).toBe(0)
   })
@@ -368,10 +370,12 @@ describe('respawning between rounds', () => {
     // A round happens: the player dies, drifts, and is respawned.
     const player = playerIn(state, DUEL_SLOTS[0])
     player.health = 0
+    player.armor = 0
     player.flags = EntityFlag.Dead | EntityFlag.JumpHeld
     player.velocity[0] = 900
     player.weapon = Weapon.Railgun
     player.lastFireTick = state.tick
+    player.nextFireTick = state.tick + 500
     for (let i = 0; i < RESPAWN_DELAY_TICKS; i += 1) tick(state, NO_INPUTS, world)
 
     spawnRound(state, plan)
@@ -379,9 +383,12 @@ describe('respawning between rounds', () => {
 
     const revived = playerIn(state, DUEL_SLOTS[0])
     expect(revived.health).toBe(SPAWN_HEALTH)
+    expect(revived.armor).toBe(SPAWN_ARMOR)
     expect(revived.flags).toBe(0)
     expect(revived.velocity[0]).toBe(0)
     expect(revived.weapon).toBe(SPAWN_WEAPON)
+    // A refire interval is a cost inside a round, never across one.
+    expect(revived.nextFireTick).toBeLessThanOrEqual(state.tick)
     // A stale `lastFireTick` is a muzzle flash that keeps happening.
     expect(revived.lastFireTick).toBe(NEVER_FIRED)
     // `spawnTick` is the clock spawn protection would be measured against, so

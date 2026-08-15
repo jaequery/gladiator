@@ -129,6 +129,7 @@ export function dummyOpponent(tick: number, centre: Vec3): EntityState {
       0,
     ],
     health: dead ? 0 : 100,
+    armor: dead ? 0 : 100,
     weapon,
     // No shooting while it stands there, so the standstill actually reads as
     // `idle` rather than as a firing pose held over a motionless body.

@@ -219,10 +219,17 @@ state per frame silently skips whichever ticks shared one.
 ### Phase order
 
 `tick()` runs fixed phases, and the order is the contract later tickets build
-against: advance the PRNG, move players, fire weapons, move rockets, expire.
-Adding a phase means deciding where it goes, once, for everyone — and two of
-those adjacencies are mechanics rather than bookkeeping (see **The weapons
-layer**).
+against: advance the PRNG, move players, fire weapons, move rockets, expire,
+advance the match. Adding a phase means deciding where it goes, once, for
+everyone — and two of those adjacencies are mechanics rather than bookkeeping
+(see **The weapons layer**). The round rules run last, after damage has landed
+and rockets have gone, so a death is visible to them on the tick it happened.
+
+`tick()` is handed two things it never writes: the `CollisionWorld` and the
+`SpawnPlan`. Both are functions of the map, so neither is cloned, hashed or
+snapshotted. The plan may be `null` for a world with no match running in it —
+which is every physics test — and a running match ticked without one throws
+rather than quietly stopping between rounds.
 
 The *movement* phase has an order of its own, and it is not negotiable either:
 `docs/physics-spec.md` §1.5. `PM_CheckJump` runs before `PM_Friction`, and that
@@ -383,12 +390,11 @@ is asserted against the movement in `maps/arena1.test.ts`, and the two
 `packages/sim/src/match/spawn.ts`. Numbers and reasoning:
 `docs/physics-spec.md` §6.
 
-Three policies are decided there rather than discovered in a duel, and each one
-is a constant with the argument next to it: **telefrag** (the arrival lives, the
-occupant dies), **spawn protection** (`SPAWN_PROTECTION_TICKS` is zero, and the
-seam is `isSpawnProtected` so turning it on is one number), and
-`RESPAWN_DELAY_TICKS` (three seconds; GLAD-L4SYN9 owns the state machine that
-counts it).
+Two policies are decided there rather than discovered in a duel, and each one is
+a constant with the argument next to it: **telefrag** (the arrival lives, the
+occupant dies) and **spawn protection** (`SPAWN_PROTECTION_TICKS` is zero, and
+the seam is `isSpawnProtected` so turning it on is one number). The third — how
+long the gap between rounds is — belongs to the round rules below.
 
 The expensive half is geometry and it happens once. `buildSpawnPlan` works out
 which *pairs* of a map's spawns are far enough apart and cannot see each other —
@@ -407,6 +413,41 @@ Facing is an instruction rather than a value: the kernel overwrites `angles`
 from the next `UserCmd`, so a client has to adopt the spawn yaw into its own
 view angles (`packages/client/src/main.ts`) or the first command a player sends
 spins them back to due north.
+
+### The round and match rules
+
+`packages/sim/src/match/match.ts` (the shape), `match/round.ts` (the machine),
+`match/selfDamage.ts` (what a hit costs). Numbers and reasoning:
+`docs/physics-spec.md` §7 — which flags, at the top of that document, that its
+*Rocket Arena* details are reconstructed from a readme and community wikis
+rather than from source, unlike every Quake number in §0–§6.
+
+**The whole match is in `GameState`.** `state.match` carries the phase, the
+round number, the score, the phase clock and the `MatchRules` — so it is
+encoded, hashed, cloned and rewound with everything else, and a replay
+reproduces the match rather than only the physics. The rules are hashed even
+though nothing writes them: a rule that is not in the hash is a rule two peers
+can quietly disagree about.
+
+**A world with no match in it is a match in warmup**, and warmup does nothing.
+That is not a special case bolted on for the tests — it is what makes the golden
+replay, the walking skeleton and every physics test behave exactly as they did
+before there were round rules. `startMatch` is the single external edge out of
+it, because the simulation is not the layer that knows both players have
+arrived.
+
+Three things in there look like details and are rules:
+
+- **Armour absorbs 66% of every hit, rounded up** (Quake's `CheckArmor`), which
+  is what makes a duel take two rockets. **Knockback is derived before any of
+  that**, so all three self-damage modes launch a rocket jump at the same
+  500 qu/s and differ only in the bill. §7.2.
+- **A round ends the instant a player dies, including when both do** — a mutual
+  kill is a draw, and picking a winner by entity order would hand it to whoever
+  spawned first. A draw still costs a round, which is what makes the round cap
+  reachable, and the cap is what stops two passive players drawing forever.
+- **Rockets in the air are removed at a round end, not detonated.** A decided
+  round cannot be un-decided by an explosion that arrives afterwards.
 
 ### The golden replay
 

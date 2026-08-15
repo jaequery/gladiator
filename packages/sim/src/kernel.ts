@@ -29,14 +29,15 @@
  * the one surprising thing about the API and the cost of getting it wrong is a
  * bug that only shows up under packet loss.
  *
- * ## What is *not* here yet
+ * ## Level data sits beside the state, not in it
  *
- * Round rules (GLAD-L4SYN9): what a death does, when a round ends, and which of
- * the three self-damage modes is in force. A real map (GLAD-G2M8QQ,
- * GLAD-B8DI4J) replaces the `CollisionWorld` the kernel is handed rather than
- * any code in here. The phase order below is the contract those tickets build
- * against, and each of them will move the golden trace — which is what the
- * golden trace is for.
+ * A sub-step is handed two things it never writes: the `CollisionWorld` and the
+ * `SpawnPlan`. Both are functions of the map alone, so neither needs cloning
+ * for reconciliation, hashing, or a place in a snapshot — and two peers
+ * agreeing about the map is something the lobby settles before the first tick.
+ * The plan is what the round rules need to stand two players up
+ * (`match/round.ts`), and a world whose match is running is ticked without one
+ * throws rather than quietly stopping between rounds.
  *
  * The constants come from `tick.ts` and `pmove/` rather than being restated
  * here. Two names for one number is the drift this repo is built to prevent.
@@ -45,6 +46,9 @@
 import { SKELETON_ARENA } from './arena.ts'
 import { PLAYER_MAXS, PLAYER_MINS } from './bbox.ts'
 import type { CollisionWorld } from './collide.ts'
+import { acceptsCommands } from './match/match.ts'
+import { advanceMatch } from './match/round.ts'
+import type { SpawnPlan } from './match/spawn.ts'
 import { copyVec3 } from './math.ts'
 import { createPmoveBody, pmove } from './pmove/index.ts'
 import type { PmoveBody } from './pmove/index.ts'
@@ -93,6 +97,16 @@ export type Kernel = {
    */
   world: CollisionWorld
   /**
+   * Where a round may stand its two players, or `null` for a world with no
+   * match running in it.
+   *
+   * Level data like `world`, and beside the state for the same reasons. A
+   * kernel with no plan can still tick a match in warmup — which is every
+   * physics test and the walking skeleton — and throws the moment the round
+   * rules need somewhere to spawn.
+   */
+  plan: SpawnPlan | null
+  /**
    * Wall-clock milliseconds accumulated but not yet worth a sub-step.
    *
    * Always in `[0, TICK_INTERVAL_MS)`. Exactly, not approximately: `TICK_INTERVAL_MS` is 8, a
@@ -107,8 +121,9 @@ export type Kernel = {
 export function createKernel(
   state: GameState,
   world: CollisionWorld = SKELETON_ARENA,
+  plan: SpawnPlan | null = null,
 ): Kernel {
-  return { state, world, remainderMs: 0, steps: 0 }
+  return { state, world, plan, remainderMs: 0, steps: 0 }
 }
 
 /* --------------------------------------------------------------------------
@@ -163,7 +178,7 @@ export function advanceHost(
   kernel.remainderMs = accumulated - steps * TICK_INTERVAL_MS
 
   for (let i = 0; i < steps; i++) {
-    tick(kernel.state, commands(kernel.state.tick + 1), kernel.world)
+    tick(kernel.state, commands(kernel.state.tick + 1), kernel.world, kernel.plan)
     if (onTick !== undefined) onTick(kernel.state)
   }
 
@@ -188,11 +203,17 @@ export function advanceHost(
  * the jump it was meant to add to. And rockets moving last is what lets a
  * rocket fired this tick detonate on this tick, which is what the 50 ms
  * trajectory prestep is for (`projectile.ts`).
+ *
+ * The round rules run **last**, after damage has landed and rockets have been
+ * removed, so a death is visible to them on the tick it happened rather than
+ * the tick after. Two peers therefore end a round on the same tick number
+ * (`match/round.ts`).
  */
 export function tick(
   state: GameState,
   inputs: TickInputs,
   world: CollisionWorld = SKELETON_ARENA,
+  plan: SpawnPlan | null = null,
 ): void {
   state.tick += 1
 
@@ -203,10 +224,17 @@ export function tick(
   // the first tick, rather than only once some code happens to roll a die.
   advanceRng(state)
 
-  movePlayers(state, inputs, world)
-  fireWeapons(state, inputs, world)
+  // Between rounds and after the match, the world keeps simulating — gravity,
+  // friction, a body sliding to rest — and nobody can steer it. Warmup and a
+  // live round are the two phases in which a command reaches a body, which is
+  // why a world with no match started in it behaves exactly as it always did.
+  const steering = acceptsCommands(state.match)
+
+  movePlayers(state, inputs, world, steering)
+  if (steering) fireWeapons(state, inputs, world)
   moveProjectiles(state, world)
   expire(state)
+  advanceMatch(state, plan)
 }
 
 /**
@@ -222,19 +250,33 @@ export function tick(
  * A player with no command this sub-step is moved with `NULL_CMD` rather than
  * skipped. Gravity, friction and the ground trace all still have to run, or a
  * dropped packet would leave a player hanging in the air.
+ *
+ * The same is true of a body that is not allowed a command at all — a corpse,
+ * or anyone during an intermission. They are moved with `NULL_CMD` so they fall
+ * and slide to a stop, and their **angles are left alone**: writing a null
+ * command's zero yaw into them would snap every frozen body to due north, which
+ * is a thing a player would see.
  */
-function movePlayers(state: GameState, inputs: TickInputs, world: CollisionWorld): void {
+function movePlayers(
+  state: GameState,
+  inputs: TickInputs,
+  world: CollisionWorld,
+  steering: boolean,
+): void {
   for (const entity of state.entities) {
     if (entity.kind !== EntityKind.Player) continue
 
-    const cmd = (entity.slot < 0 ? null : inputs[entity.slot]) ?? NULL_CMD
+    const steered = steering && (entity.flags & EntityFlag.Dead) === 0
+    const cmd = (steered && entity.slot >= 0 ? inputs[entity.slot] : null) ?? NULL_CMD
 
     // Angle units in, angle units stored. `sanitizeUserCmd` has already wrapped
     // yaw and clamped pitch, so there is nothing to normalise here — which is
     // the point of quantising angles at the door rather than in the sim.
-    entity.angles[0] = cmd.pitch
-    entity.angles[1] = cmd.yaw
-    entity.angles[2] = 0
+    if (steered) {
+      entity.angles[0] = cmd.pitch
+      entity.angles[1] = cmd.yaw
+      entity.angles[2] = 0
+    }
 
     loadBody(scratchBody, entity)
     pmove(world, scratchBody, cmd, TICK_DT)
@@ -315,7 +357,7 @@ export function advanceTicks(
   onTick?: TickObserver,
 ): void {
   for (let i = 0; i < count; i++) {
-    tick(kernel.state, commands(kernel.state.tick + 1), kernel.world)
+    tick(kernel.state, commands(kernel.state.tick + 1), kernel.world, kernel.plan)
     if (onTick !== undefined) onTick(kernel.state)
   }
   kernel.steps += count

@@ -40,7 +40,6 @@ export {
   MAX_KNOCKBACK_TIME_MS,
   MIN_KNOCKBACK_TIME_MS,
   PLAYER_MASS,
-  SELF_DAMAGE_SCALE,
   SPLASH_UP_BIAS,
   applyDamage,
   canDamage,
@@ -152,9 +151,40 @@ export { formatDiagnostics, validateMap } from './map/validate.ts'
 export type { MapDiagnostic } from './map/validate.ts'
 
 export {
-  DUEL_SLOTS,
+  DEFAULT_MATCH_RULES,
+  DEFAULT_ROUNDS_TO_WIN,
+  MatchPhase,
+  NO_DEADLINE,
+  NO_WINNER,
   RESPAWN_DELAY_TICKS,
+  ROUND_TIME_LIMIT_TICKS,
+  acceptsCommands,
+  cloneMatchState,
+  createMatchState,
+  isMatchRunning,
+  matchRules,
+  maxRoundsFor,
+} from './match/match.ts'
+export type { MatchRules, MatchState } from './match/match.ts'
+
+export { advanceMatch, damageReserve, roundOutcome, startMatch } from './match/round.ts'
+
+export {
+  ARMOR_PROTECTION,
+  DEFAULT_SELF_DAMAGE,
+  MIN_DAMAGE,
+  SELF_DAMAGE_SCALE,
+  SelfDamage,
+  armorAbsorbed,
+  isSelfDamageMode,
+  resolveDamage,
+} from './match/selfDamage.ts'
+export type { DamageSplit, SelfDamageMode } from './match/selfDamage.ts'
+
+export {
+  DUEL_SLOTS,
   SIGHT_TARGETS,
+  SPAWN_ARMOR,
   SPAWN_HEALTH,
   SPAWN_PROTECTION_TICKS,
   SPAWN_WEAPON,

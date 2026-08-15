@@ -52,6 +52,9 @@ function standing(x = 0, y = 0): { state: GameState; player: EntityState } {
     // clear of it, exactly as `createSkeletonState` does.
     origin: vec3(x, y, SURFACE_CLIP_EPSILON),
     health: 100,
+    // What a round stands a player up with, and — under the default
+    // self-damage mode — the only thing a rocket jump can cost them.
+    armor: 100,
   })
   return { state, player }
 }
@@ -203,8 +206,9 @@ describe('the rocket jump', () => {
       kind: EntityKind.Player,
       slot: 0,
       origin: vec3(-1400, 0, SURFACE_CLIP_EPSILON),
-      // Enough to survive the self-damage; round rules are GLAD-L4SYN9's.
+      // Plenty of both, so this measures the climb rather than the round rules.
       health: 1000,
+      armor: 1000,
     })
 
     const run = cmd({ forwardMove: 1 })
@@ -231,13 +235,17 @@ describe('the rocket jump', () => {
     expect(ROCKET_JUMP_LAUNCH).toBe(500)
   })
 
-  it('costs half the damage it deals', () => {
+  it('costs a third of your armour and none of your health', () => {
     const { state, player } = standing()
     tick(state, [cmd({ pitch: DOWN, buttons: BUTTON_ATTACK })], WORLD)
 
-    // 100 points of splash, halved because it is your own — but the full 100
-    // went into the knockback first.
-    expect(player.health).toBe(50)
+    // 100 points of splash, halved because it is your own, and then absorbed by
+    // the armour — the default `armor_only` mode discards what is left rather
+    // than taking it out of your health (`match/selfDamage.ts`). The full 100
+    // went into the knockback before any of that, which is why the push below
+    // is unchanged and is the same in all three modes.
+    expect(player.armor).toBe(67)
+    expect(player.health).toBe(100)
     // Not exactly 500: the pitch clamp is 89 degrees rather than 90, so the
     // rocket drifts 0.8 units sideways over its first 45 and the push tilts by
     // a hair. Quake clamps the pitch for the same reason and pays the same

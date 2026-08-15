@@ -15,13 +15,19 @@
  *    from it.** So a rocket 48 units to your side deals 72, not 72.5, and
  *    pushes you at 360 qu/s, not 362.5. Knockback is a function of the damage
  *    the player *sees*.
- * 3. **Self-damage is halved after the knockback has been computed.** Rocket
- *    jumping exists in the gap between those two statements: you pay 50 health
- *    for 500 qu/s, not 250 qu/s for 50 health.
+ * 3. **The knockback is computed before anything is subtracted.** Rocket
+ *    jumping exists in the gap: the push comes off the full 100, and only then
+ *    is it decided what that 100 costs you. Which is why all three self-damage
+ *    modes (`match/selfDamage.ts`) launch you at the same 500 qu/s and differ
+ *    only in the bill.
  *
  * Knockback is always **added** to the velocity, never assigned. Two rockets
  * landing on the same tick throw you twice as far, and a rocket you jump into
  * keeps the jump.
+ *
+ * What a hit *costs* — how it is split between armour and health, and what your
+ * own splash costs you — is not decided here. `match/selfDamage.ts` owns that,
+ * as a pure function of numbers, and this file applies its answer.
  */
 
 import type { Vec3 } from './axis.ts'
@@ -29,6 +35,8 @@ import { DAMAGE_ORIGIN_HEIGHT, PLAYER_MAXS, PLAYER_MINS } from './bbox.ts'
 import type { CollisionWorld } from './collide.ts'
 import { normalizeVec3, setVec3, vec3 } from './math.ts'
 import type { MutVec3 } from './math.ts'
+import { resolveDamage } from './match/selfDamage.ts'
+import type { SelfDamageMode } from './match/selfDamage.ts'
 import { isSpawnProtected } from './match/spawn.ts'
 import { EntityFlag, EntityKind } from './state.ts'
 import type { EntityState, GameState } from './state.ts'
@@ -75,16 +83,6 @@ export const KNOCKBACK_DAMAGE_CAP = 200
  * players along the floor instead of into the air.
  */
 export const SPLASH_UP_BIAS = 24
-
-/**
- * The fraction of splash damage you take from your own rocket. **Half**.
- *
- * Applied to the health loss only, after the knockback has already been
- * computed from the full figure — see the header. Round rules (GLAD-L4SYN9)
- * choose between three self-damage modes and will pass its own scale in; this
- * is the default and the one every number in `docs/physics-spec.md` §3 assumes.
- */
-export const SELF_DAMAGE_SCALE = 0.5
 
 /** The shortest knockback window, in ms. Quake 3's `if ( t < 50 ) t = 50`. */
 export const MIN_KNOCKBACK_TIME_MS = 50
@@ -134,12 +132,14 @@ export function knockbackTicksFor(damage: number): number {
  * its `z`, and the length of that vector is meaningless.
  *
  * `attackerId` is the entity that caused it, which is the same entity for
- * self-damage. `selfScale` is what a self-inflicted hit costs in health, and
- * exists as a parameter so that GLAD-L4SYN9 can offer the three self-damage
- * modes without touching this file.
+ * self-damage. `mode` is which self-damage rule is in force and defaults to the
+ * match's own, so a caller inside a tick never has to thread it — the state
+ * already knows (`match/match.ts`). It is still a parameter, because the tests
+ * for the three modes want to state which one they mean.
  *
- * Returns the health actually removed, which is not `points` when the target
- * damaged itself.
+ * Returns the points the target actually absorbed — armour plus health — which
+ * is zero for a hit that spawn protection or a self-damage mode threw away, and
+ * is *not* `points` whenever either armour or the halving got involved.
  */
 export function applyDamage(
   state: GameState,
@@ -147,7 +147,7 @@ export function applyDamage(
   attackerId: number,
   dir: Vec3,
   points: number,
-  selfScale: number = SELF_DAMAGE_SCALE,
+  mode: SelfDamageMode = state.match.rules.selfDamage,
 ): number {
   if (points <= 0) return 0
   if ((target.flags & EntityFlag.Dead) !== 0) return 0
@@ -159,9 +159,10 @@ export function applyDamage(
   // protection that also cancelled a rocket jump would change the movement.
   if (target.id !== attackerId && isSpawnProtected(state, target)) return 0
 
-  // The push is computed from the *full* damage, before the self-damage scale
-  // is applied to the health loss below. That ordering is Quake's and it is the
-  // whole reason a rocket jump is worth the health it costs.
+  // The push is computed from the *full* damage, before anything below decides
+  // what that damage costs. That ordering is Quake's, and it is the whole
+  // reason a rocket jump is worth what it costs — and the reason all three
+  // self-damage modes launch you identically.
   if (target.kind === EntityKind.Player) {
     const length = normalizeVec3(pushDir, dir)
     if (length > 0) {
@@ -178,11 +179,12 @@ export function applyDamage(
     }
   }
 
-  const taken = target.id === attackerId ? points * selfScale : points
-  target.health -= taken
+  const split = resolveDamage(mode, target.id === attackerId, points, target.armor)
+  target.armor -= split.armor
+  target.health -= split.health
   if (target.health <= 0) target.flags |= EntityFlag.Dead
 
-  return taken
+  return split.armor + split.health
 }
 
 const pushDir: MutVec3 = vec3()
@@ -285,7 +287,7 @@ export function radiusDamage(
   radius: number,
   attackerId: number,
   ignoreId: number,
-  selfScale: number = SELF_DAMAGE_SCALE,
+  mode: SelfDamageMode = state.match.rules.selfDamage,
 ): number {
   if (radius < 1) return 0
 
@@ -317,7 +319,7 @@ export function radiusDamage(
       target.origin[2] + DAMAGE_ORIGIN_HEIGHT - point[2] + SPLASH_UP_BIAS,
     )
 
-    if (applyDamage(state, target, attackerId, splashDir, points, selfScale) > 0) hits += 1
+    if (applyDamage(state, target, attackerId, splashDir, points, mode) > 0) hits += 1
   }
 
   return hits

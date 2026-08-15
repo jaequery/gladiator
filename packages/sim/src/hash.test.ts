@@ -60,10 +60,13 @@ describe('state hash', () => {
       (e) => (e.angles[1] = 1),
       (e) => (e.angles[2] = 1),
       (e) => (e.health = 99),
+      (e) => (e.armor = 99),
       (e) => (e.weapon = Weapon.Railgun),
       (e) => (e.lastFireTick = 0),
       (e) => (e.knockbackTicks = 1),
       (e) => (e.ownerId = 7),
+      (e) => (e.nextFireTick = 1),
+      (e) => (e.trBase[0] = 1),
       (e) => (e.spawnTick = 1),
       (e) => (e.expireTick = 1),
     ]
@@ -91,7 +94,7 @@ describe('state hash', () => {
     // A golden value. If this changes, either the state shape changed or the
     // digest did — and both are things a reviewer should be made to look at,
     // because every deployed client and server has to agree on it.
-    expect(formatHash(hashState(oneStandingPlayer()))).toBe('4f21cd27')
+    expect(formatHash(hashState(oneStandingPlayer()))).toBe('c3136a14')
   })
 })
 

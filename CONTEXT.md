@@ -19,16 +19,28 @@ lose a round by dying. Gladiator reproduces its format, not its assets.
 
 **Duel** — a 1v1 match.
 
-**Round** — one life each. Ends when a player dies or the round timer expires.
+**Round** — one life each. Ends when a player dies or the round timer expires;
+both dying on the same sub-step is a draw. `docs/physics-spec.md` §7.4.
 
-**Match** — a sequence of rounds, first to *N*. Rules in GLAD-L4SYN9.
+**Match** — a sequence of rounds, first to *N*. Three, by default — a
+best-of-five. §7.
+
+**Match phase** — where a match is in its life: `warmup`, `live`,
+`intermission`, `over`. A player's commands reach their body in the first two
+and not in the other two. `packages/sim/src/match/match.ts`; §7.3.
 
 **Arena** — the map a match is played on. Gladiator ships one: `arena1`,
 "Crucible" (GLAD-B8DI4J).
 
-**Self-damage** — taking splash from your own rocket. Gladiator supports three
-modes because the choice changes the skill ceiling, not just the numbers
-(GLAD-L4SYN9).
+**Armour** — a second pool of 100 points, spawned with and never picked up. It
+absorbs 66% of every hit, rounded up, until it runs out — which is why a duel
+takes two rockets rather than one. §7.1.
+
+**Self-damage** — taking splash from your own rocket. Three modes, because the
+choice changes the skill ceiling and not just the numbers: `full` (Quake's
+halving), **`armor_only`** (the default: the armour pays and the health
+remainder is discarded), and `none`. The launch is 500 qu/s in all three, because
+knockback is derived before any of them apply. §7.2.
 
 **Rocket jump** — firing a rocket at your feet and riding the splash impulse.
 The reason self-damage exists. Worth 500 qu/s standing and 770 with a jump on
@@ -52,7 +64,8 @@ what lets the wire mention a rocket exactly once. `docs/physics-spec.md` §3.2.
 
 **Refire** — the interval between shots, and the only thing that gates one.
 800 ms for the rocket launcher, 1500 ms for the railgun, on a single timer both
-weapons share. There is no ammunition anywhere in the simulation.
+weapons share. There is no ammunition anywhere in the simulation. Reset at a
+round start: a refire interval is a cost inside a round, never across one.
 
 **Strafe jump** — gaining speed by holding a strafe key and turning into it
 mid-air, exploiting how Quake's `pmove` projects acceleration onto velocity.

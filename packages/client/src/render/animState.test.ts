@@ -52,6 +52,7 @@ function entity(patch: EntityPatch = {}): EntityState {
     velocity: patch.velocity ?? [0, 0, 0],
     angles: patch.angles ?? [0, 0, 0],
     health: patch.health ?? 100,
+    armor: 100,
     weapon: patch.weapon ?? Weapon.RocketLauncher,
     lastFireTick: patch.lastFireTick ?? NEVER_FIRED,
     knockbackTicks: 0,
