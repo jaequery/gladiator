@@ -20,7 +20,7 @@
  * ## `lastFireTick` is state, not an event
  *
  * "This player fired" could have been a message. It is a tick number instead,
- * for the same reason `Snapshot` carries state rather than events: a client
+ * for the same reason a snapshot carries state rather than events: a client
  * that misses one snapshot and receives the next has lost a frame of
  * interpolation and nothing else. A fire *event* dropped in transit is a muzzle
  * flash that never happens; a fire *tick* is still there in the next snapshot,

@@ -12,6 +12,7 @@ import {
   SKELETON_SEED,
   TransportState,
   UNKNOWN_RTT,
+  applyWireState,
   createMapState,
   hashState,
   parseServerMessage,
@@ -102,8 +103,18 @@ describe('seating a peer', () => {
 
     expect(room.tick).toBe(40)
     expect(room.hash()).toBe(hashState(expected))
-    const last = heard[heard.length - 1]
-    expect(last).toEqual({ t: 'hash', tick: 40, hash: hashState(expected) })
+
+    // A batch is answered with the hash and then the world it is the hash of.
+    // The order is the one `session.ts` argues for: the hash says whether what
+    // the client *predicted* matched, which stops having an answer the moment
+    // the snapshot behind it has been adopted.
+    const [hashFrame, snapFrame] = heard.slice(-2)
+    expect(hashFrame).toEqual({ t: 'hash', tick: 40, hash: hashState(expected) })
+    if (snapFrame?.t !== 'snap') throw new Error('the room sent no snapshot')
+    expect(snapFrame.ack).toBe(40)
+    const rebuilt = createMapState(SERVER_MAP.source, SKELETON_SEED)
+    expect(applyWireState(rebuilt, snapFrame.state)).toBe(true)
+    expect(hashState(rebuilt)).toBe(hashState(expected))
   })
 
   it('refuses a peer it has no seat for, and says why', async () => {

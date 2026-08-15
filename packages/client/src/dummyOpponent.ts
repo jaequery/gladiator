@@ -1,10 +1,11 @@
 /**
  * A scripted opponent, for looking at.
  *
- * Nothing sends snapshots yet — the server tick scheduler is GLAD-FHKBN8 and
- * entity interpolation is GLAD-6RT64L — so without this there is no way to see
- * the opponent model at all until two tickets that do not depend on this one
- * have landed. `?dummy=1` fills the gap: a second player who runs a circle,
+ * Snapshots do arrive now, and `net/interpolate.ts` draws whatever is in them
+ * (GLAD-6RT64L) — but a room still seats one peer, so there is nobody in them
+ * to draw until the scheduler can seat two (GLAD-FHKBN8). `?dummy=1` fills the
+ * gap, and `main.ts` only reaches for it when the interpolation buffer has
+ * nothing of its own to show. A second player who runs a circle,
  * jumps, fires, switches weapons, stands still and dies — every animation state
  * in one twenty-second loop, watchable in a real browser rather than only
  * asserted in a test.

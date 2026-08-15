@@ -4,14 +4,18 @@
  * One frame does, in order:
  *
  *   1. read the clock once, and turn elapsed wall-clock into whole ticks
- *   2. for each tick: sample input, `tick()`, hash, queue the command
+ *   2. for each tick: sample input, predict, hash, queue the command
  *   3. flush the queued commands as one frame to the server
- *   4. draw the interpolated result
+ *   4. draw the local player interpolated, and everyone else 80 ms in the past
  *
  * The order is the point. The simulation never sees a clock; the renderer never
  * decides where anything is; the network never advances the world. Everything
- * this project adds later — prediction, lag compensation, a bot — hangs off
- * this shape.
+ * this project adds later — lag compensation, a bot — hangs off this shape.
+ *
+ * Snapshots do not arrive on this path at all. They land on the socket, are
+ * adopted by `net/prediction.ts` the moment they do, and the frame loop reads
+ * the result — which is why there is no "apply the network" step in the list
+ * above, and why a snapshot that lands mid-frame cannot half-apply.
  *
  * The clock is read **once**, here, and the elapsed interval is passed to
  * everything that needs it. A renderer that read `performance.now()` itself
@@ -20,10 +24,10 @@
 import {
   ANGLE_UNITS_PER_DEGREE,
   EntityFlag,
+  EntityKind,
   SKELETON_SEED,
   TICK_INTERVAL_MS,
   TICK_RATE,
-  cloneGameState,
   createMapState,
   findPlayer,
   type GameState,
@@ -32,7 +36,6 @@ import {
   onSpeedClamp,
   type Transport,
   type Vec3,
-  tick as simTick,
 } from '@gladiator/sim'
 
 import {
@@ -54,10 +57,14 @@ import { createInputController } from './input/controller.ts'
 import { advance, alphaOf } from './loop.ts'
 import { CLIENT_MAP, CLIENT_MAP_HASH } from './map.ts'
 import { createNetClient, isFatal, mustHoldStill, resolveServerUrl } from './net/client.ts'
+import { createEntityBuffer, createInterpolationClock } from './net/interpolate.ts'
 import { createListenServer } from './net/listenServer.ts'
+import { createPredictor } from './net/prediction.ts'
+import { CorrectionBand, decayMsFor } from './net/reconcile.ts'
 import { websocketTransport } from './net/websocketTransport.ts'
 import { type PlayerNetState, playerNetState } from './render/animState.ts'
 import { FRAME_BUDGET_MS, type FrameVerdict } from './render/frameStats.ts'
+import { createRenderOffset, withRenderOffset } from './render/renderOffset.ts'
 import { type Renderer, createRenderer } from './render/renderer.ts'
 import { REFERENCE_VIEW, interpolateNetState, interpolateOrigin } from './render/view.ts'
 import { demoMode, demoModel } from './ui/demo.ts'
@@ -274,10 +281,11 @@ const DUMMY_CENTRE: Vec3 = [0, 0, 0]
 /**
  * The scripted opponent, interpolated between two ticks.
  *
- * Deliberately the same path a real snapshot pair will take: two `EntityState`s
- * a tick apart, through `playerNetState` and `interpolateNetState`. When
- * GLAD-6RT64L starts delivering real ones, what changes is where the two states
- * come from and nothing else.
+ * Deliberately the same path a real snapshot pair takes: two `EntityState`s a
+ * tick apart, through `playerNetState` and `interpolateNetState`. Real
+ * snapshots arrive now and `net/interpolate.ts` draws them; this is only
+ * reached when the buffer has nobody in it, which is a room that has seated one
+ * peer (GLAD-FHKBN8).
  */
 function dummyAt(tick: number, alpha: number): PlayerNetState {
   return interpolateNetState(
@@ -407,6 +415,38 @@ async function boot(): Promise<void> {
   const override = protocolOverride(window.location.search)
   const mapOverride = mapHashOverride(window.location.search)
 
+  // The world, and the world drawn, are now the same list of brushes.
+  //
+  // `arena.ts` kept the simulation on its own hard-coded box while the renderer
+  // still drew one, and said out loud that moving the sim onto a map nothing
+  // drew would trade a cosmetic gap for invisible walls. The map ticket is what
+  // makes that condition false: the renderer draws `testbed`'s brushes, so the
+  // simulation traces against `testbed`'s brushes, and the server does the same
+  // from the same artifact. `SKELETON_ARENA` stays as the sim's own default and
+  // as the golden replay's world.
+  //
+  // It is created before the socket because prediction owns it and the socket
+  // hands prediction its corrections: a snapshot can land on the very first
+  // frame, and a world that did not exist yet would be a world that quietly
+  // dropped one.
+  const state = createMapState(CLIENT_MAP.source, SKELETON_SEED)
+
+  // The three techniques that make an authoritative server feel local, and the
+  // one value that keeps the third of them out of the simulation.
+  //
+  // `prediction.ts` advances `state` from this tab's own input and replays it on
+  // top of every snapshot; `interpolate.ts` draws everyone else 80 ms in the
+  // past from real data, on a clock of its own; `renderOffset.ts` holds whatever
+  // a correction moved and gives it back over a tenth of a second, *outside* the
+  // state, because a world left half-corrected is the world the next replay
+  // starts from.
+  const predictor = createPredictor({ state, world: CLIENT_MAP.world, slot: LOCAL_SLOT })
+  const opponentHistory = createEntityBuffer({ localSlot: LOCAL_SLOT })
+  const opponentClock = createInterpolationClock()
+  const renderOffset = createRenderOffset()
+  /** Set by a hard snap; the frame loop throws the queued ticks away and clears it. */
+  let snapped = false
+
   // Which pipe, and nothing else. Everything below this line cannot tell a
   // socket to Fly from a `Room` running in this tab — which is the claim the
   // listen-server pattern makes, and the reason there is no offline branch
@@ -435,21 +475,42 @@ async function boot(): Promise<void> {
     endpoint,
     build: BUILD,
     mapHash: CLIENT_MAP_HASH,
+    onSnapshot: (snapshot) => {
+      // The history first. `accept` overwrites the world with this state and
+      // then replays our unacknowledged commands on top of it, so the
+      // authoritative entities the interpolator wants are gone by the time it
+      // returns.
+      opponentHistory.push(snapshot.state)
+
+      const correction = predictor.accept(snapshot)
+      if (correction === null) return
+
+      if (correction.band === CorrectionBand.Snap) {
+        // Past a splash radius there is nothing honest left to smooth: the
+        // player is somewhere else, and carrying 200 units of offset would draw
+        // them somewhere they demonstrably are not.
+        renderOffset.clear()
+        snapped = true
+        console.warn(
+          `gladiator: hard snap of ${correction.distance.toFixed(0)} qu at tick ${correction.tick}`,
+        )
+        return
+      }
+
+      renderOffset.push(correction.offset, decayMsFor(correction.band))
+      if (correction.band === CorrectionBand.Loud) {
+        // Logged rather than silently smoothed. Thirty units is past what a
+        // couple of unpredicted ticks can account for, so it is worth knowing
+        // that it happened even though the player will not see it.
+        console.warn(
+          `gladiator: correction of ${correction.distance.toFixed(1)} qu at tick ${correction.tick}`,
+        )
+      }
+    },
     ...(override === undefined ? {} : { protocolOverride: override }),
     ...(mapOverride === undefined ? {} : { mapHashOverride: mapOverride }),
   })
   if (!shot) net.connect()
-
-  // The world, and the world drawn, are now the same list of brushes.
-  //
-  // `arena.ts` kept the simulation on its own hard-coded box while the renderer
-  // still drew one, and said out loud that moving the sim onto a map nothing
-  // drew would trade a cosmetic gap for invisible walls. This ticket is what
-  // makes that condition false: the renderer draws `testbed`'s brushes, so the
-  // simulation traces against `testbed`'s brushes, and the server does the same
-  // from the same artifact. `SKELETON_ARENA` stays as the sim's own default and
-  // as the golden replay's world.
-  const state = createMapState(CLIENT_MAP.source, SKELETON_SEED)
 
   // Adopt the yaw the spawn point was authored with.
   //
@@ -464,10 +525,10 @@ async function boot(): Promise<void> {
   const spawned = findPlayer(state, LOCAL_SLOT)
   if (spawned !== null) input.angles.yawDegrees = spawned.angles[1] / ANGLE_UNITS_PER_DEGREE
 
-  // `tick()` advances the world in place, so the frame before is a *copy* —
-  // `AGENTS.md` says this out loud because holding a reference instead is a bug
-  // that only shows up as a rendering stutter.
-  let previous = cloneGameState(state)
+  // Where the eye was one tick ago lives in the predictor, which keeps one
+  // vector rather than a cloned world — and, crucially, *moves* it when a
+  // correction lands, so the frame's interpolation carries the motion it would
+  // have carried anyway and the whole discontinuity is the render offset's.
   let clientHash = hashState(state)
   let accumulatorMs = 0
   let lastFrameMs = performance.now()
@@ -629,30 +690,67 @@ async function boot(): Promise<void> {
       // and it is a broken clock.
       accumulatorMs = 0
     } else {
+      if (snapped) {
+        // A hard snap landed since the last frame. The ticks the accumulator
+        // had queued behind it were queued against a world that turned out to
+        // be wrong, so they are thrown away rather than simulated forward from
+        // a position nobody was ever in. `net/reconcile.ts`.
+        accumulatorMs = 0
+        snapped = false
+      }
       const step = advance(accumulatorMs, elapsedMs)
       accumulatorMs = step.accumulatorMs
       for (let i = 0; i < step.ticks; i += 1) {
-        previous = cloneGameState(state)
-        simTick(state, [cmd], CLIENT_MAP.world)
-        clientHash = hashState(state)
+        clientHash = predictor.predict(cmd)
         net.record(state.tick, clientHash)
         net.queue(state.tick, cmd)
       }
       net.flush()
     }
 
+    // Two clocks that are not the simulation's, advanced once a frame: the one
+    // that gives a correction back to the camera, and the one that decides how
+    // far in the past everyone else is drawn.
+    renderOffset.advance(elapsedMs)
+    opponentClock.advance(elapsedMs, opponentHistory.newestTick)
+
     const alpha = alphaOf(accumulatorMs)
     // The viewmodel needs the local player's weapon and last shot, and nothing
     // about its position: it hangs off the camera, which is interpolated
     // already. So this is the newest netstate rather than an interpolated one.
     const self = netStateOf(state, LOCAL_SLOT)
-    const opponents = dummy ? [dummyAt(state.tick, alpha)] : []
+
+    // Everyone else, from real data, on the interpolation clock — never
+    // predicted, because this client has no knowledge of their future input.
+    // The scripted stand-in is only reached when nothing is sending snapshots,
+    // which is a page with no host on the other end of it.
+    // Players only. The buffer holds every entity that is not ours — a rocket
+    // we fired is one of them — and a rocket in flight is not a reason to stop
+    // drawing the scripted stand-in.
+    const drawnPlayers = opponentHistory
+      .sample(opponentClock.renderTick)
+      .entities.flatMap((entity) =>
+        entity.kind === EntityKind.Player ? [playerNetState(entity)] : [],
+      )
+    const opponents: PlayerNetState[] =
+      drawnPlayers.length > 0 ? drawnPlayers : dummy ? [dummyAt(state.tick, alpha)] : []
 
     // The eye, interpolated once and used twice: the camera is put here and so
     // is the listener. Literally the same vector, because ears half a tick from
     // the picture would put every sound at a slightly different angle than the
     // thing making it.
-    const eye = interpolateOrigin({ origin: originOf(previous) }, { origin: originOf(state) }, alpha)
+    //
+    // The render offset is added *after* the interpolation and never anywhere
+    // else. It is what a correction owes the camera, and it is deliberately not
+    // in the simulation: see `render/renderOffset.ts`.
+    const eye = withRenderOffset(
+      interpolateOrigin(
+        { origin: predictor.previousOrigin },
+        { origin: originOf(state) },
+        alpha,
+      ),
+      renderOffset.value,
+    )
 
     // Both are written from simulation state rather than read back from
     // anything (`audio/positional.ts`), and the netstates the renderer is about
@@ -720,6 +818,8 @@ async function boot(): Promise<void> {
       clientHash,
       locked: input.locked,
       net: net.snapshot(),
+      corrected: predictor.stats.soft + predictor.stats.loud + predictor.stats.snaps,
+      pending: predictor.pending,
     })
 
     window.requestAnimationFrame(frame)

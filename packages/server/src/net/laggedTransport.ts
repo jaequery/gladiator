@@ -29,6 +29,28 @@
  * player runs. Single-player ships at ~0 ms, because the selling point of the
  * mode is feel and self-inflicted lag is the one thing guaranteed to ruin it.
  *
+ * ## Loss is a stall, unless you ask for a gap
+ *
+ * The transport is a WebSocket, which is TCP, and TCP does not lose data — it
+ * *retransmits* it. A lost segment therefore costs about a round trip and holds
+ * every byte behind it while it is refetched, and the receiver sees a stall
+ * followed by a burst rather than a hole. Modelling it as a hole is the
+ * UDP-flavoured mistake that makes an interpolation buffer look like it covers
+ * loss, when what it covers is jitter and reordering.
+ *
+ * So {@link LagProfile.retransmitMs} is how long a lost frame is held before it
+ * arrives anyway, and — the load-bearing half — the frames behind it are held
+ * with it, because a stalled stream stalls. Setting it to zero gives the old
+ * behaviour: the frame is gone for good, which is a *datagram* and a deliberate
+ * violation of the `Transport` contract, kept for the same reason
+ * `reorderChance` is (`sim/src/transport.ts` lists what would break).
+ *
+ * The decision reuses the loss draw rather than adding a fifth: the question
+ * "was this segment lost" is the same question either way, and the profile only
+ * changes what happens next. That keeps the four-draws-per-frame discipline
+ * below exactly as it was, so a profile that turns retransmission on makes the
+ * *same* frames go missing as the one that does not.
+ *
  * ## Jitter does not reorder; `reorderChance` does
  *
  * A `Transport` is specified to deliver every message exactly once and in
@@ -70,8 +92,23 @@ export type LagProfile = {
   readonly latencyMs: number
   /** Added to `latencyMs`, uniform in `[0, jitterMs)`. */
   readonly jitterMs: number
-  /** Chance in `[0, 1]` that a frame is thrown away and never arrives. */
+  /**
+   * Chance in `[0, 1]` that a frame is lost in transit.
+   *
+   * What "lost" costs is {@link LagProfile.retransmitMs}: on a TCP link the
+   * frame arrives late and holds the stream up behind it, and on an unreliable
+   * one it never arrives at all.
+   */
   readonly lossChance: number
+  /**
+   * How long a lost frame is held before its retransmission lands, in
+   * milliseconds — and how long everything queued behind it is held too.
+   *
+   * About one round trip is the honest number for TCP. **Zero means the frame
+   * is dropped**, which is a datagram and a deliberate violation of the
+   * `Transport` contract. See the header.
+   */
+  readonly retransmitMs: number
   /** Chance a frame arrives twice. */
   readonly duplicateChance: number
   /** Chance a frame is held back far enough that later ones overtake it. */
@@ -87,6 +124,7 @@ export const NO_LAG: LagProfile = {
   latencyMs: 0,
   jitterMs: 0,
   lossChance: 0,
+  retransmitMs: 0,
   duplicateChance: 0,
   reorderChance: 0,
   reorderMs: 0,
@@ -102,6 +140,8 @@ export const TYPICAL_LAG: LagProfile = {
   latencyMs: 40,
   jitterMs: 8,
   lossChance: 0.01,
+  // One round trip's worth of refetch, which is what a real TCP link charges.
+  retransmitMs: 80,
   reorderMs: 30,
   seed: 0x9e3779b9,
 }
@@ -113,7 +153,10 @@ export type LagStats = {
   readonly received: number
   /** Frames released by `pump`, in either direction. Duplicates count twice. */
   readonly delivered: number
+  /** Frames the loss draw picked and `retransmitMs` did not rescue. */
   readonly dropped: number
+  /** Frames retransmitted: late, and holding up everything behind them. */
+  readonly stalled: number
   readonly duplicated: number
   readonly reordered: number
 }
@@ -175,6 +218,7 @@ export function laggedTransport(
     received: 0,
     delivered: 0,
     dropped: 0,
+    stalled: 0,
     duplicated: 0,
     reordered: 0,
   }
@@ -190,12 +234,19 @@ export function laggedTransport(
     const reordered = rngChance(rng, settings.reorderChance)
     const duplicated = rngChance(rng, settings.duplicateChance)
 
-    if (lost) {
+    if (lost && settings.retransmitMs <= 0) {
       stats.dropped += 1
       return
     }
 
-    const arrival = nowMs + settings.latencyMs + jitter
+    // A retransmission is late *and* blocking: the frame itself is held for the
+    // refetch, and because `lastDueMs` moves with it, everything queued behind
+    // it is held too. That head-of-line block is the whole difference between a
+    // TCP stall and a UDP gap, and it is what an interpolation buffer sized for
+    // jitter does not cover.
+    const arrival = nowMs + settings.latencyMs + jitter + (lost ? settings.retransmitMs : 0)
+    if (lost) stats.stalled += 1
+
     let dueMs: number
     if (reordered) {
       // Deliberately out of line, and deliberately not moving the line: the

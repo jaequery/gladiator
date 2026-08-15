@@ -41,6 +41,7 @@ import {
   hashState,
   parseClientMessage,
   tick as simTick,
+  snapshotFrame,
 } from '@gladiator/sim'
 
 /**
@@ -133,11 +134,17 @@ export function createSession(id: string, sim: SessionSim, slot = 0): SessionSta
 /**
  * Apply one already-parsed frame.
  *
- * The reply to a command batch is a single hash, at the last tick applied —
- * not one per tick. At 125 Hz a hash per tick would be 125 frames a second in
- * the other direction to say "still fine", and the client is comparing against
- * its own history anyway, so one per batch finds a desync within a frame of it
- * happening at a fraction of the traffic.
+ * The reply to a command batch is a hash and a snapshot, both at the last tick
+ * applied — not one per tick. At 125 Hz a frame per tick would be 125 frames a
+ * second in the other direction to say "still fine", and the client is
+ * comparing against its own history anyway, so one per batch finds a desync
+ * within a frame of it happening at a fraction of the traffic.
+ *
+ * The hash comes first, and the order is not cosmetic. It is the canary the
+ * walking skeleton was built around: it says whether the world the client
+ * *predicted* matched, which is a question that stops having an answer the
+ * moment the snapshot behind it has been adopted. Reconciliation reads the
+ * second frame; the instrument reads the first.
  */
 export function applyMessage(
   session: SessionState,
@@ -213,9 +220,11 @@ export function applyMessage(
   if (message.t === 'pong') return { session, replies: [] }
 
   // A batch that does not start where we left off means frames were lost or
-  // reordered. Counted rather than corrected: reconciliation is GLAD-6RT64L,
-  // and quietly renumbering here would hide exactly the desync this ticket
-  // exists to expose.
+  // reordered. Counted rather than corrected, and reconciliation does not
+  // rescue it either (GLAD-6RT64L): a command the host never received
+  // renumbers every tick after it, so quietly renumbering here would hide the
+  // desync rather than fix it. The transport is TCP and does not lose frames;
+  // a gap means somebody is speaking a protocol this one is not.
   const gapped = message.startTick !== session.tick + 1
 
   // One command per sub-step, into this peer's slot. The array is reused across
@@ -228,6 +237,13 @@ export function applyMessage(
     simTick(state, inputs, world, plan)
   }
 
+  // The client's own label for the last command in this batch. Not
+  // `state.tick`: the two agree only while the world is advanced by exactly the
+  // batch it was handed, and a client that inferred one from the other would
+  // replay the wrong commands the day a scheduler drains a buffer instead
+  // (GLAD-FHKBN8). See `ServerSnapshot.ack`.
+  const ackTick = message.startTick + message.cmds.length - 1
+
   return {
     session: {
       ...session,
@@ -235,7 +251,10 @@ export function applyMessage(
       gaps: session.gaps + (gapped ? 1 : 0),
       commands: session.commands + message.cmds.length,
     },
-    replies: [{ t: 'hash', tick: state.tick, hash: hashState(state) }],
+    replies: [
+      { t: 'hash', tick: state.tick, hash: hashState(state) },
+      snapshotFrame(state, ackTick),
+    ],
   }
 }
 

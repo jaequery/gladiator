@@ -3,6 +3,7 @@ import {
   PROTOCOL_VERSION,
   SKELETON_SEED,
   type GameState,
+  applyWireState,
   createMapState,
   encodeCmd,
   findPlayer,
@@ -158,7 +159,21 @@ describe('session simulation', () => {
     const expected = createMapState(SERVER_MAP.source, SKELETON_SEED)
     simTick(expected, [{ ...NULL_CMD, forwardMove: 1 }], SERVER_MAP.world)
     simTick(expected, [NULL_CMD], SERVER_MAP.world)
-    expect(step.replies).toEqual([{ t: 'hash', tick: 2, hash: hashState(expected) }])
+    // The hash, and then the world it is the hash of. The order matters: the
+    // hash answers "did the client predict this", which is a question that
+    // stops having an answer once the snapshot behind it has been adopted.
+    expect(step.replies[0]).toEqual({ t: 'hash', tick: 2, hash: hashState(expected) })
+    const snap = step.replies[1]
+    if (snap?.t !== 'snap') throw new Error('the session sent no snapshot')
+    // The ack is the *client's* label for the last command in the batch, not
+    // the world's tick. They agree here because a batch advances the world by
+    // exactly its own commands; they will not once a scheduler drains a jitter
+    // buffer (GLAD-FHKBN8), which is why they are two fields.
+    expect(snap.ack).toBe(2)
+    const rebuilt = createMapState(SERVER_MAP.source, SKELETON_SEED)
+    expect(applyWireState(rebuilt, snap.state)).toBe(true)
+    expect(hashState(rebuilt)).toBe(hashState(expected))
+
     expect(step.session.tick).toBe(2)
 
     // And the state really did advance, rather than the hash being of nothing.
