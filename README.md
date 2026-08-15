@@ -16,7 +16,7 @@ built on it is built on something that has been deployed once.
 
 ```sh
 pnpm install
-pnpm run ci          # typecheck + lint + test + build + guardrails
+pnpm run ci          # typecheck + lint + test + build + guardrails + latency
 ```
 
 `pnpm run ci`, not `pnpm ci` — pnpm reserves the bare `ci` verb.
@@ -61,6 +61,23 @@ solid, a spawn with no headroom, two spawns too close together and an
 unreferenced surface all fail the bake — hashes them, and writes JSON that both
 the client and the server load. The baked artifacts are committed, and a test
 fails if they are stale. `docs/physics-spec.md` §4.
+
+```sh
+pnpm demo record             # play a scripted duel through a real host, to a file
+pnpm demo replay <file>      # re-run it, and check it lands where it did
+pnpm latency                 # the input-to-photon budget, measured
+```
+
+A **demo** is the command stream a host executed, not the states it produced —
+which is what makes it small and what makes replaying it a *check* rather than a
+playback: `replay` compares the hash trace it produces against the one the file
+carries. Set `GLADIATOR_DEMO_DIR` and the server records every match; add
+`?dev=1` and a tab hosting single-player records its own. `docs/deploy.md`.
+
+`?dev=1` also puts the netcode panel on screen: tick, round trip, unacknowledged
+commands, prediction error in units, snapshot bytes per second, and two counters
+that should never move. `docs/latency.md` is what the response time is made of
+and what it is allowed to be.
 
 The bot's navigation data is hand-authored the same way, beside the map it is
 for. `pnpm run nav:bake` validates every node against the real player box and

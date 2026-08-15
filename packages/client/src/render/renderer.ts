@@ -114,6 +114,16 @@ export type Renderer = {
   /** A copy of the last frame, scaled. For the reference screenshot. */
   capture(width: number, height: number): HTMLCanvasElement
   frameStats(): FrameStats
+  /**
+   * Every interval in the window, in milliseconds.
+   *
+   * The raw frames rather than a summary, because the latency harness is a
+   * distribution over them and a percentile cannot be un-summarised:
+   * `pnpm latency --samples` takes exactly this array off a real device and
+   * runs the input-to-photon measurement over the frames that machine actually
+   * produced. `docs/latency.md` §3.2.
+   */
+  frameIntervals(): readonly number[]
   verdict(budgetMs?: number): FrameVerdict
   /**
    * Forget every interval measured so far.
@@ -342,6 +352,7 @@ export async function createRenderer(options: RendererOptions): Promise<Renderer
     },
 
     frameStats: () => meter.stats(),
+    frameIntervals: () => meter.intervals(),
     verdict: (budget = budgetMs) => meterVerdict(meter, budget),
     resetFrameStats: () => meter.reset(),
 

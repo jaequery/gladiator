@@ -32,3 +32,9 @@ coverage/
 # neither reads .gitignore — which is the whole point of the file.
 **/__guardrail_probe__.ts
 __guardrail_lock__.yaml
+
+# Recorded matches (`pnpm demo`, and a server run with GLADIATOR_DEMO_DIR set).
+# A demo is a debugging artifact about one session — the useful one is always
+# the one somebody just produced, and the format has a version in it so an old
+# file is refused rather than misread. `tools/demo.ts`.
+demos/

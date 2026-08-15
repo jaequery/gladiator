@@ -67,4 +67,31 @@ describe('fixed-timestep accumulator', () => {
     expect(alphaOf(4)).toBe(0.5)
     expect(alphaOf(TICK_INTERVAL_MS - 0.001)).toBeLessThan(1)
   })
+
+  it('draws a world exactly one sub-step behind wall-clock, on any schedule', () => {
+    // The latency term nothing else states. `main.ts` interpolates the eye
+    // between the origin *before* the last predicted tick and the one after
+    // it, at `alphaOf(accumulatorMs)` — so the drawn moment is
+    // `(tick - 1 + alpha)` sub-steps in, while the wall-clock the frame was
+    // handed is `(tick + alpha)` sub-steps in. The difference is one tick, and
+    // it is one tick whatever the display is doing, because the accumulator
+    // holds precisely the wall-clock the simulation has not yet run.
+    //
+    // `tools/latency-harness.ts` states this as `RENDER_LAG_MS` and cites this
+    // test rather than re-deriving it across a package boundary.
+    const intervals = [16.7, 16.7, 33.4, 6.9, 6.9, 16.7, 1.2, 24, 8, 8.0001, 100]
+    let accumulatorMs = 0
+    let tick = 0
+    let elapsedMs = 0
+
+    for (const interval of intervals) {
+      elapsedMs += interval
+      const step = advance(accumulatorMs, interval)
+      accumulatorMs = step.accumulatorMs
+      tick += step.ticks
+
+      const drawnMs = (tick - 1 + alphaOf(accumulatorMs)) * TICK_INTERVAL_MS
+      expect(elapsedMs - drawnMs).toBeCloseTo(TICK_INTERVAL_MS, 9)
+    }
+  })
 })

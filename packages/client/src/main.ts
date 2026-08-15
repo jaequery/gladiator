@@ -29,12 +29,13 @@ import {
   TICK_INTERVAL_MS,
   TICK_RATE,
   createMapState,
+  countSimEvents,
   createTrace,
+  encodeDemo,
   findPlayer,
   type GameState,
   hashState,
   mapGeometry,
-  onSpeedClamp,
   projectilePosition,
   traceRay,
   type Transport,
@@ -89,6 +90,7 @@ import { type Renderer, createRenderer } from './render/renderer.ts'
 import { REFERENCE_VIEW, interpolateNetState, interpolateOrigin } from './render/view.ts'
 import { browserCopyEnv } from './ui/clipboard.ts'
 import { demoMode, demoModel } from './ui/demo.ts'
+import { createDevHud, devMode, type DevHudModel } from './ui/devHud.ts'
 import { createFeedbackTracker } from './ui/feedback.ts'
 import { createMatchHud } from './ui/hud.ts'
 import { type HudModel, hudModel } from './ui/hudModel.ts'
@@ -232,11 +234,28 @@ declare global {
       audio: AudioDebug
       /** Judge the frames since {@link resetFrameStats} against a budget. */
       frameVerdict(budgetMs: number): FrameVerdict
+      /**
+       * The frame intervals in the window, for `pnpm latency --samples`.
+       *
+       * The distribution rather than a summary: input-to-photon latency is a
+       * function of the frame-time *tail*, and a percentile cannot be
+       * un-summarised. `docs/latency.md` §3.2.
+       */
+      frameIntervals(): readonly number[]
       resetFrameStats(): void
       /** The last frame, scaled — for the reference-screenshot comparison. */
       capture(width: number, height: number): ImageData
       /** The same frame as a `data:image/png` URL, for re-shooting it. */
       captureDataUrl(width: number, height: number): string
+      /**
+       * The match this tab has hosted, as demo JSON, or `null`.
+       *
+       * Only `?local=1&dev=1`: a demo is the command stream the *host*
+       * executed, and a client talking to Fly is not the host. This is the
+       * bug-report path for single-player — `sim/src/demo.ts` replays whatever
+       * comes out of here into the same world, tick for tick.
+       */
+      demo(): string | null
     }
   }
 }
@@ -426,6 +445,12 @@ async function boot(): Promise<void> {
   // so hit feedback can be *looked at* before there is a match to play. Same
   // reasoning as `dummyOpponent.ts`, and `ui/demo.ts` sets it out.
   const hudDemo = !shot && demoMode(window.location.search)
+  // `?dev=1` — the netcode instrument, and the demo recorder that goes with it.
+  // Not on a page nobody asked for it on: it is an extra panel, an extra
+  // growing array, and it is not part of the layout `scripts/e2e.mjs` measures.
+  // `ui/devHud.ts`.
+  const dev = !shot && devMode(window.location.search)
+  const devHud = dev ? createDevHud(overlay) : null
 
   let renderer: Renderer
   try {
@@ -642,7 +667,10 @@ async function boot(): Promise<void> {
    */
   const startBotMatch = (): void => {
     if (session !== null || shot) return
-    const listen = createListenServer({ map: CLIENT_MAP, build: BUILD })
+    // `record: dev` is `?dev=1`: the host in this tab keeps the command stream
+    // so that `window.__gladiator.demo()` has something to hand back. Off
+    // otherwise — a recorder nobody asked for is a cost every player pays.
+    const listen = createListenServer({ map: CLIENT_MAP, build: BUILD, record: dev })
     session = {
       listen,
       net: openSession(listen.transport, 'the host in this tab'),
@@ -864,11 +892,17 @@ async function boot(): Promise<void> {
   let commandTick = 0
   let lastFrameMs = performance.now()
 
-  // The sim has no `console`, so the §2.6 safety rail reports through a seam.
-  // If this ever prints, something upstream handed the simulation a velocity no
-  // amount of movement could produce.
-  onSpeedClamp((speed) => {
-    console.warn(`gladiator: clamped a velocity of ${speed.toFixed(0)} qu/s`)
+  // The two things the simulation notices and cannot report, tallied in one
+  // place (`sim/src/counters.ts`). Both should stay at zero for a whole
+  // session: the §2.6 speed rail firing means something upstream handed the
+  // movement a velocity movement cannot produce, and a self-splash reaching the
+  // ledger below is how the client finds out its prediction *predicate* was
+  // wrong rather than merely a fraction of a unit out.
+  const counters = countSimEvents({
+    onSpeedClamp: (speed) => {
+      console.warn(`gladiator: clamped a velocity of ${speed.toFixed(0)} qu/s`)
+    },
+    onSelfSplash: (splash) => predictor.mispredicts.splash(splash),
   })
 
   const renderSnapshot = (): RenderSnapshot => {
@@ -891,6 +925,37 @@ async function boot(): Promise<void> {
       worstMs: stats.worstMs,
     }
   }
+
+  /**
+   * The netcode instrument's readings, gathered from things already computed.
+   *
+   * Every field is a counter somebody else was keeping or a number the frame
+   * loop already had. Nothing in here measures anything, and in particular
+   * nothing in here asks the GPU a question — `ui/devHud.ts` sets out why that
+   * is the constraint rather than a preference.
+   */
+  const devHudModel = (
+    netNow: ReturnType<NetClient['snapshot']>,
+    p99Ms: number,
+  ): DevHudModel => ({
+    tick: state.tick,
+    commandTick,
+    rttMs: netNow.rttMs,
+    pending: predictor.pending,
+    errorUnits: predictor.stats.lastUnits,
+    worstErrorUnits: predictor.stats.worstUnits,
+    snapshots: netNow.snapshots,
+    snapshotBytesPerSecond: netNow.snapshotBytesPerSecond,
+    fps,
+    p99Ms,
+    frameBudgetMs: FRAME_BUDGET_MS,
+    speedClamps: counters.speedClamps,
+    worstClampedSpeed: counters.worstClampedSpeed,
+    selfSplashMispredicts: predictor.mispredicts.stats.selfSplash,
+    selfSplashes: predictor.mispredicts.stats.predictedSplashes,
+    snaps: predictor.stats.snaps,
+    recordedFrames: session?.listen?.recordedFrames ?? null,
+  })
 
   /**
    * Run an offline render of a decoded sound.
@@ -969,6 +1034,7 @@ async function boot(): Promise<void> {
       },
     },
     frameVerdict: (budgetMs: number) => renderer.verdict(budgetMs),
+    frameIntervals: () => renderer.frameIntervals(),
     resetFrameStats: () => renderer.resetFrameStats(),
     capture: (width: number, height: number) => {
       const shotCanvas = renderer.capture(width, height)
@@ -978,6 +1044,10 @@ async function boot(): Promise<void> {
     },
     captureDataUrl: (width: number, height: number) =>
       renderer.capture(width, height).toDataURL('image/png'),
+    demo: () => {
+      const recording = session?.listen?.demo() ?? null
+      return recording === null ? null : encodeDemo(recording)
+    },
   }
 
   // A rolling estimate, so the HUD reads a rate rather than one frame's noise.
@@ -1199,6 +1269,7 @@ async function boot(): Promise<void> {
     // not allowed to be the thing that costs a frame.
     const p99Ms = renderer.frameStats().p99Ms
 
+    const netNow = net?.snapshot() ?? NO_SESSION
     hud.update({
       build: BUILD,
       mapName: CLIENT_MAP.source.name,
@@ -1212,10 +1283,16 @@ async function boot(): Promise<void> {
       // "Click to play" is for a page with nothing in front of it. The menu
       // has a button that says the same thing with a room code above it.
       prompt: !input.locked && !menu.isOpen,
-      net: net?.snapshot() ?? NO_SESSION,
+      net: netNow,
       corrected: predictor.stats.soft + predictor.stats.loud + predictor.stats.snaps,
       pending: predictor.pending,
     })
+
+    // On the same 10 Hz beat as the panel above and for the same measured
+    // reason: every value on it changes every frame, so throttling the *write*
+    // is the only way to make displaying it cheap. Nothing in `devHudModel`
+    // asks the GPU anything — `ui/devHud.ts` argues why that is a rule.
+    devHud?.update(devHudModel(netNow, p99Ms))
 
     window.requestAnimationFrame(frame)
   }

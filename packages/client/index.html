@@ -110,6 +110,36 @@
         color: var(--mismatch);
       }
 
+      /* The `?dev=1` performance panel (`ui/devHud.ts`). Top right, which is
+         the one corner nothing else uses: diagnostics is top left and the
+         in-match readout owns both bottom corners. Deliberately carries no
+         `data-hud-box` — it is not on the page unless somebody asked for it,
+         so it is not part of the layout the aspect-ratio check measures. */
+      .dev-panel {
+        position: absolute;
+        top: 12px;
+        right: 12px;
+        min-width: 240px;
+        max-width: min(340px, 30vw);
+        padding: 10px 14px;
+        border: 1px solid #30363d;
+        border-radius: 6px;
+        background: var(--panel);
+      }
+
+      .dev-title {
+        margin: 0 0 8px;
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--dim);
+      }
+
+      .dev-panel .hud-value[data-state='warn'] {
+        color: var(--mismatch);
+      }
+
       .hud-banner {
         position: absolute;
         top: 12px;

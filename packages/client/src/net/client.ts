@@ -62,6 +62,16 @@ import { createClockSync, type ClientClockSync } from './clockSync.ts'
 /** How many ticks of our own hashes to keep, for the server to catch up to. */
 const HASH_HISTORY = 4096
 
+/**
+ * The window the snapshot rate is measured over, in milliseconds.
+ *
+ * One second, because that is the unit the number is quoted in and a rate
+ * derived over a different window and then scaled is a rate that lies about
+ * bursts. Long enough that the ~16 ms gap between snapshots does not make it
+ * jump; short enough that a stall shows up while the player is still looking.
+ */
+const RATE_WINDOW_MS = 1000
+
 export type NetStatus =
   | 'idle'
   | 'connecting'
@@ -175,6 +185,25 @@ export type NetSnapshot = {
    * a client predicting into a world nobody is correcting.
    */
   readonly snapshots: number
+  /**
+   * Bytes of snapshot frames received, and the rate over the last second.
+   *
+   * Snapshots specifically, not every frame: they are the whole state of the
+   * world sixty times a second and they are therefore the entire downstream
+   * cost of this design. Everything else on the socket — pings, hashes, the
+   * welcome — is a rounding error beside them, and mixing the two would hide
+   * the number that is going to decide whether a delta encoder is worth
+   * writing.
+   *
+   * Counted in characters rather than encoded bytes, which is the same number
+   * here: every frame in this protocol is ASCII JSON, and running a
+   * `TextEncoder` over each one to prove it would cost an allocation per
+   * snapshot to measure the cost of snapshots.
+   */
+  readonly snapshotBytes: number
+  readonly snapshotBytesPerSecond: number
+  /** Every frame, not just snapshots. The whole downstream, for comparison. */
+  readonly bytesIn: number
 }
 
 export type NetClient = {
@@ -311,6 +340,9 @@ export const NO_SESSION: NetSnapshot = {
   queuedAtServer: 0,
   pings: 0,
   snapshots: 0,
+  snapshotBytes: 0,
+  snapshotBytesPerSecond: 0,
+  bytesIn: 0,
 }
 
 export function createNetClient(options: NetOptions): NetClient {
@@ -328,6 +360,13 @@ export function createNetClient(options: NetOptions): NetClient {
   const clock = createClockSync()
   let pings = 0
   let snapshots = 0
+  let snapshotBytes = 0
+  let bytesIn = 0
+  // A one-second bucket rather than a decaying average: the readout says
+  // "bytes per second" and that is what this measures.
+  let windowStartMs: number | null = null
+  let windowBytes = 0
+  let snapshotBytesPerSecond = 0
 
   const transport = options.transport
   let status: NetStatus = transport === null ? 'unconfigured' : 'idle'
@@ -351,7 +390,32 @@ export function createNetClient(options: NetOptions): NetClient {
     return hashTicks[slot] === tick ? (hashValues[slot] ?? null) : null
   }
 
+  /**
+   * Fold a snapshot frame's size into the rate.
+   *
+   * The clock is read here rather than once per frame loop because a frame
+   * arrives on the socket, not on the display — and this is a read of
+   * `performance.now()`, which is CPU-side and free. Nothing here touches the
+   * renderer, which is the rule the dev HUD is written to (`ui/devHud.ts`).
+   */
+  const chargeSnapshot = (bytes: number): void => {
+    snapshotBytes += bytes
+    const nowMs = now()
+    if (windowStartMs === null) {
+      windowStartMs = nowMs
+      windowBytes = bytes
+      return
+    }
+    windowBytes += bytes
+    const elapsedMs = nowMs - windowStartMs
+    if (elapsedMs < RATE_WINDOW_MS) return
+    snapshotBytesPerSecond = elapsedMs > 0 ? (windowBytes * 1000) / elapsedMs : 0
+    windowStartMs = nowMs
+    windowBytes = 0
+  }
+
   const onServerMessage = (raw: string) => {
+    bytesIn += raw.length
     const parsed: ServerMessage | null = parseServerMessage(raw)
     if (parsed === null) {
       status = 'error'
@@ -408,6 +472,7 @@ export function createNetClient(options: NetOptions): NetClient {
       // knows about frames and clocks and deliberately nothing about the world
       // (`net/prediction.ts`).
       snapshots += 1
+      chargeSnapshot(raw.length)
       options.onSnapshot?.(parsed)
       return
     }
@@ -515,6 +580,9 @@ export function createNetClient(options: NetOptions): NetClient {
       queuedAtServer: clock.queued,
       pings,
       snapshots,
+      snapshotBytes,
+      snapshotBytesPerSecond,
+      bytesIn,
     }),
 
     close() {
