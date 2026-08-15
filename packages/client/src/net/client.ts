@@ -68,6 +68,22 @@ export function mustHoldStill(status: NetStatus): boolean {
   return status === 'idle' || status === 'connecting' || status === 'map-mismatch'
 }
 
+/**
+ * Whether this session is over and nothing the player does can revive it.
+ *
+ * The three states that need a reload rather than a retry. It is what the
+ * diagnostics panel interrupts the player for, and — the reason it is a
+ * function rather than a condition written out twice — it is also what takes
+ * the in-match HUD off the screen: a health bar and a round score over a page
+ * whose only remaining instruction is "reload" is furniture in front of the
+ * one sentence that matters.
+ */
+export function isFatal(status: NetStatus): boolean {
+  return (
+    status === 'version-mismatch' || status === 'map-mismatch' || status === 'unconfigured'
+  )
+}
+
 export type NetSnapshot = {
   readonly status: NetStatus
   /** One line, already written for a human. The HUD prints it verbatim. */

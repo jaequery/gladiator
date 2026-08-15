@@ -237,6 +237,37 @@ device's `baseLatency` is the other half. §5.
 
 ---
 
+## The HUD
+
+**HUD model** — the deeply-readonly *copy* of everything the readout is allowed
+to know, projected out of `GameState` once a frame. `render/animState.ts`'s
+`playerNetState` for the readout instead of the model, and the only door in:
+`packages/client/src/ui/hudModel.ts`.
+
+**In-match HUD** — the player-facing readout: health, armour, weapon, cooldown,
+round score, crosshair and hit feedback. `ui/hud.ts`. Distinct from the
+**diagnostics panel** in the top-left (`client/src/hud.ts`), which is the
+netcode's instrument and the browser test's.
+
+**Hit confirmation** — the mark that says a shot landed, derived from the
+opponent's health going down on the frame the state says it did. `ui/feedback.ts`;
+its ears are `audio/cues.ts`.
+
+**Damage indicator** — the arc that says where a hit came from, derived from the
+*knockback* rather than from an attacker position the state does not carry.
+Stored as a world bearing and re-projected against the current yaw, so it stays
+pinned to the attacker as the player turns. `ui/feedback.ts`.
+
+**Cooldown ring** — the refire interval drawn round the crosshair. Scaled by
+`nextFireTick - lastFireTick`, which is the interval of the weapon that *fired*
+rather than the one now in hand — the two weapons share one timer.
+
+**HUD box** — an element marked `data-hud-box`: part of the set the browser test
+measures at 16:9, 21:9 and 4:3 and requires to be on screen and not overlapping
+anything else. `scripts/e2e.mjs`.
+
+---
+
 ## The network
 
 **Host** — whatever is authoritative over a world: `packages/server/src/room.ts`

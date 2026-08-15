@@ -21,6 +21,7 @@ import {
   ANGLE_UNITS_PER_DEGREE,
   EntityFlag,
   SKELETON_SEED,
+  TICK_INTERVAL_MS,
   TICK_RATE,
   cloneGameState,
   createMapState,
@@ -52,18 +53,22 @@ import { createHud } from './hud.ts'
 import { createInputController } from './input/controller.ts'
 import { advance, alphaOf } from './loop.ts'
 import { CLIENT_MAP, CLIENT_MAP_HASH } from './map.ts'
-import { createNetClient, mustHoldStill, resolveServerUrl } from './net/client.ts'
+import { createNetClient, isFatal, mustHoldStill, resolveServerUrl } from './net/client.ts'
 import { createListenServer } from './net/listenServer.ts'
 import { websocketTransport } from './net/websocketTransport.ts'
 import { type PlayerNetState, playerNetState } from './render/animState.ts'
 import { FRAME_BUDGET_MS, type FrameVerdict } from './render/frameStats.ts'
 import { type Renderer, createRenderer } from './render/renderer.ts'
 import { REFERENCE_VIEW, interpolateNetState, interpolateOrigin } from './render/view.ts'
+import { demoMode, demoModel } from './ui/demo.ts'
+import { createFeedbackTracker } from './ui/feedback.ts'
+import { createMatchHud } from './ui/hud.ts'
+import { type HudModel, hudModel } from './ui/hudModel.ts'
 
 const BUILD = import.meta.env.VITE_BUILD ?? 'dev'
 
 /**
- * How often the readout is refreshed, in milliseconds.
+ * How often the **diagnostics** readout is refreshed, in milliseconds.
  *
  * Ten times a second, not once a frame, and the reason is measured rather than
  * assumed: writing the panel's dozen `textContent`s every frame dirties the
@@ -72,8 +77,14 @@ const BUILD = import.meta.env.VITE_BUILD ?? 'dev'
  * from a flat 16.7 ms to a mean of 18 ms with a 50 ms 99th percentile — a
  * stutter caused entirely by *displaying* the frame rate.
  *
- * Ten hertz also happens to be the fastest a number is worth reading. The real
- * HUD is GLAD-BHNPOE; this constant is the constraint it inherits.
+ * Ten hertz also happens to be the fastest a number is worth reading, and
+ * everything on that panel — the frame rate, the tick, the hash — changes every
+ * single frame, so throttling it is the only way to make it cheap.
+ *
+ * The in-match HUD does **not** inherit the throttle, only the constraint
+ * behind it: it runs at frame rate and writes nothing when nothing changed,
+ * which is nearly every frame, because health does not change 60 times a
+ * second. `ui/hud.ts` argues that at length.
  */
 const HUD_INTERVAL_MS = 100
 
@@ -120,6 +131,21 @@ export type DebugSnapshot = {
   readonly render: RenderSnapshot
   readonly audio: AudioSnapshot
   readonly net: ReturnType<ReturnType<typeof createNetClient>['snapshot']>
+  /**
+   * The in-match readout, projected **fresh at the moment of the call** rather
+   * than the copy the HUD last drew from.
+   *
+   * That is the whole point of it: comparing the DOM against a model taken now
+   * is how `scripts/e2e.mjs` catches a HUD that is a frame or ten behind the
+   * world. Handing back the object the view was written from would compare a
+   * value with itself and pass no matter how stale the screen was.
+   */
+  readonly hud: HudModel
+  /**
+   * How many times the in-match HUD has been drawn. Beside `render.frames`,
+   * this is what says it runs at frame rate rather than on a timer.
+   */
+  readonly hudFrames: number
 }
 
 /**
@@ -296,6 +322,13 @@ async function boot(): Promise<void> {
   app.append(canvas, overlay)
 
   const hud = createHud(overlay)
+  // The in-match readout, alongside the diagnostics panel rather than instead
+  // of it: that panel is the netcode's instrument and the browser test's, and
+  // turning it into a setting belongs to the menus (GLAD-NPCTU8). The two are
+  // laid out so as not to collide, which `scripts/e2e.mjs` checks at three
+  // aspect ratios.
+  const matchHud = createMatchHud(overlay)
+  const feedback = createFeedbackTracker()
   const shot = shotMode(window.location.search)
   if (shot) overlay.hidden = true
   // Nothing sends snapshots yet, so there is otherwise no opponent to draw.
@@ -303,6 +336,10 @@ async function boot(): Promise<void> {
   // simulation. Never in shot mode: the reference screenshot is a picture of a
   // world with nothing moving in it.
   const dummy = !shot && dummyMode(window.location.search)
+  // `?hud=demo` — the readout driven from a script instead of from the world,
+  // so hit feedback can be *looked at* before there is a match to play. Same
+  // reasoning as `dummyOpponent.ts`, and `ui/demo.ts` sets it out.
+  const hudDemo = !shot && demoMode(window.location.search)
 
   let renderer: Renderer
   try {
@@ -498,6 +535,8 @@ async function boot(): Promise<void> {
       render: renderSnapshot(),
       audio: audio?.snapshot() ?? NO_AUDIO,
       net: net.snapshot(),
+      hud: hudModel(state, LOCAL_SLOT),
+      hudFrames: matchHud.frames,
     }),
     audio: {
       snapshot: () => audio?.snapshot() ?? NO_AUDIO,
@@ -546,6 +585,12 @@ async function boot(): Promise<void> {
   // A rolling estimate, so the HUD reads a rate rather than one frame's noise.
   let fps = 0
   let hudDueMs = 0
+
+  // The demo's own clock. It needs one because the page it is reviewed on has
+  // no server to agree with, so `mustHoldStill` keeps `state.tick` at zero and
+  // a script keyed off that would never start. Real elapsed time in sub-steps,
+  // which is what the script is written in.
+  let demoTicks = 0
 
   const frame = (nowMs: number) => {
     const elapsedMs = nowMs - lastFrameMs
@@ -628,6 +673,23 @@ async function boot(): Promise<void> {
       },
       elapsedMs,
     )
+
+    // The in-match readout, every frame and outside the throttle below.
+    //
+    // Two things have to be true for a HUD to be worth reading in a duel: it
+    // says what the world says *now*, and hit confirmation lands on the frame
+    // the state does. Both are the same requirement — draw from a model
+    // projected this frame — and the cost of it is paid in `ui/hud.ts`, which
+    // compares before it writes and so touches nothing on a frame where
+    // nothing happened.
+    demoTicks += elapsedMs / TICK_INTERVAL_MS
+    const readout = hudDemo
+      ? demoModel(Math.floor(demoTicks), LOCAL_SLOT, cmd.yaw)
+      : hudModel(state, LOCAL_SLOT)
+    matchHud.update(readout, feedback.observe(readout))
+    // Off the screen entirely when the session is unrecoverable: the panel is
+    // already saying "reload", and a round score in front of it is furniture.
+    matchHud.setVisible(!isFatal(status))
 
     hudDueMs -= elapsedMs
     if (hudDueMs > 0) {

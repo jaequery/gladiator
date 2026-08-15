@@ -95,6 +95,21 @@ const PACING_VIEWPORT = { width: 320, height: 200 }
 const VIEWPORT = { width: 1024, height: 640 }
 
 /**
+ * The three shapes the HUD has to hold, and why these three.
+ *
+ * 16:9 is what almost everybody has; 4:3 is the narrowest thing anybody still
+ * plays on and is where a centred element is closest to a corner one; 21:9 is
+ * the shortest, and is where anything positioned as a percentage of the height
+ * — the round banner — comes closest to the middle of the screen. Between them
+ * they bracket every layout mistake this HUD can make. GLAD-BHNPOE.
+ */
+const HUD_VIEWPORTS = [
+  { name: '16:9', width: 1280, height: 720 },
+  { name: '21:9', width: 1280, height: 549 },
+  { name: '4:3', width: 1024, height: 768 },
+]
+
+/**
  * The frame budget the browser is held to, in milliseconds.
  *
  * 50 — three 60 Hz frames. The budget that *ships* is one (`FRAME_BUDGET_MS`
@@ -252,6 +267,77 @@ const compareToReference = async ({ url, width, height, channelTolerance }) => {
   }
   const pixels = shot.data.length / 4
   return { differing, pixels, fraction: differing / pixels, mean: total / (pixels * 3) }
+}
+
+/**
+ * Measure every HUD box, inside the page, at whatever size the window is now.
+ *
+ * Two failures matter and they are different: a box hanging off the edge of the
+ * screen is information the player cannot read, and two boxes on top of each
+ * other is information they cannot read *either*, which is worse because it
+ * looks deliberate.
+ *
+ * Everything marked `data-hud-box` is revealed for the measurement and put back
+ * afterwards. Without that the check would only ever see whatever the page
+ * happened to be showing at that instant — never the round banner, which is up
+ * for three seconds in twenty and is the element most likely to land on
+ * something. The next frame rewrites all of it regardless.
+ */
+const measureHudBoxes = ({ width, height }) => {
+  const root = document.querySelector('[data-hud="match"]')
+  const nodes = [...document.querySelectorAll('[data-hud-box]')]
+  const shown = root === null ? nodes : [root, ...nodes]
+
+  const restore = shown.map((node) => {
+    const previous = node.dataset.visible
+    const wasHidden = node.hasAttribute('hidden')
+    node.dataset.visible = 'yes'
+    node.removeAttribute('hidden')
+    return { node, previous, wasHidden }
+  })
+
+  const boxes = nodes
+    .map((node) => {
+      const rect = node.getBoundingClientRect()
+      return {
+        name: node.dataset.hud ?? node.getAttribute('class') ?? node.tagName,
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+        width: rect.width,
+        height: rect.height,
+      }
+    })
+    .filter((box) => box.width > 0 && box.height > 0)
+
+  for (const { node, previous, wasHidden } of restore) {
+    if (previous === undefined) delete node.dataset.visible
+    else node.dataset.visible = previous
+    if (wasHidden) node.setAttribute('hidden', '')
+  }
+
+  // Half a pixel of slack, because a box centred with `translateX(-50%)` in an
+  // odd-width window lands on a half pixel by construction.
+  const clipped = boxes
+    .filter(
+      (box) =>
+        box.left < -0.5 || box.top < -0.5 || box.right > width + 0.5 || box.bottom > height + 0.5,
+    )
+    .map((box) => `${box.name} at ${Math.round(box.left)},${Math.round(box.top)} ${Math.round(box.width)}x${Math.round(box.height)}`)
+
+  const overlaps = []
+  for (let i = 0; i < boxes.length; i += 1) {
+    for (let j = i + 1; j < boxes.length; j += 1) {
+      const a = boxes[i]
+      const b = boxes[j]
+      if (a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom) {
+        overlaps.push(`${a.name} over ${b.name}`)
+      }
+    }
+  }
+
+  return { measured: boxes.length, names: boxes.map((box) => box.name), clipped, overlaps }
 }
 
 /**
@@ -547,6 +633,57 @@ try {
     final.net.dropped === 0,
     `dropped ${final.net.dropped}`,
   )
+
+  // --- the in-match HUD says what the world says ---------------------------
+  // GLAD-BHNPOE's first acceptance check, on a live page. `snapshot().hud` is
+  // projected fresh at the moment of the call rather than being the copy the
+  // HUD last drew from, so this compares the pixels against the world *now*.
+  const hudAgrees = await tab.evaluate(() => {
+    const read = (key) => document.querySelector(`[data-hud="${key}"]`)?.textContent ?? null
+    const model = window.__gladiator.snapshot().hud
+    const them = model.slot === 1 ? 0 : 1
+    return [
+      ['health', read('health'), String(Math.max(0, Math.round(model.self.health)))],
+      ['armour', read('armor'), String(Math.max(0, Math.round(model.self.armor)))],
+      ['weapon', read('weapon'), model.self.weaponName],
+      ['your score', read('score-you'), String(model.match.wins[model.slot])],
+      ['their score', read('score-them'), String(model.match.wins[them])],
+    ]
+  })
+  for (const [what, onScreen, inTheWorld] of hudAgrees) {
+    check(
+      `the HUD's ${what} is what the world says it is`,
+      onScreen === inTheWorld,
+      `screen ${JSON.stringify(onScreen)}, world ${JSON.stringify(inTheWorld)}`,
+    )
+  }
+
+  // Redrawn every frame rather than on a timer, which is the difference
+  // between "within one frame" and "within a tenth of a second". The
+  // diagnostics panel beside it deliberately runs at 10 Hz; if this HUD ever
+  // inherits that throttle, the two counts stop tracking and this fails.
+  const paceBefore = await tab.evaluate(() => window.__gladiator?.snapshot())
+  // Waited for rather than timed: what is being measured is the *ratio*, and a
+  // software rasteriser on a busy runner can want twenty seconds to draw thirty
+  // frames. A fixed window would fail this for the machine's frame rate, which
+  // is the one thing it is not about.
+  const sampled = await waitFor(
+    'thirty more rendered frames',
+    async () =>
+      tab.evaluate(
+        (base) => (window.__gladiator?.snapshot().render.frames ?? 0) - base >= 30,
+        paceBefore.render.frames,
+      ),
+    60_000,
+  )
+  const paceAfter = await tab.evaluate(() => window.__gladiator?.snapshot())
+  const hudDrawn = paceAfter.hudFrames - paceBefore.hudFrames
+  const rendered = paceAfter.render.frames - paceBefore.render.frames
+  check(
+    'the HUD is redrawn once per rendered frame, not on a timer',
+    sampled && hudDrawn >= rendered - 2,
+    `${hudDrawn} HUD updates against ${rendered} rendered frames`,
+  )
   // Displacement from where this session actually began, not from the world
   // origin: the player spawns where the map says, so distance from (0, 0) would
   // be true before a key was pressed.
@@ -635,6 +772,99 @@ try {
       creditsMatch.linked === creditsMatch.expected &&
       creditsMatch.licensed === creditsMatch.expected,
     `${creditsMatch.rendered}/${creditsMatch.expected} rendered, ${creditsMatch.linked} linked, ${creditsMatch.licensed} licensed`,
+  )
+
+  // --- the HUD at three aspect ratios --------------------------------------
+  // GLAD-BHNPOE. A fresh load, so the pointer is unlocked and the "click to
+  // play" prompt is on screen with everything else.
+  await tab.goto(`${STATIC_ORIGIN}/`, { waitUntil: 'load' })
+  await waitFor('the HUD to be drawn', async () =>
+    tab.evaluate(() => (window.__gladiator?.snapshot().hudFrames ?? 0) > 0),
+  )
+
+  for (const shape of HUD_VIEWPORTS) {
+    await tab.setViewportSize({ width: shape.width, height: shape.height })
+    await tab.evaluate(() => window.dispatchEvent(new Event('resize')))
+    // A frame at the new size, so the measurement is of the laid-out page.
+    await tab.waitForTimeout(250)
+
+    const layout = await tab.evaluate(measureHudBoxes, {
+      width: shape.width,
+      height: shape.height,
+    })
+    check(
+      `every HUD element is on screen at ${shape.name} (${shape.width}x${shape.height})`,
+      layout.measured >= 6 && layout.clipped.length === 0,
+      layout.clipped.length > 0
+        ? `off the edge: ${layout.clipped.join(', ')}`
+        : `only measured ${layout.measured} boxes: ${layout.names.join(', ')}`,
+    )
+    check(
+      `no two HUD elements overlap at ${shape.name}`,
+      layout.overlaps.length === 0,
+      layout.overlaps.join(', '),
+    )
+  }
+  await tab.setViewportSize(VIEWPORT)
+
+  // --- hit feedback, on a page that can actually produce some --------------
+  // `?hud=demo` drives the readout from a script instead of from the world, so
+  // that the states nobody can reach until there is a match to play — a landed
+  // hit, a damage arc, armour gone, a round won — are on screen to be looked
+  // at. The reviewer's half of the acceptance check is done in a browser at
+  // this URL; this is the half that says the chain from the fold to the pixels
+  // is connected. `packages/client/src/ui/demo.ts`.
+  await tab.goto(`${STATIC_ORIGIN}/?hud=demo`, { waitUntil: 'load' })
+  const opacityOf = (selector) =>
+    tab.evaluate((sel) => {
+      const node = document.querySelector(sel)
+      if (node === null || node.dataset.visible === 'no') return 0
+      return Number.parseFloat(getComputedStyle(node).opacity)
+    }, selector)
+
+  check(
+    'the crosshair changes shape with the weapon in hand',
+    await waitFor('the railgun crosshair', async () =>
+      tab.evaluate(
+        () => document.querySelector('[data-hud="crosshair"]')?.dataset.crosshair === 'rail',
+      ),
+    ),
+  )
+  check(
+    'a landed hit lights the hit marker',
+    await waitFor('a hit confirmation', async () => (await opacityOf('[data-hud="hitmarker"]')) > 0.05),
+  )
+  check(
+    'taking damage shows the direction it came from',
+    await waitFor('a damage arc', async () => (await opacityOf('[data-hud="damage"]')) > 0.05),
+  )
+  check(
+    'losing the armour and going critical changes the health readout',
+    await waitFor('the critical state', async () =>
+      tab.evaluate(() => document.querySelector('[data-hud="vitals"]')?.dataset.state === 'critical'),
+    ),
+  )
+  check(
+    'winning a round puts the result across the middle',
+    await waitFor('the round banner', async () =>
+      tab.evaluate(() => {
+        const banner = document.querySelector('[data-hud="announce"]')
+        return banner?.dataset.visible === 'yes' && (banner.textContent ?? '') !== ''
+      }),
+    ),
+  )
+  check(
+    'the railgun’s longer wait is on screen as a number and a ring',
+    await waitFor('a rail cooldown', async () =>
+      tab.evaluate(() => {
+        const text = document.querySelector('[data-hud="cooldown"]')?.textContent ?? ''
+        const ring = document.querySelector('[data-hud="cooldown-ring"]')
+        const offset = Number.parseFloat(ring?.getAttribute('stroke-dashoffset') ?? 'NaN')
+        // A second or more still to wait, and more than half the ring closed
+        // to say so. The ring is ~119 units round; see `ui/crosshair.ts`.
+        return /^1\.[0-5]s$/.test(text) && Number.isFinite(offset) && offset < 60
+      }),
+    ),
   )
 
   // --- the reference screenshot -------------------------------------------

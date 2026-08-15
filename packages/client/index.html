@@ -12,6 +12,16 @@
         --match: #3fb950;
         --mismatch: #f85149;
         --panel: rgba(13, 17, 23, 0.82);
+
+        /* The in-match HUD. Read peripherally at speed, so the palette does
+           the work a label would: health is warm, armour is cold, and the two
+           are never the same hue at any charge level. */
+        --health: #f0f6fc;
+        --health-low: #e3b341;
+        --health-critical: #f85149;
+        --armour: #58a6ff;
+        --hurt: #ff4a3d;
+        --hit: #ffffff;
       }
 
       * {
@@ -52,7 +62,14 @@
         position: absolute;
         top: 12px;
         left: 12px;
-        min-width: 340px;
+        min-width: 280px;
+        /* Capped, because its widest row is a *value* — an arena name beside
+           two hashes, or "MATCH · 1204 compared, 0 mismatched" — and an
+           absolutely-positioned box shrink-wraps to whatever that comes to. At
+           1024 wide it grew far enough right to sit under the round score, and
+           `pnpm run e2e` failed the 4:3 overlap check for it. `overflow-wrap`
+           below is what makes a capped width safe. */
+        max-width: min(420px, 34vw);
         padding: 10px 14px;
         border: 1px solid #30363d;
         border-radius: 6px;
@@ -107,9 +124,13 @@
         text-align: center;
       }
 
+      /* Clear of the bottom row of the in-match HUD, which is 22px up and
+         about 60px tall. At 1024x768 the prompt is wide enough to reach the
+         health readout otherwise, which the aspect-ratio check in
+         `scripts/e2e.mjs` fails on — as it should. */
       .hud-prompt {
         position: absolute;
-        bottom: 40px;
+        bottom: 118px;
         left: 50%;
         padding: 10px 18px;
         transform: translateX(-50%);
@@ -117,6 +138,293 @@
         border-radius: 6px;
         background: var(--panel);
         color: var(--dim);
+      }
+
+      /* ------------------------------------------------------------------
+         The in-match HUD. GLAD-BHNPOE; the markup is
+         `packages/client/src/ui/hud.ts`.
+
+         Everything here is positioned against a *corner or an edge* and never
+         against another element, so the layout has no reflow to get wrong and
+         holds at any aspect ratio — the check in `scripts/e2e.mjs` measures
+         all of it at 16:9, 21:9 and 4:3 and fails on an overlap or a box off
+         the screen. `vmin` rather than `vw` for anything that scales, because
+         a 21:9 window is not a reason for the readout to grow.
+         ------------------------------------------------------------------ */
+
+      .hud-match {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+      }
+
+      /* Set by `setVisible`. `display: none` rather than transparency, so a
+         hidden element has no box for the overlap check to trip over. */
+      [data-visible='no'] {
+        display: none !important;
+      }
+
+      /* --- top centre: the score ---------------------------------------- */
+
+      .hud-scorebar {
+        position: absolute;
+        top: 10px;
+        left: 50%;
+        transform: translateX(-50%);
+        min-width: 168px;
+        padding: 8px 18px 6px;
+        border: 1px solid #30363d;
+        border-radius: 6px;
+        background: var(--panel);
+        text-align: center;
+      }
+
+      .hud-score {
+        display: flex;
+        gap: 10px;
+        justify-content: center;
+        font-size: 26px;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+        line-height: 1.1;
+      }
+
+      .hud-score-dash {
+        color: var(--dim);
+        font-weight: 400;
+      }
+
+      .hud-score-them {
+        color: var(--dim);
+      }
+
+      .hud-headline {
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+
+      .hud-target,
+      .hud-clock {
+        color: var(--dim);
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* --- the middle: the crosshair, and a banner above it -------------- */
+
+      .hud-crosshair {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        /* One static filter rather than a dark twin of every line: the
+           crosshair has to stay legible against a lit wall and against the
+           sky, and a shadow costs one composite of a 64px square. */
+        filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.9));
+      }
+
+      .hud-crosshair-marks line {
+        stroke: var(--ink);
+        stroke-linecap: round;
+      }
+
+      .hud-crosshair-dot {
+        fill: var(--ink);
+      }
+
+      .hud-crosshair-ring {
+        fill: none;
+        stroke: var(--armour);
+        stroke-width: 2;
+        stroke-linecap: butt;
+        opacity: 0;
+      }
+
+      .hud-crosshair-hit line {
+        stroke: var(--hit);
+        stroke-width: 2.2;
+        stroke-linecap: round;
+      }
+
+      .hud-crosshair-hit {
+        opacity: 0;
+      }
+
+      .hud-announce {
+        position: absolute;
+        top: 24%;
+        left: 50%;
+        transform: translateX(-50%);
+        padding: 8px 22px;
+        border: 1px solid #30363d;
+        border-radius: 6px;
+        background: var(--panel);
+        font-size: 20px;
+        font-weight: 600;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        white-space: nowrap;
+      }
+
+      /* --- bottom left: health and armour -------------------------------- */
+
+      .hud-vitals {
+        position: absolute;
+        bottom: 22px;
+        left: 22px;
+        display: flex;
+        gap: 22px;
+      }
+
+      .hud-vital {
+        display: grid;
+        grid-template-columns: auto auto;
+        gap: 0 8px;
+        align-items: baseline;
+        min-width: 118px;
+      }
+
+      .hud-vital-value {
+        font-size: 34px;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+        line-height: 1;
+      }
+
+      .hud-vital-tag {
+        color: var(--dim);
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .hud-bar {
+        grid-column: 1 / -1;
+        overflow: hidden;
+        margin-top: 6px;
+        width: 100%;
+        height: 4px;
+        border-radius: 2px;
+        background: rgba(240, 246, 252, 0.16);
+      }
+
+      .hud-bar-wide {
+        width: 160px;
+      }
+
+      .hud-bar-fill {
+        display: block;
+        width: 100%;
+        height: 100%;
+        transform-origin: left center;
+        background: currentcolor;
+      }
+
+      .hud-vitals .hud-vital:first-child {
+        color: var(--health);
+      }
+
+      .hud-vitals .hud-vital + .hud-vital {
+        color: var(--armour);
+      }
+
+      .hud-vitals[data-state='low'] .hud-vital:first-child {
+        color: var(--health-low);
+      }
+
+      /* Critical is the one thing on this HUD that moves on its own. It is a
+         CSS animation rather than a per-frame opacity write for the reason
+         everything else here is guarded: the overlay must not be dirtied by
+         JavaScript once a frame just to make something blink. */
+      .hud-vitals[data-state='critical'] .hud-vital:first-child {
+        color: var(--health-critical);
+        animation: hud-pulse 0.7s ease-in-out infinite;
+      }
+
+      .hud-vitals[data-state='dead'] {
+        opacity: 0.4;
+      }
+
+      @keyframes hud-pulse {
+        50% {
+          opacity: 0.45;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .hud-vitals[data-state='critical'] .hud-vital:first-child {
+          animation: none;
+        }
+      }
+
+      /* --- bottom right: the weapon and its wait ------------------------- */
+
+      .hud-weapon {
+        position: absolute;
+        right: 22px;
+        bottom: 22px;
+        text-align: right;
+        color: var(--armour);
+      }
+
+      .hud-weapon-name {
+        color: var(--ink);
+        font-size: 16px;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+
+      .hud-weapon .hud-bar {
+        margin-left: auto;
+      }
+
+      .hud-weapon-cooldown {
+        margin-top: 4px;
+        color: var(--dim);
+        font-variant-numeric: tabular-nums;
+      }
+
+      .hud-weapon[data-state='ready'] .hud-weapon-cooldown {
+        color: var(--match);
+      }
+
+      /* --- everywhere: what just hit you --------------------------------- */
+
+      /* Both cover the whole viewport by design and are excluded from the
+         overlap rule for that reason — they are light, not layout. */
+      .hud-hurt,
+      .hud-damage {
+        position: absolute;
+        inset: 0;
+        opacity: 0;
+      }
+
+      .hud-hurt {
+        background: radial-gradient(
+          ellipse at center,
+          rgba(255, 74, 61, 0) 42%,
+          rgba(255, 74, 61, 0.45) 100%
+        );
+      }
+
+      /* A dial the size of the screen's short side, rotated so that the arc
+         at the top of it ends up pointing at whatever hit you. */
+      .hud-damage-dial {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 46vmin;
+        height: 46vmin;
+        transform: translate(-50%, -50%);
+      }
+
+      .hud-damage-arc {
+        position: absolute;
+        top: 0;
+        left: 50%;
+        width: 26%;
+        height: 12%;
+        transform: translateX(-50%);
+        border-top: 4px solid var(--hurt);
+        border-radius: 50% 50% 0 0 / 100% 100% 0 0;
       }
 
       /* The credits screen. `pointer-events` is turned back on because it is
