@@ -10,6 +10,7 @@ import {
   spawnEntity,
 } from './state.ts'
 import type { EntityState, GameState } from './state.ts'
+import { Weapon } from './weapon.ts'
 
 describe('state hash', () => {
   it('separates values that differ in the last bit', () => {
@@ -59,6 +60,8 @@ describe('state hash', () => {
       (e) => (e.angles[1] = 1),
       (e) => (e.angles[2] = 1),
       (e) => (e.health = 99),
+      (e) => (e.weapon = Weapon.Railgun),
+      (e) => (e.lastFireTick = 0),
       (e) => (e.knockbackTicks = 1),
       (e) => (e.ownerId = 7),
       (e) => (e.spawnTick = 1),
@@ -88,7 +91,7 @@ describe('state hash', () => {
     // A golden value. If this changes, either the state shape changed or the
     // digest did — and both are things a reviewer should be made to look at,
     // because every deployed client and server has to agree on it.
-    expect(formatHash(hashState(oneStandingPlayer()))).toBe('9ffe7211')
+    expect(formatHash(hashState(oneStandingPlayer()))).toBe('f7719557')
   })
 })
 

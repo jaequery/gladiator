@@ -139,6 +139,7 @@ export {
   SIGHT_TARGETS,
   SPAWN_HEALTH,
   SPAWN_PROTECTION_TICKS,
+  SPAWN_WEAPON,
   buildSpawnPlan,
   isSpawnProtected,
   playersOverlap,
@@ -299,3 +300,5 @@ export {
   yawUnitsFromDegrees,
 } from './usercmd.ts'
 export type { UserCmd } from './usercmd.ts'
+
+export { NEVER_FIRED, Weapon, isWeapon } from './weapon.ts'

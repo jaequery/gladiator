@@ -33,14 +33,16 @@ import {
   tick as simTick,
 } from '@gladiator/sim'
 
+import { dummyMode, dummyOpponent } from './dummyOpponent.ts'
 import { createHud } from './hud.ts'
 import { createInputController } from './input/controller.ts'
 import { advance, alphaOf } from './loop.ts'
 import { CLIENT_MAP, CLIENT_MAP_HASH } from './map.ts'
 import { createNetClient, mustHoldStill, resolveServerUrl } from './net.ts'
+import { type PlayerNetState, playerNetState } from './render/animState.ts'
 import { FRAME_BUDGET_MS, type FrameVerdict } from './render/frameStats.ts'
 import { type Renderer, createRenderer } from './render/renderer.ts'
-import { REFERENCE_VIEW, interpolateOrigin } from './render/view.ts'
+import { REFERENCE_VIEW, interpolateNetState, interpolateOrigin } from './render/view.ts'
 
 const BUILD = import.meta.env.VITE_BUILD ?? 'dev'
 
@@ -69,6 +71,10 @@ export type RenderSnapshot = {
   readonly frames: number
   readonly pixelRatio: number
   readonly triangles: number
+  /** Opponent rigs currently in the scene. GLAD-PWCON8. */
+  readonly drawnPlayers: number
+  /** `Weapon` the first-person viewmodel is showing; 0 is no hands. */
+  readonly viewmodelWeapon: number
   readonly meanMs: number
   readonly medianMs: number
   readonly p99Ms: number
@@ -164,6 +170,37 @@ function onGroundIn(state: GameState): boolean {
   return player !== null && (player.flags & EntityFlag.OnGround) !== 0
 }
 
+/**
+ * The local player as the renderer reads them, or `null` if they are missing.
+ *
+ * A *copy* of a slice of the entity, never the entity — see `PlayerNetState`.
+ * The viewmodel is drawn from it, which is what makes the hands obey the same
+ * netstate an opponent's model would.
+ */
+function netStateOf(state: GameState, slot: number): PlayerNetState | null {
+  const player = findPlayer(state, slot)
+  return player === null ? null : playerNetState(player)
+}
+
+/** Where the scripted opponent runs its circle. The middle of the arena. */
+const DUMMY_CENTRE: Vec3 = [0, 0, 0]
+
+/**
+ * The scripted opponent, interpolated between two ticks.
+ *
+ * Deliberately the same path a real snapshot pair will take: two `EntityState`s
+ * a tick apart, through `playerNetState` and `interpolateNetState`. When
+ * GLAD-6RT64L starts delivering real ones, what changes is where the two states
+ * come from and nothing else.
+ */
+function dummyAt(tick: number, alpha: number): PlayerNetState {
+  return interpolateNetState(
+    playerNetState(dummyOpponent(tick - 1, DUMMY_CENTRE)),
+    playerNetState(dummyOpponent(tick, DUMMY_CENTRE)),
+    alpha,
+  )
+}
+
 async function boot(): Promise<void> {
   const app = document.querySelector<HTMLElement>('#app')
   if (app === null) throw new Error('no #app element to mount into')
@@ -177,6 +214,11 @@ async function boot(): Promise<void> {
   const hud = createHud(overlay)
   const shot = shotMode(window.location.search)
   if (shot) overlay.hidden = true
+  // Nothing sends snapshots yet, so there is otherwise no opponent to draw.
+  // `dummyOpponent.ts` says why this exists and why it stays out of the
+  // simulation. Never in shot mode: the reference screenshot is a picture of a
+  // world with nothing moving in it.
+  const dummy = !shot && dummyMode(window.location.search)
 
   let renderer: Renderer
   try {
@@ -262,6 +304,8 @@ async function boot(): Promise<void> {
       frames: renderer.frames,
       pixelRatio: renderer.pixelRatio,
       triangles: renderer.triangles,
+      drawnPlayers: renderer.drawnPlayers,
+      viewmodelWeapon: renderer.viewmodelWeapon,
       meanMs: stats.meanMs,
       medianMs: stats.medianMs,
       p99Ms: stats.p99Ms,
@@ -343,17 +387,28 @@ async function boot(): Promise<void> {
       net.flush()
     }
 
+    const alpha = alphaOf(accumulatorMs)
+    // The viewmodel needs the local player's weapon and last shot, and nothing
+    // about its position: it hangs off the camera, which is interpolated
+    // already. So this is the newest netstate rather than an interpolated one.
+    const self = netStateOf(state, LOCAL_SLOT)
+    const opponents = dummy ? [dummyAt(state.tick, alpha)] : []
+
     renderer.render(
       {
         origin: interpolateOrigin(
           { origin: originOf(previous) },
           { origin: originOf(state) },
-          alphaOf(accumulatorMs),
+          alpha,
         ),
         // The view angle is the freshest thing the frame has; interpolating it
         // would add latency to aim. `render/view.ts`.
         yawUnits: cmd.yaw,
         pitchUnits: cmd.pitch,
+        tick: state.tick,
+        alpha,
+        ...(opponents.length > 0 ? { players: opponents } : {}),
+        ...(self === null ? {} : { self }),
       },
       elapsedMs,
     )

@@ -65,6 +65,7 @@ import { EntityFlag, EntityKind, NEVER_EXPIRES, findPlayer, spawnEntity } from '
 import type { EntityState, GameState } from '../state.ts'
 import { TICK_RATE } from '../tick.ts'
 import { SURFACE_CLIP_EPSILON, createTrace, traceRay } from '../trace.ts'
+import { NEVER_FIRED, Weapon } from '../weapon.ts'
 
 /* --------------------------------------------------------------------------
  * The policies, as numbers
@@ -78,6 +79,16 @@ import { SURFACE_CLIP_EPSILON, createTrace, traceRay } from '../trace.ts'
  * self-damage modes are GLAD-L4SYN9's; this is the number the spawn applies.
  */
 export const SPAWN_HEALTH = 100
+
+/**
+ * The weapon in a player's hands when the round starts.
+ *
+ * Rocket Arena hands you both weapons at full ammo, so this is not a *pickup*
+ * — it is which of the two you are holding on frame one. The launcher, because
+ * the rocket jump is the first thing a player has to learn and the railgun
+ * rewards a position you have not had time to take. Switching is GLAD-0QWRYK's.
+ */
+export const SPAWN_WEAPON = Weapon.RocketLauncher
 
 /**
  * Sub-steps of invulnerability after spawning. **Zero, deliberately.**
@@ -349,6 +360,7 @@ function placeAt(state: GameState, point: MapSpawn, slot: number): EntityState {
       origin,
       angles,
       health: SPAWN_HEALTH,
+      weapon: SPAWN_WEAPON,
     })
   }
 
@@ -357,6 +369,11 @@ function placeAt(state: GameState, point: MapSpawn, slot: number): EntityState {
   setVec3(existing.velocity, 0, 0, 0)
   existing.flags = 0
   existing.health = SPAWN_HEALTH
+  existing.weapon = SPAWN_WEAPON
+  // Or the animation would draw the muzzle flash of the shot that killed them
+  // last round: `lastFireTick` is a tick number, not an event, so a stale one
+  // is a shot that keeps happening. See `weapon.ts`.
+  existing.lastFireTick = NEVER_FIRED
   existing.knockbackTicks = 0
   existing.ownerId = 0
   existing.spawnTick = state.tick

@@ -17,6 +17,7 @@ import { vec3 } from './math.ts'
 import type { MutVec3 } from './math.ts'
 import { seedRng } from './rng.ts'
 import type { RngState } from './rng.ts'
+import { NEVER_FIRED, Weapon } from './weapon.ts'
 
 /** What an entity is. Numeric so it encodes in one byte. */
 export const EntityKind = {
@@ -73,6 +74,24 @@ export type EntityState = {
   angles: MutVec3
   health: number
   /**
+   * The weapon in this entity's hands. `weapon.ts`.
+   *
+   * Netstate rather than a client-side guess, because an opponent's weapon is
+   * something you *read* and change your movement about, and you have to be
+   * able to read it one snapshot after the server changed it. Set by
+   * GLAD-0QWRYK; drawn by GLAD-PWCON8.
+   */
+  weapon: Weapon
+  /**
+   * The tick this entity last fired on, or {@link NEVER_FIRED}.
+   *
+   * A tick number rather than a fire *event*, so it survives a dropped
+   * snapshot: see the header of `weapon.ts`. The animation derives the muzzle
+   * flash and the recoil from `tick - lastFireTick`, which means a client that
+   * joins mid-shot draws the right frame rather than none.
+   */
+  lastFireTick: number
+  /**
    * Sub-steps of knockback left. Quake 3's `ps->pm_time`.
    *
    * While it is positive the player takes no ground friction, accelerates as
@@ -122,6 +141,8 @@ export type EntityInit = {
   velocity?: MutVec3
   angles?: MutVec3
   health?: number
+  weapon?: Weapon
+  lastFireTick?: number
   knockbackTicks?: number
   ownerId?: number
   expireTick?: number
@@ -138,6 +159,8 @@ export function spawnEntity(state: GameState, init: EntityInit): EntityState {
     velocity: init.velocity ?? vec3(),
     angles: init.angles ?? vec3(),
     health: init.health ?? 0,
+    weapon: init.weapon ?? Weapon.None,
+    lastFireTick: init.lastFireTick ?? NEVER_FIRED,
     knockbackTicks: init.knockbackTicks ?? 0,
     ownerId: init.ownerId ?? 0,
     spawnTick: state.tick,
@@ -185,6 +208,8 @@ export function cloneEntity(entity: EntityState): EntityState {
     velocity: [entity.velocity[0], entity.velocity[1], entity.velocity[2]],
     angles: [entity.angles[0], entity.angles[1], entity.angles[2]],
     health: entity.health,
+    weapon: entity.weapon,
+    lastFireTick: entity.lastFireTick,
     knockbackTicks: entity.knockbackTicks,
     ownerId: entity.ownerId,
     spawnTick: entity.spawnTick,
@@ -251,6 +276,8 @@ export function encodeInto(writer: ByteWriter, state: GameState): void {
     writeF64(writer, entity.angles[1])
     writeF64(writer, entity.angles[2])
     writeF64(writer, entity.health)
+    writeU8(writer, entity.weapon)
+    writeI32(writer, entity.lastFireTick)
     writeI32(writer, entity.knockbackTicks)
     writeI32(writer, entity.ownerId)
     writeI32(writer, entity.spawnTick)

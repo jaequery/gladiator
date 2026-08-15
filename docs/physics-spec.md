@@ -965,6 +965,7 @@ first two, every time" is the answer that ships if nobody writes one down.
 | Constant | Value | Meaning |
 | -------- | ----- | ------- |
 | `SPAWN_HEALTH` | 100 | what every player stands up with, every round |
+| `SPAWN_WEAPON` | rocket launcher | which of the two is in your hands on frame one — both are always carried |
 | `SPAWN_PROTECTION_TICKS` | **0** | no invulnerability — see §6.4 |
 | `RESPAWN_DELAY_TICKS` | 375 = `3 · TICK_RATE` | three seconds between rounds |
 | `MIN_SPAWN_SEPARATION` | 512 | the floor a *pair* has to clear (§4.4) |

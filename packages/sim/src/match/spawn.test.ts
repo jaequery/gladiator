@@ -10,12 +10,14 @@ import { EntityFlag, EntityKind, createGameState, findPlayer, hashState } from '
 import type { EntityState, GameState } from '../state.ts'
 import { SURFACE_CLIP_EPSILON, createTrace, traceRay } from '../trace.ts'
 import { yawUnitsFromDegrees } from '../usercmd.ts'
+import { NEVER_FIRED, Weapon } from '../weapon.ts'
 import {
   DUEL_SLOTS,
   RESPAWN_DELAY_TICKS,
   SIGHT_TARGETS,
   SPAWN_HEALTH,
   SPAWN_PROTECTION_TICKS,
+  SPAWN_WEAPON,
   buildSpawnPlan,
   isSpawnProtected,
   playersOverlap,
@@ -341,6 +343,11 @@ describe('a spawned player', () => {
     expect(player.flags).toBe(0)
   })
 
+  it('holds the launcher, and has not fired', () => {
+    expect(player.weapon).toBe(SPAWN_WEAPON)
+    expect(player.lastFireTick).toBe(NEVER_FIRED)
+  })
+
   it('is not protected, because there is no spawn protection', () => {
     expect(SPAWN_PROTECTION_TICKS).toBe(0)
     expect(isSpawnProtected(state, player)).toBe(false)
@@ -363,6 +370,8 @@ describe('respawning between rounds', () => {
     player.health = 0
     player.flags = EntityFlag.Dead | EntityFlag.JumpHeld
     player.velocity[0] = 900
+    player.weapon = Weapon.Railgun
+    player.lastFireTick = state.tick
     for (let i = 0; i < RESPAWN_DELAY_TICKS; i += 1) tick(state, NO_INPUTS, world)
 
     spawnRound(state, plan)
@@ -372,6 +381,9 @@ describe('respawning between rounds', () => {
     expect(revived.health).toBe(SPAWN_HEALTH)
     expect(revived.flags).toBe(0)
     expect(revived.velocity[0]).toBe(0)
+    expect(revived.weapon).toBe(SPAWN_WEAPON)
+    // A stale `lastFireTick` is a muzzle flash that keeps happening.
+    expect(revived.lastFireTick).toBe(NEVER_FIRED)
     // `spawnTick` is the clock spawn protection would be measured against, so
     // it has to be this round's, not the one two rounds ago.
     expect(revived.spawnTick).toBe(state.tick)

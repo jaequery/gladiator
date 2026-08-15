@@ -31,8 +31,9 @@
  */
 import type { TargetCamera } from '@babylonjs/core/Cameras/targetCamera'
 import type { Scene } from '@babylonjs/core/scene'
-import { type MapGeometry, type MapSource } from '@gladiator/sim'
+import { type MapGeometry, type MapSource, type Weapon } from '@gladiator/sim'
 
+import { type AnimFrame, INITIAL_ANIM, type PlayerNetState, advanceAnim } from './animState.ts'
 import {
   type Backend,
   type RenderEngine,
@@ -50,8 +51,10 @@ import {
   meterVerdict,
 } from './frameStats.ts'
 import { type MapMesh, buildMapMesh, createGridTexture } from './mapMesh.ts'
+import { type PlayerRoster, createPlayerRoster } from './playerModel.ts'
 import { addLighting, applyPose, createCamera, createScene } from './scene.ts'
 import { type RenderView, cameraPose } from './view.ts'
+import { type Viewmodel, createViewmodel } from './viewmodel.ts'
 
 /**
  * How many frames the quality controller watches before it decides anything.
@@ -108,7 +111,12 @@ export type Renderer = {
   readonly ready: boolean
   readonly frames: number
   readonly pixelRatio: number
+  /** The arena's triangles. The player rigs are not counted. */
   readonly triangles: number
+  /** How many opponent rigs are currently in the scene. */
+  readonly drawnPlayers: number
+  /** The weapon the viewmodel is showing, or `Weapon.None` for no hands. */
+  readonly viewmodelWeapon: Weapon
 }
 
 export async function createRenderer(options: RendererOptions): Promise<Renderer> {
@@ -128,6 +136,12 @@ export async function createRenderer(options: RendererOptions): Promise<Renderer
   addLighting(scene, options.map)
   const grid = createGridTexture(scene, engine)
   const arena: MapMesh = buildMapMesh(scene, options.map, options.geometry, grid)
+  // Built now rather than the first time a weapon is drawn, so its shaders
+  // compile behind the loading screen with everything else. It draws nothing
+  // until a view arrives carrying a `self` — which the reference screenshot
+  // never does. See `viewmodel.ts`.
+  const viewmodel: Viewmodel = createViewmodel(scene, camera)
+  const roster: PlayerRoster = createPlayerRoster(scene)
 
   // The whole point of the pre-warm: force every shader to compile now, behind
   // the loading screen, rather than the first time something is drawn.
@@ -147,6 +161,22 @@ export async function createRenderer(options: RendererOptions): Promise<Renderer
   let pixelRatio = ceiling
   let frames = 0
 
+  // The local player's animation. Only the viewmodel reads it — you never see
+  // your own model — but it is the same fold over the same netstate, so the
+  // hands bob at the speed the legs would run at.
+  let selfAnim: AnimFrame = INITIAL_ANIM
+
+  const drawViewmodel = (view: RenderView, tick: number, alpha: number): void => {
+    const self: PlayerNetState | undefined = view.self
+    if (self === undefined) {
+      viewmodel.setVisible(false)
+      return
+    }
+    viewmodel.setVisible(true)
+    selfAnim = advanceAnim(selfAnim, self, tick)
+    viewmodel.update(self, selfAnim, tick, alpha)
+  }
+
   return {
     backend: rendering.backend,
     description: rendering.description,
@@ -161,12 +191,25 @@ export async function createRenderer(options: RendererOptions): Promise<Renderer
     get pixelRatio() {
       return pixelRatio
     },
+    get drawnPlayers() {
+      return roster.count
+    },
+    get viewmodelWeapon() {
+      return viewmodel.weapon
+    },
 
     render(view, intervalMs) {
       meter.record(intervalMs)
       recent.record(intervalMs)
 
       applyPose(camera, cameraPose(view))
+      // After the camera and before the draw: everything below is written from
+      // the same view the camera was, so a frame is one consistent moment.
+      const tick = view.tick ?? 0
+      const alpha = view.alpha ?? 0
+      roster.draw(view.players ?? [], tick, alpha)
+      drawViewmodel(view, tick, alpha)
+
       scene.render()
       frames += 1
 
@@ -207,6 +250,8 @@ export async function createRenderer(options: RendererOptions): Promise<Renderer
     resetFrameStats: () => meter.reset(),
 
     dispose() {
+      roster.dispose()
+      viewmodel.dispose()
       arena.dispose()
       grid.dispose()
       scene.dispose()
