@@ -57,8 +57,11 @@ export const MIN_SPAWN_HEADROOM = 96
  *
  * 512 is about two seconds of running. Closer than that and the round is
  * decided by who happened to be facing the right way, which is the opposite of
- * what a duel format is for. Spawn *selection* — which of these gets used, and
- * the telefrag policy — is GLAD-AKODBZ; this is only the floor under it.
+ * what a duel format is for.
+ *
+ * It is the floor, not the rule. Spawn *selection* — `match/spawn.ts` — holds a
+ * pair to this distance **and** to being out of each other's sight, and a map
+ * where no pair clears both does not bake. `docs/physics-spec.md` §6.
  */
 export const MIN_SPAWN_SEPARATION = 512
 

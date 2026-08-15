@@ -166,7 +166,7 @@ function impactProjectile(
 
   if (hit !== null && def.damage > 0) {
     normalizeVec3(impactDir, rocket.velocity)
-    applyDamage(hit, rocket.ownerId, impactDir, def.damage)
+    applyDamage(state, hit, rocket.ownerId, impactDir, def.damage)
   }
 
   if (def.splashDamage > 0) {

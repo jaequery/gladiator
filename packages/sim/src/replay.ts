@@ -53,7 +53,13 @@ export type ScriptFrame = {
   readonly weapon?: Weapon
 }
 
-/** A player present in the world at tick 0. Not a spawn *policy* — GLAD-AKODBZ. */
+/**
+ * A player present in the world at tick 0.
+ *
+ * A written-down starting position, not a spawn *policy*: policy is
+ * `match/spawn.ts` and it draws from the PRNG, which is the last thing a replay
+ * wants deciding where its first frame begins.
+ */
 export type ReplaySpawn = {
   readonly slot: number
   readonly origin: readonly [number, number, number]

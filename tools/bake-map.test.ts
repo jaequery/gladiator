@@ -6,6 +6,17 @@ import { bake, bakeAll, discoverMaps, serialize } from './bake-map.ts'
 import { box, defineMap, spawn, surface } from '../maps/helpers.ts'
 
 /**
+ * The screen between the two spawns.
+ *
+ * `map/validate.ts` refuses a map where no two spawns are both far enough apart
+ * and out of each other's sight, and a room with nothing in it is a room where
+ * they can all see each other. This is the smallest thing that makes the
+ * fixture a legal arena: it runs floor to ceiling, so it adds no ledge for the
+ * reachability pass to have an opinion about either.
+ */
+const SCREEN = box('shell', [-64, -256, 0], [64, 256, 512])
+
+/**
  * A map that bakes, to perturb one rule at a time.
  *
  * Big enough that the spawns clear `MIN_SPAWN_SEPARATION` with room to spare,
@@ -22,6 +33,7 @@ function validMap(over: Partial<MapSource> = {}): MapSource {
       brushes: [
         box('shell', [-1024, -1024, -64], [1024, 1024, 0]),
         box('shell', [-1024, -1024, 512], [1024, 1024, 576]),
+        SCREEN,
       ],
       spawns: [spawn([-512, 0, 0], 0), spawn([512, 0, 0], 180)],
     }),
@@ -55,6 +67,7 @@ describe('the bake', () => {
         brushes: [
           box('shell', [-1023, -1024, -64], [1024, 1024, 0]),
           box('shell', [-1024, -1024, 512], [1024, 1024, 576]),
+          SCREEN,
         ],
       }),
     )

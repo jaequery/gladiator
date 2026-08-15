@@ -14,6 +14,7 @@ import {
   radiusDamage,
 } from './damage.ts'
 import { lengthVec3, vec3 } from './math.ts'
+import { isSpawnProtected } from './match/spawn.ts'
 import { EntityFlag, EntityKind, NO_ENTITY, createGameState, spawnEntity } from './state.ts'
 import type { EntityState, GameState } from './state.ts'
 import { WEAPONS } from './weapons.ts'
@@ -71,10 +72,10 @@ describe('the knockback formula', () => {
 
 describe('applyDamage', () => {
   it('adds to the velocity rather than replacing it', () => {
-    const { player } = worldWithPlayer()
+    const { state, player } = worldWithPlayer()
     player.velocity = vec3(0, 0, 270)
 
-    applyDamage(player, NO_ENTITY, [0, 0, 1], 100)
+    applyDamage(state, player, NO_ENTITY, [0, 0, 1], 100)
 
     // A jump you fire a rocket into keeps the jump. This is the whole of
     // `jump + rocket = 770`.
@@ -82,39 +83,39 @@ describe('applyDamage', () => {
   })
 
   it('normalises the direction it is handed', () => {
-    const { player } = worldWithPlayer()
-    applyDamage(player, NO_ENTITY, [0, 0, 9999], 100)
+    const { state, player } = worldWithPlayer()
+    applyDamage(state, player, NO_ENTITY, [0, 0, 9999], 100)
     expect(player.velocity[2]).toBe(500)
   })
 
   it('halves self-damage in health but not in knockback', () => {
-    const { player } = worldWithPlayer()
+    const { state, player } = worldWithPlayer()
 
-    applyDamage(player, player.id, [0, 0, 1], 100)
+    applyDamage(state, player, player.id, [0, 0, 1], 100)
 
     expect(player.velocity[2]).toBe(500)
     expect(player.health).toBe(100 - 100 * SELF_DAMAGE_SCALE)
   })
 
   it('only arms the knockback timer when one is not already running', () => {
-    const { player } = worldWithPlayer()
+    const { state, player } = worldWithPlayer()
 
-    applyDamage(player, NO_ENTITY, [0, 0, 1], 100)
+    applyDamage(state, player, NO_ENTITY, [0, 0, 1], 100)
     expect(player.knockbackTicks).toBe(25)
 
     player.knockbackTicks = 3
-    applyDamage(player, NO_ENTITY, [0, 0, 1], 100)
+    applyDamage(state, player, NO_ENTITY, [0, 0, 1], 100)
     expect(player.knockbackTicks).toBe(3)
   })
 
   it('marks a player dead at zero health and then leaves them alone', () => {
-    const { player } = worldWithPlayer()
+    const { state, player } = worldWithPlayer()
 
-    applyDamage(player, NO_ENTITY, [0, 0, 1], 100)
+    applyDamage(state, player, NO_ENTITY, [0, 0, 1], 100)
     expect(player.flags & EntityFlag.Dead).not.toBe(0)
 
     const velocity = player.velocity[2]
-    applyDamage(player, NO_ENTITY, [0, 0, 1], 100)
+    applyDamage(state, player, NO_ENTITY, [0, 0, 1], 100)
     expect(player.velocity[2]).toBe(velocity)
   })
 })
@@ -197,5 +198,16 @@ describe('radiusDamage', () => {
   it('can see a player standing in the open', () => {
     const { player } = worldWithPlayer()
     expect(canDamage(OPEN, player, [48, 0, 0])).toBe(true)
+  })
+
+  it('respects spawn protection, which is currently a window of zero ticks', () => {
+    // GLAD-AKODBZ decided the window is zero and left `isSpawnProtected` as the
+    // seam; `applyDamage` calls it, so turning it on is one constant rather
+    // than one constant and a search for the places that should have asked.
+    const { state, player } = worldWithPlayer()
+    expect(isSpawnProtected(state, player)).toBe(false)
+
+    radiusDamage(state, OPEN, [0, 0, 0], ROCKET.splashDamage, ROCKET.splashRadius, 99, NO_ENTITY)
+    expect(player.health).toBe(0)
   })
 })

@@ -29,6 +29,7 @@ import { DAMAGE_ORIGIN_HEIGHT, PLAYER_MAXS, PLAYER_MINS } from './bbox.ts'
 import type { CollisionWorld } from './collide.ts'
 import { normalizeVec3, setVec3, vec3 } from './math.ts'
 import type { MutVec3 } from './math.ts'
+import { isSpawnProtected } from './match/spawn.ts'
 import { EntityFlag, EntityKind } from './state.ts'
 import type { EntityState, GameState } from './state.ts'
 import { TICK_INTERVAL_MS } from './tick.ts'
@@ -141,6 +142,7 @@ export function knockbackTicksFor(damage: number): number {
  * damaged itself.
  */
 export function applyDamage(
+  state: GameState,
   target: EntityState,
   attackerId: number,
   dir: Vec3,
@@ -149,6 +151,13 @@ export function applyDamage(
 ): number {
   if (points <= 0) return 0
   if ((target.flags & EntityFlag.Dead) !== 0) return 0
+
+  // The one gate every hit goes through, which is why spawn protection is
+  // consulted here rather than at each of the three places a shot lands.
+  // GLAD-AKODBZ decided the window is zero and left this as the seam; a seam
+  // nothing calls is a comment, so this calls it. Your own splash is exempt —
+  // protection that also cancelled a rocket jump would change the movement.
+  if (target.id !== attackerId && isSpawnProtected(state, target)) return 0
 
   // The push is computed from the *full* damage, before the self-damage scale
   // is applied to the health loss below. That ordering is Quake's and it is the
@@ -308,7 +317,7 @@ export function radiusDamage(
       target.origin[2] + DAMAGE_ORIGIN_HEIGHT - point[2] + SPLASH_UP_BIAS,
     )
 
-    if (applyDamage(target, attackerId, splashDir, points, selfScale) > 0) hits += 1
+    if (applyDamage(state, target, attackerId, splashDir, points, selfScale) > 0) hits += 1
   }
 
   return hits

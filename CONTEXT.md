@@ -58,8 +58,18 @@ weapons share. There is no ammunition anywhere in the simulation.
 mid-air, exploiting how Quake's `pmove` projects acceleration onto velocity.
 Along with rocket-jumping, the skill ceiling of the movement.
 
-**Telefrag** — spawning inside another player and killing them by arrival.
-Spawn selection has to have a policy about it (GLAD-AKODBZ).
+**Telefrag** — spawning inside another player and killing them by arrival. The
+policy is Quake's: the arrival lives and the occupant dies, so that camping a
+spawn pad is the worst idea in the arena. `docs/physics-spec.md` §6.4.
+
+**Spawn plan** — the pairs of a map's spawn points a round may start on: far
+enough apart, and unable to see each other. Worked out once per map from the
+geometry (`match/spawn.ts`), so that a round start is two draws from the seeded
+PRNG and no tracing at all. §6.2.
+
+**Spawn protection** — brief invulnerability after spawning. Gladiator has
+**none**, deliberately: a round-based duel starts both players out of sight of
+each other, so there is nothing for it to protect against. §6.4.
 
 ---
 
@@ -185,6 +195,35 @@ its own depth range. `docs/renderer.md` §11.
 
 ---
 
+## The audio
+
+**Feedback bus** — the non-positional path: source, gain, out. Your own weapon,
+your hit confirmation, the damage you took. No panner, no distance model, least
+possible latency. `packages/client/src/audio/feedback.ts`; `docs/audio.md` §1.
+
+**World bus** — the positional path, HRTF-panned and distance-attenuated.
+Everything that happened out there: their weapons, explosions, their footsteps.
+`audio/positional.ts`; §1.
+
+**HRTF** — head-related transfer function: panning by convolving with a measured
+impulse response, so front, back and elevation are distinguishable rather than
+just left and right. What `equalpower` cannot do, and the reason the world bus
+costs what it costs. §2.
+
+**Cue** — one sound to play, produced by folding a netstate against the last one
+seen. `audio/cues.ts` is `render/animState.ts`'s twin: same input, same rule
+that a first sighting is silent, ears instead of eyes. §7.
+
+**Stride** — the 128 Quake units of ground travel between footsteps. Distance,
+not time, so the rate is a property of the player rather than of the frame rate.
+§7.
+
+**Onset** — how long after a voice is scheduled its first audible sample is, in
+an offline render. Half of the "audible within one frame" measurement; the
+device's `baseLatency` is the other half. §5.
+
+---
+
 ## The network
 
 **Listen server** — a server running inside the client process. How
@@ -258,6 +297,11 @@ data) into the compact form the sim loads (GLAD-G2M8QQ, GLAD-OB46VC).
 **Baked map** — what `pnpm map:bake` writes: `maps/baked/<name>.json`, carrying
 the format version, the map, and the content hash. Committed, so a build needs
 no bake step in front of it. `docs/physics-spec.md` §4.
+
+**Baked sound** — what `pnpm audio:bake` writes: `packages/client/public/audio/*.wav`,
+synthesised from arithmetic by `tools/synth-audio.ts` rather than downloaded.
+Committed, bit-reproducible, and CC0 because nobody else made it. `docs/audio.md`
+§8; every file is listed in `CREDITS.md`.
 
 **Ramp** — a brush that is an axis-aligned box with its top face replaced by one
 sloped plane. Exactly two gradients exist, `1:1` (45°) and `1:2` (26.57°), so

@@ -364,7 +364,7 @@ function fireRailgun(
     }
   }
 
-  if (hit !== null) applyDamage(hit, shooter.id, dir, def.damage)
+  if (hit !== null) applyDamage(state, hit, shooter.id, dir, def.damage)
 }
 
 /**
