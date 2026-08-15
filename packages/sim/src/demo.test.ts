@@ -27,6 +27,7 @@ import type { MapSource } from './map/schema.ts'
 import { buildSpawnPlan } from './match/spawn.ts'
 import { startMatch } from './match/round.ts'
 import { createCollisionWorld } from './collide.ts'
+import { ANGLE_UNITS } from './usercmd.ts'
 import { PROTOCOL_VERSION } from './protocol.ts'
 import { BUTTON_ATTACK, BUTTON_JUMP, NULL_CMD, yawUnitsFromDegrees } from './usercmd.ts'
 import type { UserCmd } from './usercmd.ts'
@@ -202,8 +203,13 @@ describe('a demo', () => {
     // A tick is a total function, so the door is the only place a bad value can
     // be turned away — the same rule `decodeCmd` holds the wire to. The file
     // still decodes and still replays; what it replays is a legal command.
+    //
+    // Five of the six fields become zero. The yaw does not, and that is the one
+    // field in a `UserCmd` that *wraps* rather than clamping (GLAD-V7M6PQ): a
+    // yaw has no illegal value, only an unwrapped one, so 999999999 units is
+    // 51711 units rather than "facing due north".
     const read = decodeDemo(lines.join('\n'))
-    expect(read.frames[0]?.[0]).toEqual([0, 0, 0, 0, 0, 1])
+    expect(read.frames[0]?.[0]).toEqual([0, 0, 999999999 % ANGLE_UNITS, 0, 0, 1])
     expect(() => replayDemo(read, { map })).not.toThrow()
   })
 

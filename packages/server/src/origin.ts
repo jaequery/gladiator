@@ -43,9 +43,12 @@
  * ## What this is not
  *
  * `Origin` is set by browsers, not by people. A native client can send whatever
- * it likes, so this stops browser-based abuse and nothing else — it is
- * defence in depth in front of a server that is authoritative anyway.
- * Authentication, rate limits and message caps are GLAD-V7M6PQ.
+ * it likes, so this stops browser-based abuse and nothing else — it is defence
+ * in depth in front of a server that is authoritative anyway. What stops the
+ * rest is that the server distrusts everything it is handed: `validate.ts`
+ * bounds what a connection may send, `server.ts` bounds how often an address
+ * may open one, and `sim/usercmd.ts` bounds what a command may contain. There
+ * is still no authentication — a room code is a capability, not an identity.
  */
 import type { ServerConfig } from './config.ts'
 

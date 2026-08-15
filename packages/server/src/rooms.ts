@@ -34,6 +34,15 @@
  * from under a reconnect that was still inside its window. `lifecycle.test.ts`
  * asserts it, because it is exactly the kind of relationship that survives right
  * up until somebody tunes one of the two numbers.
+ *
+ * ## One room's bad day is one room's
+ *
+ * Every world on the machine is advanced by one call from one timer, so an
+ * exception out of any room's sub-step would unwind through the scheduler's
+ * frame and leave every *other* room silently un-ticked — two hundred duels
+ * ended by one hostile client. So `advance` and `sweep` run each room behind a
+ * try/catch, and a room that threw is closed and counted (`faulted`) rather than
+ * left in the map to throw again on the next frame. GLAD-V7M6PQ.
  */
 import { CloseReason, NEW_MATCH_SCORE, hashString, type MatchScore } from '@gladiator/sim'
 
@@ -112,6 +121,15 @@ export type RegistryStats = {
   readonly reaped: number
   /** Joins that named a code no room had. */
   readonly missed: number
+  /**
+   * Rooms closed because ticking or sweeping one threw.
+   *
+   * Should be zero forever. It is served from `/healthz` rather than only
+   * logged because a nonzero reading is the signal that some frame is reaching
+   * code that treats it as trustworthy, and that is worth finding before it is
+   * found for us.
+   */
+  readonly faulted: number
 }
 
 export type RoomRegistry = {
@@ -206,6 +224,7 @@ export function createRoomRegistry(options: RoomRegistryOptions): RoomRegistry {
   let created = 0
   let reaped = 0
   let missed = 0
+  let faulted = 0
 
   const viewOf = (live: Live): RoomEntry => ({
     code: live.code,
@@ -246,6 +265,41 @@ export function createRoomRegistry(options: RoomRegistryOptions): RoomRegistry {
     rooms.set(code, live)
     created += 1
     return live
+  }
+
+  /**
+   * Run `what` for one room, and let the others carry on if it throws.
+   *
+   * The whole machine's worth of worlds is advanced by one call from one timer
+   * (`scheduler.ts`), so an exception out of any room's sub-step unwinds through
+   * the scheduler's frame and every *other* room silently stops being ticked.
+   * That is the blast radius GLAD-V7M6PQ is about: a hostile client should be
+   * able to end its own match and nobody else's.
+   *
+   * A room that threw is closed rather than left in the registry. Whatever put
+   * it in that state is still in its `GameState`, so the next frame would throw
+   * again — a room that fails forever is a room that has to be told about, and
+   * both peers are better off reconnecting into a new one than watching a world
+   * that has stopped.
+   */
+  const isolate = (live: Live, what: string, run: () => void): void => {
+    try {
+      run()
+    } catch (thrown) {
+      // `error` rather than `warn`: this should be unreachable, so a line here
+      // is a frame that reached code treating it as trustworthy — the thing
+      // GLAD-V7M6PQ wants found before it is found for us. `drop` after the log,
+      // so the tick the room died on is still readable off its world.
+      log('registry.room_faulted', {
+        level: 'error',
+        room: live.code,
+        tick: live.room.tick,
+        phase: what,
+        error: thrown instanceof Error ? thrown.message : String(thrown),
+      })
+      faulted += 1
+      drop(live, CloseReason.Abnormal, 'room faulted')
+    }
   }
 
   return {
@@ -323,7 +377,11 @@ export function createRoomRegistry(options: RoomRegistryOptions): RoomRegistry {
 
     advance(steps: number) {
       if (steps <= 0) return
-      for (const live of rooms.values()) live.room.advance(steps)
+      // Over a copy, and one room at a time behind `isolate`: a room that throws
+      // is closed and dropped from the map being walked.
+      for (const live of [...rooms.values()]) {
+        isolate(live, 'advance', () => live.room.advance(steps))
+      }
     },
 
     sweep(nowMs: number) {
@@ -331,7 +389,8 @@ export function createRoomRegistry(options: RoomRegistryOptions): RoomRegistry {
       // `Map` iterator tolerates that but the sweep below also closes peers,
       // which reenters through `onClose`. One list, taken once.
       for (const live of [...rooms.values()]) {
-        live.room.sweep(nowMs)
+        isolate(live, 'sweep', () => live.room.sweep(nowMs))
+        if (!rooms.has(live.code)) continue
 
         if (live.room.peers.length > 0) {
           live.emptySinceMs = null
@@ -363,7 +422,7 @@ export function createRoomRegistry(options: RoomRegistryOptions): RoomRegistry {
     stats: (): RegistryStats => {
       let peers = 0
       for (const live of rooms.values()) peers += live.room.peers.length
-      return { rooms: rooms.size, capacity: maxRooms, peers, created, reaped, missed }
+      return { rooms: rooms.size, capacity: maxRooms, peers, created, reaped, missed, faulted }
     },
 
     closeAll(closeCode = CloseReason.Normal, reason = '') {

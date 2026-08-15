@@ -2,6 +2,11 @@ import { describe, expect, it } from 'vitest'
 
 import {
   ANGLE_UNITS,
+  ANGLE_UNITS_PER_DEGREE,
+  BUTTON_ATTACK,
+  BUTTON_JUMP,
+  BUTTON_MASK,
+  MAX_MOVE,
   MAX_PITCH_UNITS,
   angleUnitsToRadians,
   pitchUnitsFromDegrees,
@@ -71,6 +76,56 @@ describe('sanitizeUserCmd', () => {
       forwardMove: 1,
       sideMove: -1,
     })
+  })
+
+  it('clamps movement past +/-127, which is the byte range Quake sends', () => {
+    // A `UserCmd` axis here is a *direction* and not a speed, so 127 is not a
+    // number this game has a meaning for — it is an old client, or a client
+    // hoping the field is a multiplier.
+    expect(sanitizeUserCmd({ forwardMove: 127, sideMove: -127 })).toMatchObject({
+      forwardMove: MAX_MOVE,
+      sideMove: -MAX_MOVE,
+    })
+  })
+
+  it('wraps a yaw past 180 degrees rather than clamping it', () => {
+    // 400 degrees is 40, and that is the whole difference between this field and
+    // the one below it: a yaw has no illegal value, only an unwrapped one.
+    // Clamping would turn an overflowed spin counter into a view that teleports
+    // to due north, which is a thing the other player would watch happen.
+    expect(sanitizeUserCmd({ yaw: Math.round(400 * ANGLE_UNITS_PER_DEGREE) }).yaw).toBe(
+      Math.round(40 * ANGLE_UNITS_PER_DEGREE),
+    )
+    expect(sanitizeUserCmd({ yaw: -Math.round(90 * ANGLE_UNITS_PER_DEGREE) }).yaw).toBe(
+      yawUnitsFromDegrees(-90),
+    )
+    for (const hostile of [ANGLE_UNITS, ANGLE_UNITS * 1000, -ANGLE_UNITS * 1000, 2147483647]) {
+      const yaw = sanitizeUserCmd({ yaw: hostile }).yaw
+      expect(yaw, String(hostile)).toBeGreaterThanOrEqual(0)
+      expect(yaw, String(hostile)).toBeLessThan(ANGLE_UNITS)
+    }
+  })
+
+  it('clamps a pitch past +/-89 degrees, in both directions', () => {
+    const beyond = Math.round(180 * ANGLE_UNITS_PER_DEGREE)
+    expect(sanitizeUserCmd({ pitch: beyond }).pitch).toBe(MAX_PITCH_UNITS)
+    expect(sanitizeUserCmd({ pitch: -beyond }).pitch).toBe(-MAX_PITCH_UNITS)
+  })
+
+  it('masks a button bit nobody has defined', () => {
+    // An undefined bit is a number the state hash carries and two peers can
+    // quietly disagree about, and a bit that is *later* defined would arrive
+    // already set from clients that had been sending noise.
+    expect(sanitizeUserCmd({ buttons: 0xffff }).buttons).toBe(BUTTON_MASK)
+    expect(sanitizeUserCmd({ buttons: BUTTON_JUMP | 0x40 }).buttons).toBe(BUTTON_JUMP)
+    expect(sanitizeUserCmd({ buttons: BUTTON_JUMP | BUTTON_ATTACK }).buttons).toBe(BUTTON_MASK)
+  })
+
+  it('does not turn a negative button field into every button at once', () => {
+    // Two's complement makes `-1 & BUTTON_MASK` a held trigger, which is a
+    // rocket the player never asked for. Zeroed before the mask, not after.
+    expect(sanitizeUserCmd({ buttons: -1 }).buttons).toBe(0)
+    expect(sanitizeUserCmd({ buttons: -0xffff }).buttons).toBe(0)
   })
 
   it('survives junk', () => {

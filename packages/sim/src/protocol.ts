@@ -91,12 +91,32 @@ export const PROTOCOL_VERSION = 9
  * stalled frame to 250 ms, which is 31 ticks, so anything near this cap is a
  * client that is lying.
  *
- * A cap on one *frame*, which is a different question from a cap on the rate:
- * a client sending 500 legal-sized batches a second passes this and is refused
- * by the token bucket in `server/src/inputQueue.ts`. The rest of the hardening
- * — message sizes, connection-level limits, malformed frames — is GLAD-V7M6PQ.
+ * A cap on one *frame*, which is a different question from a cap on the rate: a
+ * client sending 500 legal-sized batches a second passes this and is refused
+ * twice over — by the frame limiter in `server/src/validate.ts`, which bounds
+ * the pipe, and by the command bucket in `server/src/inputQueue.ts`, which
+ * bounds how much of the world's time one player may consume.
  */
 export const MAX_CMDS_PER_BATCH = 256
+
+/**
+ * The largest tick label a frame may carry: 2^31, exclusive.
+ *
+ * A tick counter runs at 125 Hz, so 2^31 is 198 days of continuous play — more
+ * than any session, by six months. What it stops is not overflow but a *lie*: a
+ * client labelling one command `Number.MAX_SAFE_INTEGER` moves its own input
+ * queue's admission window there and every honest command it sends afterwards is
+ * refused as late, which is a session that connects and then silently cannot
+ * move. Cheaper to refuse the frame than to debug the symptom.
+ *
+ * It bounds the *end* of a batch, not its start, so a legal `startTick` with 256
+ * commands hanging off it cannot step over the line either.
+ *
+ * Written out rather than as `2 ** 31`: exponentiation is a lint error in this
+ * package, because it is implementation-approximated and this package has to
+ * produce bit-identical results in two engines.
+ */
+export const MAX_TICK = 2147483648
 
 /**
  * The longest resume ticket this protocol will carry, in characters.
@@ -554,6 +574,10 @@ export function parseClientMessage(raw: string): ClientMessage | null {
     const cmds = record['cmds']
     if (startTick === null || startTick < 0) return null
     if (!Array.isArray(cmds) || cmds.length === 0 || cmds.length > MAX_CMDS_PER_BATCH) return null
+    // The whole batch has to land below the ceiling, not just its first command:
+    // see {@link MAX_TICK} for what a label out here costs the session that sent
+    // it.
+    if (startTick + cmds.length > MAX_TICK) return null
     return { t: 'cmds', startTick, cmds: cmds.map((cmd) => encodeCmd(decodeCmd(cmd))) }
   }
 

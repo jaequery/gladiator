@@ -49,6 +49,16 @@
  * for a peer, because a stall on one peer's socket is a hitch in the other
  * peer's game.
  *
+ * ## Nothing is read before it has been let in
+ *
+ * Every frame goes through `validate.ts` first — a size cap, a frame rate, a
+ * byte rate and "the protocol is text" — and only what survives reaches
+ * `JSON.parse`. That door is a *room's*, not the Node edge's, because the listen
+ * server is a room behind a loopback and a limit that only existed on the socket
+ * path would be a limit single-player never exercises. The socket has its own
+ * copy of the size cap (`ws`'s `maxPayload`), which is the one that keeps an
+ * oversized frame from ever being assembled.
+ *
  * ## It does hold a stopwatch, and it is the only one
  *
  * The one wall-clock measurement a room makes about a peer is the round trip,
@@ -108,7 +118,9 @@ import {
 } from './lifecycle.ts'
 import type { Uint32Source } from './roomCode.ts'
 import {
-  CLOSE_BAD_FRAME,
+  // No `CLOSE_BAD_FRAME` here: the binary-frame refusal it used to name moved
+  // to the door, and `validate.ts` closes with it now. Same code, same fault
+  // text, one layer earlier — which is the point of having a door.
   CLOSE_MATCH_ENDED,
   CLOSE_REPLACED,
   CLOSE_ROOM_FULL,
@@ -118,6 +130,7 @@ import {
   type ServerIdentity,
   type SessionState,
 } from './session.ts'
+import { createFrameGuard, type FrameGuard, type FrameGuardOptions } from './validate.ts'
 
 /**
  * How long a peer may say nothing before the room decides the wire is gone.
@@ -201,6 +214,16 @@ export type RoomOptions = {
    */
   readonly peerId?: (index: number) => string
   /**
+   * What a connection is allowed to send. `validate.ts`.
+   *
+   * A room's business rather than the Node edge's, because the listen server is
+   * a room behind a loopback and the door has to be the same one — a limit that
+   * only existed on the socket path would be a limit single-player never
+   * exercises. Defaults are the shipping ones; a test passes smaller numbers so
+   * it can reach them in a handful of frames.
+   */
+  readonly frameGuard?: FrameGuardOptions
+  /**
    * Where this room's events go. One JSON object per event (`log.ts`).
    *
    * The room stamps its own code and its own live tick on to everything it
@@ -264,6 +287,8 @@ export type RoomSnapshot = {
   readonly gaps: number
   /** Sub-steps in which some peer's buffer was empty and the fallback ran. */
   readonly starved: number
+  /** Frames turned away at the door: binary, oversized, or too fast. */
+  readonly refused: number
   /** Seats being held for a peer that might come back. `lifecycle.ts`. */
   readonly held: number
   /** Whether this match is decided and cannot be rejoined. */
@@ -361,6 +386,8 @@ type PeerRecord = {
   readonly clockSync: ServerClockSync
   /** Per peer, because a jitter buffer is a property of one link too. */
   readonly queue: InputQueue
+  /** Per peer, because a rate limit shared between peers is one peer's DoS. */
+  readonly guard: FrameGuard
   session: SessionState
   lastHeardMs: number
   open: boolean
@@ -418,6 +445,10 @@ export function createRoom(options: RoomOptions): Room {
   const peers: PeerRecord[] = []
   let joined = 0
   let starved = 0
+  // Frames refused at the door by peers that have since gone. A fuzzer is
+  // closed on and then forgotten, and a counter that only summed *live* peers
+  // would forget what it did on the way out.
+  let refused = 0
   /** Set while the room is tearing down, so a close is not read as a departure. */
   let closing = false
 
@@ -513,6 +544,13 @@ export function createRoom(options: RoomOptions): Room {
     record.open = false
     const at = peers.indexOf(record)
     if (at >= 0) peers.splice(at, 1)
+
+    // Carried off the record before it is dropped, and above the `closing`
+    // return because a room being torn down is exactly when this number is
+    // being read: `stats()` sums the live peers, so a fuzzer that has been
+    // closed on would take its own refusals out of the total on the way out.
+    // The idempotence guard above is what keeps this from counting twice.
+    refused += record.guard.stats.refused
     if (closing) return
 
     // Whether the seat is *held* or simply reopened is a question about the
@@ -594,19 +632,34 @@ export function createRoom(options: RoomOptions): Room {
     const nowMs = clock.nowMs()
     record.lastHeardMs = nowMs
 
-    if (typeof message !== 'string') {
-      // The protocol is JSON text. A binary frame is either a client speaking
-      // something else or a client speaking the *next* protocol, and guessing
-      // which is worse than saying so.
-      send(record, { t: 'fault', code: 'binary', detail: 'this protocol is JSON text' })
-      record.transport.close(CLOSE_BAD_FRAME, 'binary frame')
+    // The door, before anything reads the frame: size, rate, and "the protocol
+    // is text". `validate.ts` owns every one of those numbers and the argument
+    // for why a flood is dropped in silence until it is closed on.
+    const verdict = record.guard.admit(message, nowMs)
+    if (verdict.text === null) {
+      if (verdict.fault !== null) send(record, verdict.fault)
+      if (verdict.close !== null) {
+        // One line per closed connection, never one per refused frame: the
+        // throttle is silent for the same reason it does not reply, and a log
+        // an attacker can fill is a log nobody can read. `refused` rides along
+        // because "closed on the first binary frame" and "closed after a
+        // hundred" are the two different stories this event tells.
+        log('room.peer_refused', {
+          level: 'warn',
+          peer: record.id,
+          slot: record.slot,
+          fate: verdict.fate,
+          refused: record.guard.stats.refused,
+        })
+        record.transport.close(verdict.close.code, verdict.close.reason)
+      }
       return
     }
 
     // Parsed here rather than inside `applyFrame`, because a pong has to be
     // stopped at this layer: timing a round trip needs the clock, and the
     // session state machine deliberately has none.
-    const parsed: ClientMessage | null = parseClientMessage(message)
+    const parsed: ClientMessage | null = parseClientMessage(verdict.text)
     if (parsed !== null && parsed.t === 'pong') {
       record.clockSync.pong(parsed.id, nowMs)
       return
@@ -791,6 +844,7 @@ export function createRoom(options: RoomOptions): Room {
         transport,
         clockSync: createClockSync(),
         queue,
+        guard: createFrameGuard(options.frameGuard),
         session: createSession(peerId, slot, queue, token),
         lastHeardMs: clock.nowMs(),
         open: true,
@@ -952,6 +1006,7 @@ export function createRoom(options: RoomOptions): Room {
       commands: peers.reduce((total, peer) => total + peer.session.commands, 0),
       gaps: peers.reduce((total, peer) => total + peer.session.gaps, 0),
       starved,
+      refused: refused + peers.reduce((total, peer) => total + peer.guard.stats.refused, 0),
       held: lifecycle.held,
       ended: lifecycle.ended,
       lagcomp: lagcomp.stats,
@@ -967,6 +1022,11 @@ export function createRoom(options: RoomOptions): Room {
       for (const record of [...peers]) {
         record.transport.close(code, reason)
         record.open = false
+        // Not a departure, but still a way out: `peers` is about to be emptied
+        // and the refusal count has to survive it for the same reason it
+        // survives `forget`. A room closed *because* somebody flooded it is
+        // precisely the one whose snapshot should not read zero.
+        refused += record.guard.stats.refused
       }
       peers.length = 0
     },

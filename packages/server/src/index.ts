@@ -16,6 +16,7 @@ import { MAX_ROOMS } from './rooms.ts'
 import { HOST_FRAME_MS } from './scheduler.ts'
 import { startServer } from './server.ts'
 import { drainServer, installSignalHandlers } from './shutdown.ts'
+import { BYTE_BUDGET_PER_SECOND, FRAME_BUDGET_PER_SECOND } from './validate.ts'
 
 /** How long to keep reporting jitter into the boot log. */
 const JITTER_REPORT_MS = 60_000
@@ -68,6 +69,25 @@ log('server.listening', {
   originPolicy: describeOriginPolicy(config),
   allowLocalhost: config.allowLocalhost,
   demoDir: config.demoDir,
+})
+
+// The limits, in the boot log, because "why can this player not connect" and
+// "why is this client being throttled" are questions somebody asks about a
+// running process rather than about the source. Its own line rather than fields
+// on `server.listening`, so a `jq 'select(.event=="server.limits")'` answers
+// "what was this machine enforcing" without also matching every restart's worth
+// of unrelated fields. `docs/deploy.md` under **Limits** is the same table with
+// the reasoning attached.
+log('server.limits', {
+  maxFrameBytes: config.maxPayloadBytes,
+  framesPerSecond: FRAME_BUDGET_PER_SECOND,
+  bytesPerSecond: BYTE_BUDGET_PER_SECOND,
+  connectBudgetPerSecond: config.connectBudgetPerSecond,
+  connectBurst: config.connectBurst,
+  maxConnectionsPerAddress: config.maxConnectionsPerAddress,
+  // Which one, so that "everybody is sharing a bucket" is diagnosable from a
+  // boot line rather than from the behaviour.
+  addressFrom: config.trustedIpHeader === '' ? 'socket' : config.trustedIpHeader,
 })
 
 // Said at boot rather than discovered during a deploy. A machine that cannot

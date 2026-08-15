@@ -9,11 +9,13 @@
  */
 import { describe, expect, it } from 'vitest'
 
+import { CONNECT_BUDGET_PER_SECOND } from './config.ts'
 import {
   ROOM_CODE_ALPHABET,
   ROOM_CODE_BITS,
   ROOM_CODE_LENGTH,
   ROOM_CODE_SPACE,
+  describeRoomCode,
   expectedGuessSeconds,
   guessProbability,
   mintRoomCode,
@@ -128,5 +130,46 @@ describe('how guessable a code is', () => {
     expect(guessProbability(0)).toBe(0)
     expect(expectedGuessSeconds(0, 1000)).toBe(Number.POSITIVE_INFINITY)
     expect(expectedGuessSeconds(MAX_ROOMS, 0)).toBe(Number.POSITIVE_INFINITY)
+  })
+
+  it('computes the guess rate at the rate the server actually admits', () => {
+    // The number above is the *unlimited* attacker, and it was the honest one
+    // until there was a limit. This is the one `docs/deploy.md` now records:
+    // GLAD-V7M6PQ caps one client address at `CONNECT_BUDGET_PER_SECOND`
+    // upgrades a second, and a guess costs an upgrade.
+    const days = expectedGuessSeconds(MAX_ROOMS, CONNECT_BUDGET_PER_SECOND) / 86_400
+    expect(days).toBeGreaterThan(60)
+    expect(days).toBeLessThan(65)
+
+    // Against one live room — the realistic target, a friend's duel rather than
+    // "any duel on the machine" — it is decades.
+    const years = expectedGuessSeconds(1, CONNECT_BUDGET_PER_SECOND) / 86_400 / 365
+    expect(years).toBeGreaterThan(30)
+  })
+})
+
+describe('showing back a code that was not one', () => {
+  it('folds a code a player typed loosely', () => {
+    expect(describeRoomCode('h7k-2q9')).toBe('H7K2Q9')
+  })
+
+  it('keeps nothing a log line could be forged with', () => {
+    // A rejected code reaches a log line and a `fault` frame the client prints,
+    // and it came out of a query parameter — where a newline forges a record and
+    // an escape sequence rewrites a terminal.
+    const shown = describeRoomCode('AB\nDELETED THE LOGS\u001b[2J')
+    expect(shown).not.toContain('\n')
+    expect(shown).not.toContain('\u001b')
+    for (const character of shown) expect(ROOM_CODE_ALPHABET).toContain(character)
+  })
+
+  it('is bounded, so a pasted megabyte is not a log line', () => {
+    expect(describeRoomCode('A'.repeat(1_000_000)).length).toBeLessThanOrEqual(ROOM_CODE_LENGTH + 2)
+  })
+
+  it('has something to say about nothing at all', () => {
+    expect(describeRoomCode('')).toBe('(nothing)')
+    expect(describeRoomCode(undefined)).toBe('(nothing)')
+    expect(describeRoomCode('!!!')).toBe('(nothing)')
   })
 })

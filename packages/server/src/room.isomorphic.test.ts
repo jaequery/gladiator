@@ -107,7 +107,10 @@ describe('the host is isomorphic', () => {
     //
     // `lagcomp.ts` joined it with lag compensation, for the same reason — a
     // listen server judges a railgun shot exactly as Fly does, or single-player
-    // would be a second set of rules after all. And `log.ts` joined it with
+    // would be a second set of rules after all. `validate.ts` and
+    // `rateLimit.ts` joined it with the security hardening, for the same reason
+    // again — the frame door is a room's, so the listen server runs into
+    // exactly the door the deployed server does. And `log.ts` joined it with
     // structured logging, on this side of the line for the same reason
     // `clock.ts` is: the sink and the wall-clock are injected, so the module
     // itself names neither `console` nor `Date.now`.
@@ -125,9 +128,11 @@ describe('the host is isomorphic', () => {
       'lagcomp.ts',
       'lifecycle.ts',
       'log.ts',
+      'rateLimit.ts',
       'room.ts',
       'roomCode.ts',
       'session.ts',
+      'validate.ts',
     ])
   })
 

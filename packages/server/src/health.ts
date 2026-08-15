@@ -158,6 +158,11 @@ export type HealthInput = ReadinessInput & {
   readonly map: { readonly name: string; readonly hash: string }
   readonly startedAtMs: number
   readonly sessions: number
+  /**
+   * Client addresses the connect limiter is currently holding a bucket for.
+   * `server.ts`.
+   */
+  readonly addresses: number
   readonly jitter: JitterSnapshot
   readonly traffic: TrafficStats
   /** Whether this deploy can hand out resume tickets. `resume.ts`. */
@@ -197,6 +202,9 @@ export function healthReport(input: HealthInput): HealthReport {
     map: input.map,
     uptimeSeconds: Math.round((input.nowMs - input.startedAtMs) / 1000),
     sessions: input.sessions,
+    // Served because a number that only ever grows is the signature of an
+    // address-forging flood, and it is invisible in every other counter here.
+    addresses: input.addresses,
     rooms: input.rooms,
     queue: input.queue,
     // Served, not just logged. The p99 on the machine that is actually running

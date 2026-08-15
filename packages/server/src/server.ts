@@ -51,6 +51,28 @@
  * first below and the queue is only consulted when there is no code. A token
  * comes with a code, so a reconnect never reaches the queue: being handed a
  * stranger is the opposite of what the player holding it is asking for.
+ *
+ * ## What an unknown client is allowed to do before it is anybody
+ *
+ * Three limits sit in front of the handshake, and they are refusals at the
+ * *upgrade* rather than faults on an open socket — deliberately, because the
+ * thing being defended against is the cost of the attempt itself. A guess at a
+ * room code costs one connection, so bounding connections per address is
+ * bounding the guess rate (`docs/deploy.md` puts the arithmetic next to the
+ * numbers), and bounding sockets per address is what stops one script holding
+ * every room on the machine open.
+ *
+ * - **Origin** — `origin.ts`. Defence in depth only: a header a browser writes
+ *   and a non-browser forges.
+ * - **Connections per address** — `config.CONNECT_BUDGET_PER_SECOND`, a token
+ *   bucket per address (`rateLimit.ts`), answered with 429.
+ * - **Concurrent sockets per address** — `config.MAX_CONNECTIONS_PER_ADDRESS`.
+ *
+ * The address is `Fly-Client-IP` behind the proxy and the socket's own otherwise;
+ * `config.ts` says why that header is trustworthy in exactly one deployment and
+ * how to turn it off in every other. What a connection may send *after* the
+ * upgrade is `validate.ts`, and it is a room's business rather than this file's
+ * because the listen server has to run into the same door.
  */
 import { createServer, type IncomingMessage, type Server } from 'node:http'
 import { randomUUID } from 'node:crypto'
@@ -80,8 +102,9 @@ import { createOriginPolicy } from './origin.ts'
 import { SERVER_MAP, SERVER_MAP_HASH, SERVER_PLAN } from './map.ts'
 import { wsTransport } from './net/wsTransport.ts'
 import { createMatchQueue, type MatchQueue } from './queue.ts'
+import { clientKey, createKeyedLimiter } from './rateLimit.ts'
 import { createRoom, type Room } from './room.ts'
-import { normalizeRoomCode } from './roomCode.ts'
+import { describeRoomCode, normalizeRoomCode } from './roomCode.ts'
 import { createRoomRegistry, seedForRoom, type RoomRegistry } from './rooms.ts'
 import { createResumeAuthority, type ResumeAuthority } from './resume.ts'
 import { createTickScheduler, type Timer, type TickScheduler } from './scheduler.ts'
@@ -203,13 +226,13 @@ export function resumeTicketOf(url: string | undefined): string | null {
  * characters, and that is answered before this is consulted.
  */
 export function queueRequested(url: string | undefined): boolean {
-  if (url === undefined) return false
-  return new URL(url, 'http://gladiator.invalid').searchParams.has(QUEUE_QUERY_PARAM)
+  // `has` rather than `get`, per the paragraph above: `?queue=` is a flag that
+  // was set, and its empty value is not a reason to refuse the player.
+  return paramsOf(url)?.has(QUEUE_QUERY_PARAM) ?? false
 }
 
 function queryOf(url: string | undefined, name: string): string | null {
-  if (url === undefined) return null
-  const query = new URL(url, 'http://gladiator.invalid').searchParams.get(name)
+  const query = paramsOf(url)?.get(name) ?? null
   return query === null || query === '' ? null : query
 }
 
@@ -221,10 +244,37 @@ function queryOf(url: string | undefined, name: string): string | null {
  * this owes is that a value too long to be a token is not passed on as one.
  */
 export function seatTokenOf(url: string | undefined): string | null {
-  if (url === undefined) return null
-  const query = new URL(url, 'http://gladiator.invalid').searchParams.get(TOKEN_QUERY_PARAM)
-  if (query === null || query === '' || query.length > MAX_TOKEN_LENGTH) return null
+  const query = queryOf(url, TOKEN_QUERY_PARAM)
+  if (query === null || query.length > MAX_TOKEN_LENGTH) return null
   return query
+}
+
+/**
+ * The query parameters of a request target, or `null` if it does not parse.
+ *
+ * The parse is here, once, because the argument is a request target an attacker
+ * wrote and *every* reader of it needs the same answer. Node's HTTP parser
+ * accepts absolute-form targets, so `GET http://[ HTTP/1.1` gets this far and
+ * `new URL` throws on it — inside an `upgrade` handler, which is an uncaught
+ * exception and therefore the whole process.
+ *
+ * Total, and total *here* rather than in each of the four readers, because the
+ * failure mode of doing it per-caller is not hypothetical and has now happened
+ * twice. While a total `roomCodeOf` and a throwing `queueRequested` coexisted,
+ * an unparseable target returned `null` from the first — which is exactly the
+ * condition that consults the second, so catching in one reader routed the
+ * attack into the one that did not. `seatTokenOf` arrived with the same
+ * unguarded `new URL` and was folded in here on sight. Anything that reads the
+ * target goes through this function; a second `new URL` in this file is a bug
+ * whether or not anyone can currently reach it.
+ */
+function paramsOf(url: string | undefined): URLSearchParams | null {
+  if (url === undefined) return null
+  try {
+    return new URL(url, 'http://gladiator.invalid').searchParams
+  } catch {
+    return null
+  }
 }
 
 export function startServer(options: StartOptions): Promise<GladiatorServer> {
@@ -255,7 +305,46 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
    */
   let draining = false
 
-  const connections = new Map<WebSocket, { alive: boolean }>()
+  const connections = new Map<WebSocket, { alive: boolean; readonly address: string }>()
+
+  // One bucket per client address, swept on the housekeeping beat. See
+  // `rateLimit.ts` for why an IPv6 address is bucketed by its /64, and
+  // `config.ts` for why one connection a second with a burst of twenty is the
+  // number the room-code guess rate in `docs/deploy.md` is computed against.
+  const connects = createKeyedLimiter({
+    ratePerSecond: config.connectBudgetPerSecond,
+    burst: config.connectBurst,
+  })
+
+  /** How many sockets this address is holding open right now. */
+  const openFrom = (address: string): number => {
+    let held = 0
+    for (const connection of connections.values()) {
+      if (connection.address === address) held += 1
+    }
+    return held
+  }
+
+  /**
+   * Which address to charge, folded to its bucket key.
+   *
+   * The trusted header first, when there is one and it is configured — behind
+   * Fly's proxy `socket.remoteAddress` is the proxy for every player on earth,
+   * and a per-address limit built on it would rate-limit the whole internet
+   * together. `config.ts` says why that is safe in exactly one deployment.
+   */
+  const addressOf = (request: IncomingMessage): string => {
+    if (config.trustedIpHeader !== '') {
+      const header = request.headers[config.trustedIpHeader]
+      const value = Array.isArray(header) ? header[0] : header
+      if (typeof value === 'string' && value !== '') {
+        // A comma-separated chain (`X-Forwarded-For` style) is read left to
+        // right: the leftmost entry is the one the *first* proxy saw.
+        return clientKey((value.split(',')[0] ?? '').trim())
+      }
+    }
+    return clientKey(request.socket.remoteAddress)
+  }
 
   /**
    * Write a room's recording out, if this deploy is recording.
@@ -384,6 +473,10 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
         map: { name: SERVER_MAP.source.name, hash: SERVER_MAP_HASH },
         startedAtMs,
         sessions: connections.size,
+        // Client addresses the connect limiter is currently holding a bucket
+        // for. Served because a number that only ever grows is the signature of
+        // an address-forging flood, and it is invisible in every other counter.
+        addresses: connects.size,
         jitter: jitter.snapshot(),
         traffic: traffic.stats,
         canResume: resume.enabled,
@@ -454,6 +547,32 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
       return
     }
 
+    // Refused here rather than after the handshake, and that is the whole point
+    // of the limit: a guess at a room code should cost the guesser a connection
+    // and cost us a single write. Answering with a `fault` frame would be more
+    // legible — it is what an unknown room code gets — and would mean completing
+    // a WebSocket handshake per guess, which is paying for the attack.
+    const address = addressOf(request)
+    if (!connects.spend(address, clock.nowMs())) {
+      log('upgrade.rate_limited', {
+        level: 'warn',
+        address,
+        budgetPerSecond: config.connectBudgetPerSecond,
+        burst: config.connectBurst,
+      })
+      rejectUpgrade(socket, 429, 'Too Many Requests', ['Retry-After: 1'])
+      return
+    }
+    if (openFrom(address) >= config.maxConnectionsPerAddress) {
+      log('upgrade.too_many_open', {
+        level: 'warn',
+        address,
+        open: config.maxConnectionsPerAddress,
+      })
+      rejectUpgrade(socket, 429, 'Too Many Requests', ['Retry-After: 5'])
+      return
+    }
+
     // Nagle's algorithm holds a small write back waiting for company. Every
     // frame this server sends is small and every one of them is urgent.
     // (`upgrade` is typed as a `Duplex`; over TCP it is always a `Socket`.)
@@ -479,7 +598,7 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
   }
 
   wss.on('connection', (socket: WebSocket, request: IncomingMessage) => {
-    connections.set(socket, { alive: true })
+    connections.set(socket, { alive: true, address: addressOf(request) })
 
     // `pong` is the one socket event the room has no opinion about: it is the
     // liveness of the *pipe*, which is exactly what a transport abstracts away.
@@ -591,7 +710,14 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
       // Both "that is not a code" and "that code names no room" land here, and
       // they are deliberately one sentence. Telling a guesser which of the two
       // they hit is telling them their character set is right.
-      const shown = normalizeRoomCode(asked) ?? asked.slice(0, 16)
+      // `describeRoomCode` rather than the raw string: this goes into a log line
+      // and into a frame the client prints, and a query parameter can contain a
+      // newline. A value an attacker chose that reaches a log line verbatim is a
+      // value an attacker can use to forge one — and a log line is a JSON object
+      // here, so it would forge a whole *record*. It folds a real code on the way
+      // through, so a player who typed `abc-123` is still told about `ABC123` —
+      // the thing they meant.
+      const shown = describeRoomCode(asked)
       log('join.no_such_room', { level: 'warn', room: shown })
       refuse(
         socket,
@@ -627,6 +753,10 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
         connection.alive = false
         socket.ping()
       }
+      // The connect limiter's map is keyed by an address, which is a thing an
+      // attacker can supply a lot of. Dropping the buckets that have refilled
+      // is what keeps it bounded by traffic rather than by history.
+      connects.sweep(clock.nowMs())
     },
   })
 

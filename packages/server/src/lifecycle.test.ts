@@ -264,6 +264,21 @@ const QUICK_RULES = matchRules({
   intermissionTicks: Math.round(0.5 * TICK_RATE),
 })
 
+/**
+ * One rendered frame, in milliseconds — two sub-steps at a 125 Hz tick rate,
+ * which is what a 60 Hz client is worth on the far side. `duel.test.ts` drives
+ * its rounds on the same number.
+ *
+ * A loop that sends per frame has to advance the *clock* alongside the world,
+ * not just call `room.advance`. Two hundred frames arriving in the same
+ * millisecond is a flood by the only definition this server has, and the frame
+ * door (`validate.ts`) is right to refuse it: `FRAME_BURST` accepts sixty, and
+ * a peer that keeps going is closed on at `MAX_REFUSED_FRAMES`. Standing the
+ * clock still turns a test that means "play a round out" into one that means
+ * "flood the room", and the two have opposite outcomes.
+ */
+const FRAME_MS = 16
+
 const IDLE: UserCmd = { ...NULL_CMD, weapon: Weapon.RocketLauncher }
 
 /** Firing at your own feet: the cheapest way to make a body take damage. */
@@ -477,7 +492,7 @@ describe('a room, one transition at a time', () => {
   })
 
   it('holds the seat through an intermission too', async () => {
-    const { room, host, guest } = await duelling()
+    const { clock, room, host, guest } = await duelling()
 
     // Decide the round the only way two players who cannot see each other can:
     // on the clock, by damage taken. The host spends armour on the floor.
@@ -488,6 +503,7 @@ describe('a room, one transition at a time', () => {
       await settleLoopback(host.pair)
       await settleLoopback(guest.pair)
       room.advance(2)
+      clock.advance(FRAME_MS)
       if (room.state.match.phase !== MatchPhase.Live) break
     }
     expect(room.state.match.phase).toBe(MatchPhase.Intermission)
