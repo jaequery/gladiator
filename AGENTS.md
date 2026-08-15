@@ -740,6 +740,48 @@ a static sweep at a fixed height does not.
 
 ---
 
+## The HUD
+
+`packages/client/src/ui/`. Four modules and one rule, and the rule is the
+reason there are four.
+
+**The HUD reads a copy of the world and can reach nothing else.**
+`ui/hudModel.ts` projects a deeply-readonly `HudModel` out of `GameState` — the
+same trick, for the same reason, as `render/animState.ts`'s `playerNetState` —
+and it is the *only* file down here that names `GameState` at all.
+`ui/crosshair.ts`, `ui/feedback.ts` and `ui/hud.ts` take the copy. That is not
+a convention: `ui/purity.test.ts` runs the whole pipeline over a `GameState`
+whose every write throws, checks the state hash either side of it, and scans
+the sources to prove the door is one function wide.
+
+Three more things are worth knowing before changing anything in there:
+
+- **It is drawn every frame, and the diagnostics panel beside it is not.** The
+  10 Hz throttle on `client/src/hud.ts` is measured and real — a dozen
+  `textContent`s a frame dirties the overlay and costs a recomposite over the
+  canvas. The in-match HUD escapes it by comparing before it writes: health
+  does not change sixty times a second, and the two values that do (the
+  cooldown ring, the hurt flash) are quantised so that they mostly do not
+  either. If you add a value here, write it through the `set*` guards.
+- **Feedback is a fold over the models, keyed off the tick.** "You hit them" is
+  their health going down; "you were hit" is your own health *plus armour*
+  going down; where it came from is the negated knockback, kept as a world
+  bearing and re-projected against the current yaw. No `performance.now()`
+  anywhere — feedback that decayed against wall-clock would decay at a
+  different rate on a machine whose frames are late.
+- **`?hud=demo` is `dummyOpponent.ts` for the readout.** Nothing starts a match
+  yet, so a landed hit, a damage arc and a round result are unreachable on a
+  page today. `ui/demo.ts` scripts them, as a pure function of the tick, so the
+  half of hit feedback that only a person can judge is a URL rather than a
+  promise.
+
+Layout is checked rather than eyeballed: every element carrying `data-hud-box`
+is measured by `pnpm run e2e` at 16:9, 21:9 and 4:3, and must be on screen and
+overlapping nothing. That set includes the diagnostics panel and the pointer
+prompt, because "nothing overlaps" has to mean nothing.
+
+---
+
 ## Assets
 
 Full reasoning: [`docs/assets.md`](./docs/assets.md). Four things that decide
