@@ -5,8 +5,8 @@
  *
  * | Runs | What it does | Why at that rate |
  * | ---- | ------------ | ---------------- |
- * | 20 Hz | picks what to aim at and where to go | thinking is expensive and the answer does not change every 8 ms |
- * | 125 Hz | turns that into a `UserCmd` | a turn is a rate, and a rate sampled at 20 Hz is a staircase |
+ * | 20 Hz | picks what to shoot with, where to shoot, where to go, which way to dodge | thinking is expensive and the answer does not change every 8 ms |
+ * | 125 Hz | tracks the target, turns the view, pulls the trigger | a turn is a rate, and a rate sampled at 20 Hz is a staircase |
  *
  * Quake 3's bots think at 10 Hz and it shows: at this game's speeds a tenth of
  * a second is 32 units of strafe, so a 10 Hz brain is visibly a beat behind
@@ -22,38 +22,46 @@
  * model does not carry and this function emits the identical stream of
  * commands, bit for bit.
  *
+ * The `CollisionWorld` it *is* handed is not an exception to that. Level data is
+ * on both players' screens — `movement/move.ts` makes the same argument about
+ * the nav graph — and everything combat does with it is a trace against the same
+ * geometry a person would be looking at.
+ *
  * ## Who fills in what
  *
- * {@link BotDecision} is the seam. This file fills in `aim` and `goal`; the
- * movement layer turns `goal` into a route and a stick position
- * (`movement/move.ts`, GLAD-TSED8V); weapon choice, splash aiming, leading a target
- * and dodging a rocket fill in `weapon` and `buttons` (GLAD-HK3ATM). Neither
- * reaches past it.
+ * {@link BotDecision} is the seam. This file fills in `goal`, `evade` and the
+ * fallback `aim`; the movement layer turns `goal` into a route and a stick
+ * position (`movement/move.ts`, GLAD-TSED8V); the crosshair, the weapon and the
+ * trigger are `combat/fire.ts` (GLAD-HK3ATM). Nothing reaches past it.
  *
- * The 125 Hz half of this file is now assembly rather than steering: the aim
- * decides `yaw` and `pitch`, and the movement layer — which needs the yaw, because
- * the two axes are relative to it — decides `forwardMove`, `sideMove` and the jump
+ * The 125 Hz half of this file is assembly rather than steering: the aim decides
+ * `yaw` and `pitch`, and the movement layer — which needs the yaw, because the
+ * two axes are relative to it — decides `forwardMove`, `sideMove` and the jump
  * bit. That order is the only one available, and it is the same order a player's
  * hands work in.
  */
 
-import {
-  ANGLE_UNITS,
-  ANGLE_UNITS_PER_DEGREE,
-  BUTTON_JUMP,
-  MAX_PITCH_UNITS,
-  PLAYER_VIEW_HEIGHT,
-  RADIANS_PER_ANGLE_UNIT,
-  TICK_RATE,
-  Weapon,
-  vec3,
-} from '@gladiator/sim'
-import type { MutVec3, UserCmd, Vec3 } from '@gladiator/sim'
+import { BUTTON_ATTACK, BUTTON_JUMP, PLAYER_VIEW_HEIGHT, Weapon, vec3 } from '@gladiator/sim'
+import type { CollisionWorld, MutVec3, RngHolder, UserCmd } from '@gladiator/sim'
 
+import { aimPitch, aimYaw } from './aim/controller.ts'
+import {
+  aimCombat,
+  createCombat,
+  observeCombat,
+  planEvade,
+  planShot,
+  triggerCombat,
+} from './combat/fire.ts'
+import type { CombatState } from './combat/fire.ts'
 import { moveBot } from './movement/move.ts'
 import type { MoveState } from './movement/move.ts'
 import { DAMAGE_ASSUMED_RANGE, hasContact, isAlert } from './perception/worldModel.ts'
 import type { WorldModel } from './perception/worldModel.ts'
+
+/** Re-exported from where the servo lives, so every importer keeps one name. */
+export { MAX_TURN_UNITS, TURN_RATE_DEGREES, wrapDelta, wrapUnits } from './aim/controller.ts'
+export { pitchUnitsToward, yawUnitsToward } from './aim/controller.ts'
 
 /**
  * Sub-steps between decisions. 6 = 20.8 Hz.
@@ -66,21 +74,6 @@ import type { WorldModel } from './perception/worldModel.ts'
 export const BRAIN_INTERVAL_TICKS = 6
 
 /**
- * How fast the bot may turn, in degrees per second.
- *
- * A human flick is faster than this over a short arc and slower over a long
- * one; 540 is roughly a competent player's sustained turn, and it is here as a
- * *rate limit* rather than as an accuracy model. Nerfing where the bot ends up
- * pointing is the design mistake this whole ticket argues against
- * (`perception/worldModel.ts`); limiting how fast it gets there is a physical
- * constraint a player has too.
- */
-export const TURN_RATE_DEGREES = 540
-
-/** The same rate as whole angle units per sub-step. Integers all the way down. */
-export const MAX_TURN_UNITS = Math.round((TURN_RATE_DEGREES * ANGLE_UNITS_PER_DEGREE) / TICK_RATE)
-
-/**
  * How close the bot tries to get, in Quake units.
  *
  * Inside this it stops closing and holds its ground. A rocket's splash radius
@@ -89,38 +82,61 @@ export const MAX_TURN_UNITS = Math.round((TURN_RATE_DEGREES * ANGLE_UNITS_PER_DE
  */
 export const ENGAGE_RANGE = 600
 
-/** A standing intention. Two ticks in three, this is what the command is built from. */
+/** A standing intention. Five ticks in six, this is what the command is built from. */
 export type BotDecision = {
-  /** Whether {@link aim} means anything. `false` holds the current view angles. */
+  /**
+   * Whether {@link aim} means anything.
+   *
+   * The *fallback* aim, and only that: when the bot has a contact, where the
+   * crosshair goes is `combat/fire.ts`'s answer and this is `false`. What is
+   * left is the one thing combat has no shot for — a bearing off a hit from
+   * somebody the bot cannot see.
+   */
   hasAim: boolean
   /** A world point to point the crosshair at, at eye height. */
   aim: MutVec3
-  /** Whether {@link goal} means anything. `false` stands still. */
+  /** Whether {@link goal} means anything. `false` leaves the movement to roam. */
   hasGoal: boolean
   /** A world point to walk towards, at foot height. */
   goal: MutVec3
-  /** Button bits for the command. */
+  /** Whether {@link evade} means anything. */
+  hasEvade: boolean
+  /**
+   * A horizontal unit vector the feet should follow, overriding the route.
+   *
+   * A dodge is a *stick position*, not a destination — the same shape, and for
+   * the same reason, as `stuck.ts`'s recovery steer: there is no node to route
+   * to, only a direction to be in half a second from now. The follower keeps its
+   * link while it obeys one, so the route survives the dodge.
+   */
+  evade: MutVec3
+  /** Button bits the decision layer owns. The trigger is the tick layer's. */
   buttons: number
   weapon: Weapon
 }
 
-/** The decision layer's state: one standing decision and when it was taken. */
+/** The decision layer's state: one standing decision, the combat layer, and a clock. */
 export type BotBrain = {
   readonly decision: BotDecision
+  /** The aim controller, the shot plan and the trigger. `combat/fire.ts`. */
+  readonly combat: CombatState
   /** The tick the 20 Hz layer last ran on, or -1. */
   lastDecisionTick: number
 }
 
-export function createBrain(): BotBrain {
+export function createBrain(rng: RngHolder): BotBrain {
   return {
     decision: {
       hasAim: false,
       aim: vec3(),
       hasGoal: false,
       goal: vec3(),
+      hasEvade: false,
+      evade: vec3(),
       buttons: 0,
       weapon: Weapon.RocketLauncher,
     },
+    combat: createCombat(rng),
     lastDecisionTick: -1,
   }
 }
@@ -130,40 +146,52 @@ export function createBrain(): BotBrain {
  * ----------------------------------------------------------------------- */
 
 /**
- * Pick what to aim at and where to go, from the model and nothing else.
+ * Pick what to shoot with, where to go and what to get out of the way of, from
+ * the model and the level data and nothing else.
  *
  * Three cases, in order of how much the bot knows:
  *
- * 1. **A contact.** Aim at it, and close on it if it is further away than
- *    {@link ENGAGE_RANGE}. The contact may be two seconds stale and half a
- *    room wide (`perception/memory.ts`) — this layer does not get to know the
- *    difference beyond the `confidence` and `uncertainty` it is handed, which
- *    is the whole arrangement.
+ * 1. **A contact.** `combat/fire.ts` plans the shot against it, and this layer
+ *    closes on it if it is further away than {@link ENGAGE_RANGE}. The contact
+ *    may be two seconds stale and half a room wide (`perception/memory.ts`) —
+ *    this layer does not get to know the difference beyond the `confidence` and
+ *    `uncertainty` it is handed, which is the whole arrangement.
  * 2. **A shove and no contact.** Look down the bearing the hit came from. There
- *    is no position in a hit, so there is nowhere to walk to.
+ *    is no position in a hit, so there is nowhere to walk to and nothing to
+ *    shoot at.
  * 3. **Nothing.** Hold, and say nothing about where to go. Sweeping for a target
  *    is search behaviour and it belongs with the movement that carries it out —
  *    `movement/roam.ts`, which is what answers an absent goal when there is no
  *    contact at all. The distinction is load-bearing: no goal *with* a contact is
  *    a bot holding its ground on purpose, and the movement layer leaves that
  *    alone.
+ *
+ * The dodge is asked in every one of the three. A rocket the bot can see is a
+ * reason to move whether or not it knows where the person who fired it is —
+ * which, when they fired from cover, it does not.
  */
-export function decide(brain: BotBrain, model: WorldModel): void {
+export function decide(
+  brain: BotBrain,
+  model: WorldModel,
+  world: CollisionWorld | null = null,
+): void {
   const d = brain.decision
   d.hasAim = false
   d.hasGoal = false
+  d.hasEvade = false
   d.buttons = 0
   d.weapon = model.self.weapon === Weapon.None ? Weapon.RocketLauncher : model.self.weapon
 
-  if (!model.self.alive) return
+  if (!model.self.alive) {
+    brain.combat.plan.mode = 'none'
+    return
+  }
+
+  d.weapon = planShot(brain.combat, model, world)
+  d.hasEvade = planEvade(d.evade, brain.combat, model, world)
 
   if (hasContact(model)) {
     const enemy = model.enemy
-    d.hasAim = true
-    d.aim[0] = enemy.origin[0]
-    d.aim[1] = enemy.origin[1]
-    d.aim[2] = enemy.origin[2] + PLAYER_VIEW_HEIGHT
-
     const dx = enemy.origin[0] - model.self.origin[0]
     const dy = enemy.origin[1] - model.self.origin[1]
     if (dx * dx + dy * dy > ENGAGE_RANGE * ENGAGE_RANGE) {
@@ -187,161 +215,76 @@ export function decide(brain: BotBrain, model: WorldModel): void {
  * The 125 Hz half
  * ----------------------------------------------------------------------- */
 
-/** Where the view is pointing this sub-step. Both in angle units. */
-export type BotView = {
-  yaw: number
-  pitch: number
-}
-
 /**
- * Turn the standing decision into a view.
- *
- * A turn is a **rate**, which is why this is in the 125 Hz half: sampled at 20 Hz
- * it would be a staircase, and a staircase is the one artefact in a bot's motion a
- * player reads instantly. {@link MAX_TURN_UNITS} is the whole of the rate limit,
- * applied per sub-step, so the acceptance check's "no yaw delta exceeds the turn
- * rate divided by the tick rate" is a property of this one clamp.
- *
- * Everything here is an integer (`usercmd.ts`), and everything arrives at one by
- * `Math.round` over a bounded step, so the same model produces the same view on
- * every engine — which is what makes the mutation test's "bit-identical" a claim
- * about the bot rather than about floating point.
- */
-export function aimView(brain: BotBrain, model: WorldModel, out: BotView): BotView {
-  const d = brain.decision
-  const self = model.self
-
-  out.pitch = clampPitch(Math.round(self.angles[0]))
-  out.yaw = wrapUnits(Math.round(self.angles[1]))
-
-  if (!d.hasAim) return out
-
-  const ex = self.origin[0]
-  const ey = self.origin[1]
-  const ez = self.origin[2] + PLAYER_VIEW_HEIGHT
-  out.yaw = wrapUnits(out.yaw + stepToward(wrapDelta(yawUnitsToward(ex, ey, d.aim) - out.yaw)))
-  out.pitch = clampPitch(out.pitch + stepToward(pitchUnitsToward(ex, ey, ez, d.aim) - out.pitch))
-  return out
-}
-
-/* Scratch. Single-threaded and synchronous; see `perception/sight.ts`. */
-const view: BotView = { yaw: 0, pitch: 0 }
-
-/**
- * Assemble one sub-step's command out of a view and a stick position.
+ * Assemble one sub-step's command out of a view, a trigger and a stick position.
  *
  * The order is forced and it is the same order a player's hands work in: the aim
- * decides where the view is, and *then* the feet are resolved against it, because
- * `forwardMove` and `sideMove` are relative to the yaw (`movement/steer.ts`).
+ * decides where the view is, and *then* the feet are resolved against it,
+ * because `forwardMove` and `sideMove` are relative to the yaw
+ * (`movement/steer.ts`). The trigger sits between the two because it is a
+ * question about the view — has the crosshair arrived — and asking it before the
+ * servo has stepped would be asking about last sub-step's aim.
  *
  * `move` may be `null`, and that is the shape the walking skeleton had: no
- * routing, no ledge probes, no jump — a bot that aims and stands. It is kept
- * because the reverse — a movement layer that could not be left out — would make
- * every test of the aim depend on a nav graph.
+ * routing, no ledge probes, no jump — a bot that aims, shoots and stands. It is
+ * kept because the reverse — a movement layer that could not be left out — would
+ * make every test of the aim depend on a nav graph.
  */
-export function command(brain: BotBrain, model: WorldModel, move: MoveState | null): UserCmd {
+export function command(
+  brain: BotBrain,
+  model: WorldModel,
+  move: MoveState | null,
+  world: CollisionWorld | null = null,
+): UserCmd {
   const d = brain.decision
-  aimView(brain, model, view)
+  const combat = brain.combat
+
+  aimCombat(combat, model, d.hasAim ? d.aim : null)
+  const yaw = aimYaw(combat.aim)
+  const pitch = aimPitch(combat.aim)
+
+  const buttons = triggerCombat(combat, model, world, d.weapon)
+    ? d.buttons | BUTTON_ATTACK
+    : d.buttons
 
   if (move === null) {
-    return {
-      forwardMove: 0,
-      sideMove: 0,
-      yaw: view.yaw,
-      pitch: view.pitch,
-      buttons: d.buttons,
-      weapon: d.weapon,
-    }
+    return { forwardMove: 0, sideMove: 0, yaw, pitch, buttons, weapon: d.weapon }
   }
 
-  moveBot(move, model, d, view.yaw)
+  moveBot(move, model, d, yaw)
   return {
     forwardMove: move.axes.forwardMove,
     sideMove: move.axes.sideMove,
-    yaw: view.yaw,
-    pitch: view.pitch,
+    yaw,
+    pitch,
     // OR'd rather than assigned: jump is the movement layer's bit and attack is
     // the combat layer's, and a command carries both.
-    buttons: move.jump ? d.buttons | BUTTON_JUMP : d.buttons,
+    buttons: move.jump ? buttons | BUTTON_JUMP : buttons,
     weapon: d.weapon,
   }
 }
 
 /**
- * One tick of the bot: think if it is time to, then act.
+ * One tick of the bot: track, then think if it is time to, then act.
  *
  * The decision is taken on ticks divisible by {@link BRAIN_INTERVAL_TICKS}, so
  * the phase is a property of the world's tick counter rather than of when this
  * bot happened to be created — two bots in one world think on the same ticks,
  * and a replay reproduces both.
+ *
+ * {@link observeCombat} runs first, every sub-step, so that a decision taken on
+ * this one is taken about a target already tracked to it.
  */
-export function think(brain: BotBrain, model: WorldModel, move: MoveState | null): UserCmd {
+export function think(
+  brain: BotBrain,
+  model: WorldModel,
+  move: MoveState | null,
+  world: CollisionWorld | null = null,
+): UserCmd {
+  observeCombat(brain.combat, model)
   if (brain.lastDecisionTick < 0 || model.tick - brain.lastDecisionTick >= BRAIN_INTERVAL_TICKS) {
-    decide(brain, model)
+    decide(brain, model, world)
     brain.lastDecisionTick = model.tick
   }
-  return command(brain, model, move)
-}
-
-/* --------------------------------------------------------------------------
- * Angles
- * ----------------------------------------------------------------------- */
-
-/**
- * Radians to angle units.
- *
- * Derived from the sim's constant rather than restated, because two names for
- * one number is the drift `AGENTS.md` spends a section on — and this one would
- * be a bot that aims a fraction of a degree off and nothing that says why.
- */
-const ANGLE_UNITS_PER_RADIAN = 1 / RADIANS_PER_ANGLE_UNIT
-
-/** Wrap angle units into `[0, ANGLE_UNITS)`, as a `UserCmd` requires. */
-export function wrapUnits(units: number): number {
-  const wrapped = units % ANGLE_UNITS
-  return wrapped < 0 ? wrapped + ANGLE_UNITS : wrapped
-}
-
-/** The shortest signed way round, in angle units: `(-32768, 32768]`. */
-export function wrapDelta(delta: number): number {
-  let d = delta % ANGLE_UNITS
-  if (d > ANGLE_UNITS / 2) d -= ANGLE_UNITS
-  if (d <= -ANGLE_UNITS / 2) d += ANGLE_UNITS
-  return d
-}
-
-/** As much of `delta` as one sub-step is allowed to cover. */
-function stepToward(delta: number): number {
-  if (delta > MAX_TURN_UNITS) return MAX_TURN_UNITS
-  if (delta < -MAX_TURN_UNITS) return -MAX_TURN_UNITS
-  return Math.round(delta)
-}
-
-/** Pitch is clamped and never wrapped — `usercmd.ts` explains why the band is 89. */
-function clampPitch(units: number): number {
-  if (units > MAX_PITCH_UNITS) return MAX_PITCH_UNITS
-  if (units < -MAX_PITCH_UNITS) return -MAX_PITCH_UNITS
-  return units
-}
-
-/**
- * The yaw, in angle units, that points from `(ex, ey)` at `target`.
- *
- * `Math.atan2` is a lint error inside `packages/sim` because its last bit is
- * implementation-defined and the simulation has to be bit-identical in two
- * runtimes. The bot is not on that side of the line: it produces `UserCmd`s,
- * whose fields are integers, and the *server* simulates them. That is the
- * reason this package exists separately, and it is written down in `AGENTS.md`.
- */
-export function yawUnitsToward(ex: number, ey: number, target: Vec3): number {
-  return wrapUnits(Math.round(Math.atan2(target[1] - ey, target[0] - ex) * ANGLE_UNITS_PER_RADIAN))
-}
-
-/** The pitch that points from an eye at `target`. Positive is *downward*. */
-export function pitchUnitsToward(ex: number, ey: number, ez: number, target: Vec3): number {
-  const dx = target[0] - ex
-  const dy = target[1] - ey
-  const dz = target[2] - ez
-  const flat = Math.sqrt(dx * dx + dy * dy)
-  return clampPitch(Math.round(Math.atan2(-dz, flat) * ANGLE_UNITS_PER_RADIAN))
+  return command(brain, model, move, world)
 }

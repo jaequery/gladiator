@@ -117,13 +117,14 @@ export function createWalker(options: WalkerOptions): Walker {
   model.match.phase = MatchPhase.Live
 
   const nav = options.nav ?? null
+  const rng = { rng: seedRng(options.seed ?? 1) }
   return {
     world: MAP.world,
     nav,
     body,
     model,
-    move: createMovement({ rng: seedRng(options.seed ?? 1) }, { world: MAP.world, nav }),
-    brain: createBrain(),
+    move: createMovement(rng, { world: MAP.world, nav }),
+    brain: createBrain(rng),
     tick: 0,
   }
 }

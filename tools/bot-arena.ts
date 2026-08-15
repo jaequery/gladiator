@@ -259,8 +259,21 @@ type Watcher = {
   previous: Vec3 | null
   /** Whether the seat is mid-circle-jump, so its landing can be measured. */
   hopping: boolean
+  /** Whether a rocket shoved the body during the current hop. See {@link watch}. */
+  shoved: boolean
   /** Whether the body was on the ground last sub-step, for landing detection. */
   wasOnGround: boolean
+  /**
+   * The round the last observed command belonged to.
+   *
+   * A round boundary teleports both bodies and hands each of them a spawn yaw
+   * (`match/spawn.ts`), and a client is expected to *adopt* that yaw rather than
+   * turn to it — `AGENTS.md`, "The spawn system". So the step between the last
+   * command of one round and the first of the next is not a turn and is not
+   * measured. Before GLAD-HK3ATM nothing could end a round early, so this
+   * boundary only ever fell where the match already restarted.
+   */
+  round: number
 }
 
 /** How far outside the world's AABB the player box at `origin` reaches. */
@@ -287,6 +300,14 @@ function watch(arena: BotArena, watcher: Watcher, slot: number): void {
   const bot = arena.bots[slot]
   const body = findPlayer(arena.state, slot)
   if (bot === null || bot === undefined || body === null) return
+
+  const round = arena.state.match.round
+  if (round !== watcher.round) {
+    watcher.round = round
+    watcher.last = null
+    watcher.anchor = null
+    watcher.previous = null
+  }
 
   const cmd = arena.commands[slot]
   if (cmd !== undefined) {
@@ -339,13 +360,23 @@ function watch(arena: BotArena, watcher: Watcher, slot: number): void {
   // taken over a real match instead of over one hop down an empty lane.
   if (move.offsetTicks === CIRCLE_JUMP_HOLD_TICKS && !watcher.hopping) {
     watcher.hopping = true
+    watcher.shoved = false
     report.circleJumps += 1
   } else if (watcher.hopping && onGround) {
+    // A hop a rocket landed on is not a measurement of the circle jump: 500 qu/s
+    // of splash knockback (`damage.ts`) dwarfs the 369 the mechanic is worth, and
+    // counting it would turn a claim about the offset window into a claim about
+    // who got shot mid-air. The hop is still counted as taken.
+    if (!watcher.shoved) {
+      report.landings += 1
+      if (speed > RUN_SPEED) report.fastLandings += 1
+      report.slowestLanding = Math.min(report.slowestLanding, speed)
+      report.fastestLanding = Math.max(report.fastestLanding, speed)
+    }
     watcher.hopping = false
-    report.landings += 1
-    if (speed > RUN_SPEED) report.fastLandings += 1
-    report.slowestLanding = Math.min(report.slowestLanding, speed)
-    report.fastestLanding = Math.max(report.fastestLanding, speed)
+    watcher.shoved = false
+  } else if (watcher.hopping && body.knockbackTicks > 0) {
+    watcher.shoved = true
   }
 
   if (watcher.previous !== null) {
@@ -444,10 +475,10 @@ function foldReport(into: SlotReport, from: SlotReport): void {
  * Run one match of `ticks` sub-steps and report on both seats.
  *
  * A match that decides itself before the clock runs out is restarted from a fresh
- * state, so the whole budget is spent on movement rather than on an intermission.
- * Nothing shoots yet (GLAD-HK3ATM), so in practice a round ends on the time limit
- * and one match is one round — which is exactly the two minutes of walking around
- * the acceptance check asks for.
+ * state, so the whole budget is spent on a live match rather than on an
+ * intermission. Since GLAD-HK3ATM the bots shoot, so rounds now end on a death
+ * rather than only on the time limit — which is why {@link Watcher} has a round
+ * number in it and why a hop that took a rocket is not counted as a landing.
  */
 export type BotMatchOptions = BotArenaOptions & {
   readonly ticks: number
@@ -479,7 +510,9 @@ export function runBotMatch(options: BotMatchOptions): {
     anchorTick: 0,
     previous: null,
     hopping: false,
+    shoved: false,
     wasOnGround: true,
+    round: -1,
   }))
 
   try {
@@ -498,6 +531,7 @@ export function runBotMatch(options: BotMatchOptions): {
           watcher.anchor = null
           watcher.previous = null
           watcher.last = null
+          watcher.round = -1
         }
       }
     }

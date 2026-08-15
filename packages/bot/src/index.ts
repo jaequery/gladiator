@@ -4,9 +4,9 @@
  * A seeded stream, a perception layer and a brain that reads what the
  * perception layer believes. `bot.ts` is the shape of it; the argument for the
  * boundary — and the four channels that are allowed to cross it — is
- * `perception/worldModel.ts`. Movement execution is below (GLAD-TSED8V) and
- * combat is GLAD-HK3ATM; both go through `BotDecision` rather than reaching past
- * it.
+ * `perception/worldModel.ts`. Movement execution (GLAD-TSED8V) and combat
+ * (GLAD-HK3ATM) are below; both go through `BotDecision` rather than reaching
+ * past it.
  * ----------------------------------------------------------------------- */
 
 export { botCommand, createBot } from './bot.ts'
@@ -17,7 +17,6 @@ export {
   ENGAGE_RANGE,
   MAX_TURN_UNITS,
   TURN_RATE_DEGREES,
-  aimView,
   command,
   createBrain,
   decide,
@@ -27,7 +26,7 @@ export {
   wrapUnits,
   yawUnitsToward,
 } from './brain.ts'
-export type { BotBrain, BotDecision, BotView } from './brain.ts'
+export type { BotBrain, BotDecision } from './brain.ts'
 
 export { createPerception, observe } from './perception/perceive.ts'
 export type { Ground, Perception } from './perception/perceive.ts'
@@ -149,7 +148,7 @@ export type { NavDiagnostic, PlacedNodes } from './nav/validate.ts'
  * one decision each.
  * ----------------------------------------------------------------------- */
 
-export { createMovement, moveBot } from './movement/move.ts'
+export { EVADE_REACH, createMovement, moveBot } from './movement/move.ts'
 export type { BotTerrain, MoveState } from './movement/move.ts'
 
 export {
@@ -207,6 +206,122 @@ export {
   wishTowards,
 } from './travel/index.ts'
 export type { Travel, TravelIntent, Traveller } from './travel/index.ts'
+
+/* --------------------------------------------------------------------------
+ * Aim and combat — GLAD-HK3ATM
+ *
+ * The bang-bang angular servo and its three error sources are `aim/`; which
+ * weapon, where to put a rocket, when a rail is worth taking and which way to
+ * get out of the way are `combat/`. `aim/error.ts` is the argument for why the
+ * bot misses the way a person does, and `combat/rocketAim.ts` for why it aims at
+ * the floor.
+ * ----------------------------------------------------------------------- */
+
+export {
+  AIM_ACCEL_TICKS,
+  MAX_AIM_ACCEL,
+  aimPitch,
+  aimYaw,
+  clampPitch,
+  createAim,
+  holdAim,
+  seedAim,
+  steerAim,
+  subtendedUnits,
+} from './aim/controller.ts'
+export type { AimState } from './aim/controller.ts'
+
+export {
+  AIM_ERROR_FRACTION,
+  MAX_AIM_ERROR,
+  MOTOR_ERROR,
+  NOMINAL_REACTION_TICKS,
+  REACTION_MIN_MS,
+  REACTION_SPREAD_MS,
+  VERTICAL_ERROR_SHARE,
+  ageNoise,
+  clearTrack,
+  createNoise,
+  createTrack,
+  displaceAim,
+  errorRadius,
+  reactionTicks,
+  rollNoise,
+  trackTarget,
+} from './aim/error.ts'
+export type { AimNoise, AimTrack } from './aim/error.ts'
+
+export {
+  DIRECT_DAMAGE,
+  SPLASH_DAMAGE,
+  SPLASH_RADIUS,
+  TARGET_AREA,
+  directChance,
+  expectedDirect,
+  expectedSplash,
+  splashAt,
+} from './combat/damage.ts'
+
+export {
+  DODGE_CLEAR,
+  DODGE_DANGER,
+  DODGE_HORIZON_SECONDS,
+  DODGE_PROBE,
+  nearestThreat,
+  planDodge,
+} from './combat/dodge.ts'
+
+export {
+  ROCKET_TOLERANCE_MAX,
+  ROCKET_TOLERANCE_MAX_DEGREES,
+  ROCKET_TOLERANCE_RADIUS,
+  aimCombat,
+  createCombat,
+  observeCombat,
+  planEvade,
+  planShot,
+  resetCombat,
+  rocketTolerance,
+  triggerCombat,
+} from './combat/fire.ts'
+export type { CombatState } from './combat/fire.ts'
+
+export { RAIL_SETTLE_RATE, RAIL_SETTLE_UNITS, railSettled } from './combat/railDiscipline.ts'
+
+export {
+  IMPACT_PROBE,
+  LEAD_LAG_SECONDS,
+  LEAD_MAX_SECONDS,
+  LEAD_STRAIGHTNESS,
+  PATH_SAMPLES,
+  PATH_SAMPLE_TICKS,
+  PATH_WINDOW_TICKS,
+  clearPath,
+  createPath,
+  createPlan,
+  interceptSeconds,
+  planDirect,
+  planRocket,
+  predictImpact,
+  samplePath,
+  straightness,
+} from './combat/rocketAim.ts'
+export type { ShotMode, ShotPlan, TargetPath } from './combat/rocketAim.ts'
+
+export {
+  SELF_SPLASH_ALLOWANCE,
+  SELF_SPLASH_RESERVE,
+  acceptableSelfSplash,
+  predictSelfSplash,
+  selfDamageAllows,
+} from './combat/selfDamage.ts'
+
+export {
+  AIRBORNE_DROP,
+  RAIL_MIN_RANGE,
+  airborneAt,
+  selectWeapon,
+} from './combat/weaponSelect.ts'
 
 /** Re-exported so a `maps/*.nav.ts` file needs one import, not two. */
 export type { Vec3 } from '@gladiator/sim'

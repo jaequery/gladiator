@@ -124,12 +124,26 @@ export type Arena = {
 }
 
 export type ArenaOptions = {
-  /** The bot's seed. Only the sound channel draws from it. */
+  /** The bot's seed. The sound channel and the aim error draw from it. */
   seed?: number
   botOrigin: Vec3
   /** Which way the bot starts facing, in degrees. `+y` is 90. */
   botYawDegrees: number
   enemyOrigin: Vec3
+  /**
+   * Hand the bot the chambers' own collision world as its terrain.
+   *
+   * Off by default, which is the configuration the fairness harness wants: a bot
+   * with no level data aims at bodies rather than at floors and never dodges,
+   * which keeps the mutation test's baseline about perception alone.
+   *
+   * The combat tests turn it on, because splash aiming, the self-damage guard
+   * and the dodge's wall check are all claims about geometry and there is
+   * nothing to claim without it. There is still no nav graph — `movement/move.ts`
+   * describes that pair, and a bot with a world and no graph steers straight at
+   * its goal, ledge-guarded.
+   */
+  terrain?: boolean
 }
 
 /** Two players standing in a room, and a bot driving one of them. */
@@ -155,7 +169,14 @@ export function createArena(options: ArenaOptions): Arena {
     weapon: Weapon.RocketLauncher,
   })
 
-  return { state, world: map.world, bot: createBot(BOT_SLOT, options.seed ?? 1), self, enemy }
+  const terrain = options.terrain === true ? { world: map.world, nav: null } : null
+  return {
+    state,
+    world: map.world,
+    bot: createBot(BOT_SLOT, options.seed ?? 1, terrain),
+    self,
+    enemy,
+  }
 }
 
 export type RunOptions = {

@@ -133,7 +133,7 @@ describe('the circle jump, over a real match rather than an empty lane', () => {
  * the opponent's health legitimately changes the *opponent's* own commands, so a
  * two-bot run could not tell a leak from the other bot reacting to its own vitals.
  */
-function play(before?: (arena: BotArena) => void): UserCmd[] {
+function play(before: (arena: BotArena) => void): UserCmd[] {
   const stream: UserCmd[] = []
   runBotMatch({
     map,
@@ -142,7 +142,7 @@ function play(before?: (arena: BotArena) => void): UserCmd[] {
     ticks: 600,
     botSlots: [0],
     scripted: () => NULL_CMD,
-    ...(before === undefined ? {} : { before }),
+    before,
     observe: (arena) => {
       const cmd = arena.commands[0]
       if (cmd !== undefined) stream.push(cmd)
@@ -151,43 +151,58 @@ function play(before?: (arena: BotArena) => void): UserCmd[] {
   return stream
 }
 
+/**
+ * Pin the opponent's vitals every sub-step, and put them somewhere if asked.
+ *
+ * **The pinning is what makes the comparison mean anything since GLAD-HK3ATM.**
+ * The bot now shoots, so an opponent perturbed down to 25 health *dies* to a rocket
+ * the bot legitimately fired at a body it legitimately saw — the round ends, both
+ * bots stand through an intermission, and the streams differ for a reason that has
+ * nothing to do with a leak. A perturbation is only a fairness experiment while it
+ * cannot change the outcome, so both numbers are held far enough above what a rocket
+ * takes off (34 health through full armour, 100 through none) that neither run can
+ * end early. What is left is the only thing being asked: whether the *number* reaches
+ * the bot's commands.
+ */
+function vitals(health: number, armor: number, place?: (arena: BotArena) => void) {
+  return (arena: BotArena): void => {
+    const enemy = findPlayer(arena.state, 1)
+    if (enemy === null) return
+    enemy.health = health
+    enemy.armor = armor
+    place?.(arena)
+  }
+}
+
+/** What every run pins the opponent to unless it is the thing being perturbed. */
+const HEALTH = 1000
+const ARMOR = 1000
+
 /** Perturb a field of the opponent's body that the bot's model does not carry. */
 const MUTATIONS: readonly (readonly [string, (arena: BotArena) => void])[] = [
-  [
-    'the opponent is on 25 health rather than 100',
-    (arena) => {
-      const enemy = findPlayer(arena.state, 1)
-      if (enemy !== null) enemy.health = 25
-    },
-  ],
-  [
-    'the opponent has no armour left',
-    (arena) => {
-      const enemy = findPlayer(arena.state, 1)
-      if (enemy !== null) enemy.armor = 0
-    },
-  ],
+  ['the opponent is on a quarter of the health', vitals(HEALTH / 4, ARMOR)],
+  ['the opponent has no armour left', vitals(HEALTH, 0)],
   [
     'the opponent is looking straight at the bot',
-    (arena) => {
+    vitals(HEALTH, ARMOR, (arena) => {
       const enemy = findPlayer(arena.state, 1)
       if (enemy !== null) {
         enemy.angles[0] = 4000
         enemy.angles[1] = 32768
       }
-    },
+    }),
   ],
   [
     'the opponent could fire again this instant',
-    (arena) => {
+    vitals(HEALTH, ARMOR, (arena) => {
       const enemy = findPlayer(arena.state, 1)
       if (enemy !== null) enemy.nextFireTick = 0
-    },
+    }),
   ],
 ]
 
 describe('the movement layer cannot see what the model does not carry', () => {
-  const baseline = play()
+  const baseline = play(vitals(HEALTH, ARMOR))
 
   it('produced a stream with movement in it', () => {
     expect(baseline).toHaveLength(600)
@@ -209,14 +224,16 @@ describe('the movement layer cannot see what the model does not carry', () => {
   it('control: routes differently when the opponent moves somewhere it can be seen', () => {
     // Without this the whole block above could pass by the bot ignoring the world.
     expect(
-      play((arena) => {
-        const enemy = findPlayer(arena.state, 1)
-        if (enemy !== null && arena.state.tick === 40) {
-          enemy.origin[0] = -352
-          enemy.origin[1] = -220
-          enemy.origin[2] = 0.125
-        }
-      }),
+      play(
+        vitals(HEALTH, ARMOR, (arena) => {
+          const enemy = findPlayer(arena.state, 1)
+          if (enemy !== null && arena.state.tick === 40) {
+            enemy.origin[0] = -352
+            enemy.origin[1] = -220
+            enemy.origin[2] = 0.125
+          }
+        }),
+      ),
     ).not.toEqual(baseline)
   })
 })

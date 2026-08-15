@@ -66,11 +66,18 @@ export type Bot = {
 /**
  * A bot seated in `slot`, with `seed` for its stream and `terrain` to walk on.
  *
- * `terrain` is `null` for a bot with no map: it aims, it holds, and it never asks
- * for a stick position. That is the shape every test of the perception boundary
- * uses (`perception/fixture.ts`), and it is why the movement layer is optional
- * rather than required — a bot that could not be built without a nav graph would
- * make every aim assertion depend on one.
+ * `terrain` is `null` for a bot with no map: it aims, it shoots, it holds, and it
+ * never asks for a stick position. That is the shape every test of the perception
+ * boundary uses (`perception/fixture.ts`), and it is why the movement layer is
+ * optional rather than required — a bot that could not be built without a nav
+ * graph would make every aim assertion depend on one.
+ *
+ * A bot with no terrain also has no *geometry*, and three things in the combat
+ * layer are claims about geometry: splashing a rocket against a surface, checking
+ * a dodge for walls, and predicting where the bot's own rocket will burst. All
+ * three say so rather than guessing — it shoots at bodies, it does not dodge, and
+ * it does not restrain itself. Nothing that ships is in that configuration; every
+ * bot in a match is handed the arena it is standing in.
  */
 export function createBot(slot: number, seed: number, terrain: BotTerrain | null = null): Bot {
   const rng: RngHolder = { rng: seedRng(seed) }
@@ -78,7 +85,7 @@ export function createBot(slot: number, seed: number, terrain: BotTerrain | null
   return {
     rng,
     perception,
-    brain: createBrain(),
+    brain: createBrain(rng),
     movement: createMovement(rng, terrain),
     worldModel: perception.model,
   }
@@ -94,5 +101,17 @@ export function createBot(slot: number, seed: number, terrain: BotTerrain | null
  */
 export function botCommand(bot: Bot, ground: Ground): UserCmd {
   observe(bot.perception, ground)
-  return think(bot.brain, bot.worldModel, bot.movement.terrain === null ? null : bot.movement)
+  const terrain = bot.movement.terrain
+  // The world comes off the bot's own terrain rather than out of `ground`, and
+  // the difference matters: `terrain` is the level data this bot was *handed*
+  // (see {@link createBot}), so a bot built without one has no geometry to
+  // splash a rocket against or to check a dodge for walls, and says so. Reaching
+  // into `ground` for it instead would give a bot with no map a map, which is a
+  // second, undeclared way for level data to arrive.
+  return think(
+    bot.brain,
+    bot.worldModel,
+    terrain === null ? null : bot.movement,
+    terrain === null ? null : terrain.world,
+  )
 }
