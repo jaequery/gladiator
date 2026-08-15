@@ -127,7 +127,7 @@ does not is not a browser, and this server has no non-browser clients.
 
 None of this is authentication — `Origin` is set by browsers, not by people, and
 a native client can send whatever it likes. It stops browser-based abuse and
-nothing else. GLAD-V7M6PQ owns the rest.
+nothing else. What stops the rest is **Limits**, below.
 
 ## Transport settings
 
@@ -135,6 +135,87 @@ nothing else. GLAD-V7M6PQ owns the rest.
 dozen bytes and every one of them is urgent: Nagle's algorithm would hold them
 back waiting for company, and compression would spend a memory allocation and a
 CPU burst per message to save nothing.
+
+---
+
+## Limits
+
+This endpoint is on the public internet, it needs no account to reach, and the
+origin check above stops a browser on somebody else's page and nothing else. So
+the defence is that the server is authoritative and distrusts everything it is
+handed. Every number below is enforced, tested, and configurable by environment
+variable; the argument for each one lives next to the code, and this table is
+the operator's copy. GLAD-V7M6PQ.
+
+| Limit | Value | Env | Where |
+| ----- | ----- | --- | ----- |
+| one frame | **16 kB** | `MAX_PAYLOAD_BYTES` | `ws` `maxPayload` + `validate.ts` |
+| frames per connection | **300/s**, burst 60 | — | `validate.ts` |
+| bytes per connection | **128 kB/s**, burst 32 kB | — | `validate.ts` |
+| refused frames before a close | **100** | — | `validate.ts` |
+| commands executed per peer | **125/s**, burst 32 | — | `inputQueue.ts` |
+| buffered commands per peer | **32** | — | `inputQueue.ts` |
+| commands per frame | **256** | — | `sim/protocol.ts` |
+| connections per address | **1/s**, burst 20 | `CONNECT_BUDGET_PER_SECOND`, `CONNECT_BURST` | `server.ts` |
+| open sockets per address | **8** | `MAX_CONNECTIONS_PER_ADDRESS` | `server.ts` |
+| rooms on the machine | **200** | — | `rooms.ts` |
+
+Two of those want explaining, because the pairs look redundant and are not.
+
+**Frames per second is not the command rate limit.** The command limit is 125/s
+and it exists to stop one player consuming more of the world's time than
+everybody else — the speedhack, argued at length in `inputQueue.ts`. The frame
+limit is about the *pipe*: a client sending ten thousand empty frames a second
+passes the command limit trivially, because none of its frames contain a command
+the world would execute, and would still spend a core on `JSON.parse`.
+
+**Bytes per second is not the frame size cap.** 300 frames a second at the 16 kB
+cap is 4.8 MB/s per connection, and every one of those frames is individually
+legal.
+
+The frame limits **throttle before they disconnect**. A frame over the rate is
+dropped in silence — answering a flood with one fault per frame is answering a
+flood with a flood, in our own direction — and only a connection that has had a
+hundred frames refused is told why and closed. An honest client at 240 Hz sends
+245 frames a second and is never refused one.
+
+### What "the address" means
+
+`Fly-Client-IP` behind the proxy, and the socket's own address otherwise
+(`TRUSTED_IP_HEADER`, defaulting to `fly-client-ip`). Without the header every
+connection on Fly arrives from the proxy, so a per-address limit would put the
+whole internet in one bucket and the first twenty players a second would rate
+limit the twenty-first.
+
+**That header is only trustworthy behind a proxy that overwrites it**, which
+Fly's does. A process reachable directly would be handed whatever an attacker
+typed — a fresh bucket per guess, which is the same as no limit at all. Set
+`TRUSTED_IP_HEADER=` to the empty string if this ever runs without one.
+
+An IPv6 address is bucketed by its **/64**, because a residential customer is
+routinely handed a whole one: limiting per address would let an attacker walk
+eighteen quintillion addresses inside their own subnet. The cost is that
+everybody behind one NAT or one /64 shares a budget, which is why the numbers are
+sized for a household — twenty connections in a burst, one a second after that —
+rather than for one browser tab.
+
+### Nothing takes the machine down with it
+
+A hostile client can end its own session. It must not be able to end anybody
+else's, and there are two places that could have gone wrong:
+
+- **An exception out of a socket handler.** A `ws` message handler runs inside
+  `EventEmitter.emit`, so a throw escaping it unwinds through the event loop and
+  takes the *process*. `net/wsTransport.ts` catches at that boundary and closes
+  the one connection.
+- **An exception out of a room's sub-step.** Every world on the machine is
+  advanced by one call from one timer, so a throw would leave every *other* room
+  silently un-ticked. `rooms.ts` runs each room behind a try/catch, closes the
+  one that threw, and counts it as `rooms.faulted` on `/healthz`.
+
+`rooms.faulted` should be zero forever. A nonzero reading means some frame is
+reaching code that treats it as trustworthy, and that is worth finding before it
+is found for us.
 
 ---
 
@@ -246,26 +327,41 @@ into a *different room*.
 
 Six symbols from a 32-symbol alphabet is **32⁶ = 1,073,741,824 codes, exactly 30
 bits**. The number that matters is not the size of the space but the chance a
-guess lands in the *occupied* part of it, and a guess costs a WebSocket upgrade:
+guess lands in the *occupied* part of it, and **a guess costs a WebSocket
+upgrade** — which is exactly what the connection limit above bounds. One address
+gets a burst of twenty and then one a second:
 
-| Live rooms | Chance per guess | At 10 guesses/s | At 100 guesses/s |
-| ---------- | ---------------- | --------------- | ---------------- |
-| 1          | 9.3 × 10⁻¹⁰      | 3.4 years       | 124 days         |
-| 100        | 9.3 × 10⁻⁸       | 12.4 days       | 30 hours         |
-| 200 (`MAX_ROOMS`) | 1.9 × 10⁻⁷ | 6.2 days        | 15 hours         |
+| Live rooms | Chance per guess | At 1/s (the limit) | At 10/s | At 100/s |
+| ---------- | ---------------- | ------------------ | ------- | -------- |
+| 1          | 9.3 × 10⁻¹⁰      | **34 years**       | 3.4 years | 124 days |
+| 100        | 9.3 × 10⁻⁸       | **124 days**       | 12.4 days | 30 hours |
+| 200 (`MAX_ROOMS`) | 1.9 × 10⁻⁷ | **62 days**        | 6.2 days  | 15 hours |
+
+The bold column is what a single attacker actually gets; the other two are what
+they would get without the limit, kept so the limit's worth is visible. Rows are
+medians of a geometric distribution — an expectation, not a guarantee, and the
+attacker who gets lucky on the first try was always possible.
 
 `MAX_ROOMS` is 200, which is `fly.toml`'s `hard_limit` on *connections* — so it
 is the number of rooms that could exist if every connection opened one and
-nobody ever joined an existing match. It is the worst case, not a capacity plan.
-The arithmetic is `guessProbability` and `expectedGuessSeconds` in `roomCode.ts`
-and it is asserted in `roomCode.test.ts`, so the table above is a number this
-suite can be pointed at rather than a claim somebody made once.
+nobody ever joined an existing match. It is the worst case, not a capacity plan;
+the realistic target is one friend's duel, which is the top row. The arithmetic
+is `guessProbability` and `expectedGuessSeconds` in `roomCode.ts` and it is
+asserted in `roomCode.test.ts` at the enforced rate, so the table above is a
+number this suite can be pointed at rather than a claim somebody made once.
+
+**A distributed attacker is not bounded by this**, and saying so is the point of
+writing it down. The limit is per address; a thousand of them is a thousand
+guesses a second, which walks into one of two hundred rooms in about an hour and
+a half. What that buys them is a seat in a stranger's duel — the room is a lobby,
+not an account, and there is nothing behind it to steal. If it ever becomes worth
+more than that, the answer is a longer code (seven symbols is 35 bits and another
+thirty-two-fold) rather than a bigger limit.
 
 A code is **not a credential** and this is not a security boundary. What the
 table says is that at this deploy's size, an attacker spending an upgrade per
-guess needs days to walk into one stranger's duel — and that they would then be
-told the room is full, because a duel seats two. Connection-level rate limiting
-that would make it worse for them is GLAD-V7M6PQ.
+guess needs months to walk into one stranger's duel — and that they would then be
+told the room is full, because a duel seats two.
 
 ### Why the registry is a `Map` on one machine
 

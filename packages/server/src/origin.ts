@@ -25,9 +25,11 @@
  * ## What this is not
  *
  * `Origin` is set by browsers, not by people. A native client can send whatever
- * it likes, so this stops browser-based abuse and nothing else. Authentication,
- * rate limits and message caps are GLAD-V7M6PQ; the policy that survives
- * contact with real players is GLAD-G41FQ9.
+ * it likes, so this stops browser-based abuse and nothing else. What stops the
+ * rest is that the server is authoritative and distrusts what it is handed:
+ * `validate.ts` bounds what a connection may send, `server.ts` bounds how often
+ * an address may open one, and `sim/usercmd.ts` bounds what a command may
+ * contain. The policy that survives contact with real players is GLAD-G41FQ9.
  */
 import type { ServerConfig } from './config.ts'
 

@@ -37,6 +37,28 @@
  * `wss://host/?room=ABC123` joins an existing one. A code that names no room is
  * answered with a `fault` frame naming it and a 4006 close — a socket that
  * opened and then went quiet is the one failure mode a player cannot diagnose.
+ *
+ * ## What an unknown client is allowed to do before it is anybody
+ *
+ * Three limits sit in front of the handshake, and they are refusals at the
+ * *upgrade* rather than faults on an open socket — deliberately, because the
+ * thing being defended against is the cost of the attempt itself. A guess at a
+ * room code costs one connection, so bounding connections per address is
+ * bounding the guess rate (`docs/deploy.md` puts the arithmetic next to the
+ * numbers), and bounding sockets per address is what stops one script holding
+ * every room on the machine open.
+ *
+ * - **Origin** — `origin.ts`. Defence in depth only: a header a browser writes
+ *   and a non-browser forges.
+ * - **Connections per address** — `config.CONNECT_BUDGET_PER_SECOND`, a token
+ *   bucket per address (`rateLimit.ts`), answered with 429.
+ * - **Concurrent sockets per address** — `config.MAX_CONNECTIONS_PER_ADDRESS`.
+ *
+ * The address is `Fly-Client-IP` behind the proxy and the socket's own otherwise;
+ * `config.ts` says why that header is trustworthy in exactly one deployment and
+ * how to turn it off in every other. What a connection may send *after* the
+ * upgrade is `validate.ts`, and it is a room's business rather than this file's
+ * because the listen server has to run into the same door.
  */
 import { createServer, type IncomingMessage, type Server } from 'node:http'
 import { randomUUID } from 'node:crypto'
@@ -53,8 +75,9 @@ import { startHostLoop, systemScheduler, type Scheduler } from './loop.ts'
 import { createOriginPolicy } from './origin.ts'
 import { SERVER_MAP, SERVER_MAP_HASH, SERVER_PLAN } from './map.ts'
 import { wsTransport } from './net/wsTransport.ts'
+import { clientKey, createKeyedLimiter } from './rateLimit.ts'
 import { createRoom, type Room } from './room.ts'
-import { normalizeRoomCode } from './roomCode.ts'
+import { describeRoomCode } from './roomCode.ts'
 import { createRoomRegistry, seedForRoom, type RoomRegistry } from './rooms.ts'
 import { createTickScheduler, type Timer, type TickScheduler } from './scheduler.ts'
 import { CLOSE_NO_SUCH_ROOM } from './session.ts'
@@ -113,7 +136,17 @@ export type StartOptions = {
  */
 export function roomCodeOf(url: string | undefined): string | null {
   if (url === undefined) return null
-  const query = new URL(url, 'http://gladiator.invalid').searchParams.get(ROOM_QUERY_PARAM)
+  // Total, because the argument is a request target an attacker wrote. Node's
+  // HTTP parser accepts absolute-form targets, so `GET http://[ HTTP/1.1` gets
+  // this far and `new URL` throws on it — inside an `upgrade` handler, which is
+  // an uncaught exception and therefore the whole process. A target we cannot
+  // parse names no room, which is a sentence the client already handles.
+  let query: string | null
+  try {
+    query = new URL(url, 'http://gladiator.invalid').searchParams.get(ROOM_QUERY_PARAM)
+  } catch {
+    return null
+  }
   return query === null || query === '' ? null : query
 }
 
@@ -126,7 +159,46 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
   const isOriginAllowed = createOriginPolicy(config)
   const startedAtMs = Date.now()
 
-  const connections = new Map<WebSocket, { alive: boolean }>()
+  const connections = new Map<WebSocket, { alive: boolean; readonly address: string }>()
+
+  // One bucket per client address, swept on the housekeeping beat. See
+  // `rateLimit.ts` for why an IPv6 address is bucketed by its /64, and
+  // `config.ts` for why one connection a second with a burst of twenty is the
+  // number the room-code guess rate in `docs/deploy.md` is computed against.
+  const connects = createKeyedLimiter({
+    ratePerSecond: config.connectBudgetPerSecond,
+    burst: config.connectBurst,
+  })
+
+  /** How many sockets this address is holding open right now. */
+  const openFrom = (address: string): number => {
+    let held = 0
+    for (const connection of connections.values()) {
+      if (connection.address === address) held += 1
+    }
+    return held
+  }
+
+  /**
+   * Which address to charge, folded to its bucket key.
+   *
+   * The trusted header first, when there is one and it is configured — behind
+   * Fly's proxy `socket.remoteAddress` is the proxy for every player on earth,
+   * and a per-address limit built on it would rate-limit the whole internet
+   * together. `config.ts` says why that is safe in exactly one deployment.
+   */
+  const addressOf = (request: IncomingMessage): string => {
+    if (config.trustedIpHeader !== '') {
+      const header = request.headers[config.trustedIpHeader]
+      const value = Array.isArray(header) ? header[0] : header
+      if (typeof value === 'string' && value !== '') {
+        // A comma-separated chain (`X-Forwarded-For` style) is read left to
+        // right: the leftmost entry is the one the *first* proxy saw.
+        return clientKey((value.split(',')[0] ?? '').trim())
+      }
+    }
+    return clientKey(request.socket.remoteAddress)
+  }
 
   const rooms: RoomRegistry = createRoomRegistry({
     clock,
@@ -176,6 +248,10 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
         map: { name: SERVER_MAP.source.name, hash: SERVER_MAP_HASH },
         uptimeSeconds: Math.round((Date.now() - startedAtMs) / 1000),
         sessions: connections.size,
+        // Client addresses the connect limiter is currently holding a bucket
+        // for. Served because a number that only ever grows is the signature of
+        // an address-forging flood, and it is invisible in every other counter.
+        addresses: connects.size,
         rooms: rooms.stats(),
         // Served, not just logged. The p99 on the machine that is actually
         // running is the only one worth quoting, it changes under load, and
@@ -205,8 +281,8 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
     perMessageDeflate: false,
   })
 
-  const rejectUpgrade = (socket: Duplex, status: number, reason: string) => {
-    socket.write(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\n\r\n`)
+  const rejectUpgrade = (socket: Duplex, status: number, reason: string, extra = '') => {
+    socket.write(`HTTP/1.1 ${status} ${reason}\r\n${extra}Connection: close\r\n\r\n`)
     socket.destroy()
   }
 
@@ -217,6 +293,23 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
       // silent failure that looks exactly like the server being down.
       log(`upgrade refused: ${verdict.reason}`)
       rejectUpgrade(socket, 403, 'Forbidden')
+      return
+    }
+
+    // Refused here rather than after the handshake, and that is the whole point
+    // of the limit: a guess at a room code should cost the guesser a connection
+    // and cost us a single write. Answering with a `fault` frame would be more
+    // legible — it is what an unknown room code gets — and would mean completing
+    // a WebSocket handshake per guess, which is paying for the attack.
+    const address = addressOf(request)
+    if (!connects.spend(address, clock.nowMs())) {
+      log(`upgrade refused: ${address} is opening connections too fast`)
+      rejectUpgrade(socket, 429, 'Too Many Requests', 'Retry-After: 1\r\n')
+      return
+    }
+    if (openFrom(address) >= config.maxConnectionsPerAddress) {
+      log(`upgrade refused: ${address} already holds ${config.maxConnectionsPerAddress} sockets`)
+      rejectUpgrade(socket, 429, 'Too Many Requests', 'Retry-After: 5\r\n')
       return
     }
 
@@ -245,7 +338,7 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
   }
 
   wss.on('connection', (socket: WebSocket, request: IncomingMessage) => {
-    connections.set(socket, { alive: true })
+    connections.set(socket, { alive: true, address: addressOf(request) })
 
     // `pong` is the one socket event the room has no opinion about: it is the
     // liveness of the *pipe*, which is exactly what a transport abstracts away.
@@ -282,7 +375,13 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
       // Both "that is not a code" and "that code names no room" land here, and
       // they are deliberately one sentence. Telling a guesser which of the two
       // they hit is telling them their character set is right.
-      const shown = normalizeRoomCode(asked) ?? asked.slice(0, 16)
+      // `describeRoomCode` rather than the raw string: this goes into a log line
+      // and into a frame the client prints, and a query parameter can contain a
+      // newline. A value an attacker chose that reaches a log verbatim is a
+      // value an attacker can use to forge a log line. It folds a real code on
+      // the way through, so a player who typed `abc-123` is still told about
+      // `ABC123` — the thing they meant.
+      const shown = describeRoomCode(asked)
       log(`join refused: no room ${shown}`)
       refuse(
         socket,
@@ -313,6 +412,10 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
         connection.alive = false
         socket.ping()
       }
+      // The connect limiter's map is keyed by an address, which is a thing an
+      // attacker can supply a lot of. Dropping the buckets that have refilled
+      // is what keeps it bounded by traffic rather than by history.
+      connects.sweep(clock.nowMs())
     },
   })
 

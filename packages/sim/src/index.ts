@@ -267,6 +267,7 @@ export type { WireState } from './netstate.ts'
 
 export {
   MAX_CMDS_PER_BATCH,
+  MAX_TICK,
   PROTOCOL_VERSION,
   UNKNOWN_RTT,
   decodeCmd,
@@ -378,6 +379,8 @@ export {
   ANGLE_UNITS_PER_DEGREE,
   BUTTON_ATTACK,
   BUTTON_JUMP,
+  BUTTON_MASK,
+  MAX_MOVE,
   MAX_PITCH_UNITS,
   NULL_CMD,
   RADIANS_PER_ANGLE_UNIT,

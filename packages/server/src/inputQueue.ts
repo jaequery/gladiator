@@ -124,6 +124,8 @@
  */
 import { BUTTON_ATTACK, TICK_RATE, type UserCmd } from '@gladiator/sim'
 
+import { createTokenBucket } from './rateLimit.ts'
+
 /**
  * How many commands the buffer holds on purpose, in ticks.
  *
@@ -323,9 +325,11 @@ export function createInputQueue(options: InputQueueOptions = {}): InputQueue {
   // The token bucket. Full to begin with, and its clock starts at the first
   // command rather than at construction: a room may sit empty for a minute
   // before anybody joins, and a peer should not arrive to a bucket that has
-  // been notionally refilling since the process booted.
-  let tokens = burst
-  let refilledMs: number | null = null
+  // been notionally refilling since the process booted. `rateLimit.ts` holds
+  // that arithmetic, because it is also what bounds frames, bytes and
+  // connections and four copies of it would be four opinions about a clock that
+  // went backwards.
+  const bucket = createTokenBucket({ ratePerSecond: budgetPerSecond, burst })
 
   const stats = {
     accepted: 0,
@@ -337,19 +341,6 @@ export function createInputQueue(options: InputQueueOptions = {}): InputQueue {
     merged: 0,
     starved: 0,
     reordered: 0,
-  }
-
-  /** Refill the bucket up to `nowMs` and spend a token if there is one. */
-  const spendToken = (nowMs: number): boolean => {
-    if (budgetPerSecond <= 0) return true
-    if (refilledMs === null) refilledMs = nowMs
-    // A clock that went backwards adds nothing rather than draining the bucket.
-    const elapsedMs = nowMs > refilledMs ? nowMs - refilledMs : 0
-    refilledMs = nowMs
-    tokens = Math.min(burst, tokens + (elapsedMs * budgetPerSecond) / 1000)
-    if (tokens < 1) return false
-    tokens -= 1
-    return true
   }
 
   return {
@@ -382,7 +373,7 @@ export function createInputQueue(options: InputQueueOptions = {}): InputQueue {
         stats.overflow += 1
         return CommandFate.Overflow
       }
-      if (!spendToken(nowMs)) {
+      if (!bucket.spend(1, nowMs)) {
         stats.rateLimited += 1
         return CommandFate.RateLimited
       }

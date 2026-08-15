@@ -264,3 +264,89 @@ describe('driving every room at once', () => {
     expect([...rooms.codes()].sort()).toEqual([first.code, second.code].sort())
   })
 })
+
+/**
+ * One room's bad day is one room's. GLAD-V7M6PQ.
+ *
+ * Every world on the machine is advanced by one call from one timer, so an
+ * exception out of any room's sub-step would unwind through the scheduler's
+ * frame and leave every *other* room silently un-ticked. The room here throws on
+ * purpose — nothing in the shipping code is supposed to, which is exactly why
+ * the containment has to be asserted rather than assumed.
+ */
+describe('a room that throws', () => {
+  /** A registry seeded with one room that throws and one that does not. */
+  function withAFaultyRoom() {
+    const clock = manualClock()
+    let at = 0
+    const built = new Map<string, Room>()
+    const rooms = createRoomRegistry({
+      clock,
+      random: () => {
+        at += 1
+        return at - 1
+      },
+      log: () => undefined,
+      create: (code) => {
+        const room = createRoom({
+          map: SERVER_MAP,
+          plan: SERVER_PLAN,
+          clock,
+          build: 'registry',
+          id: code,
+          peerId: (index) => `${code}-${index}`,
+        })
+        built.set(code, room)
+        // The first room minted is the one that detonates. `advance` is the hot
+        // path a frame takes and `sweep` is the housekeeping one; both are
+        // reached from the same timer, so both are covered.
+        if (built.size === 1) {
+          return {
+            ...room,
+            advance: () => {
+              throw new Error('a hostile frame got somewhere it should not have')
+            },
+          }
+        }
+        return room
+      },
+    })
+    return { clock, rooms }
+  }
+
+  it('is closed and counted, and the other rooms keep ticking', async () => {
+    const { rooms } = withAFaultyRoom()
+    const faulty = rooms.create()
+    const healthy = rooms.create()
+    if (faulty === null || healthy === null) throw new Error('no rooms')
+    await settleLoopback(join(faulty.room))
+    await settleLoopback(join(healthy.room))
+
+    rooms.advance(4)
+
+    // The healthy room advanced by exactly the sub-steps it was handed, which
+    // is the whole claim: a client that can make one world throw cannot stop
+    // anybody else's duel.
+    expect(healthy.room.tick).toBe(4)
+    expect(rooms.get(faulty.code)).toBeNull()
+    expect(rooms.stats()).toMatchObject({ rooms: 1, faulted: 1 })
+  })
+
+  it('is dropped rather than left to throw again on the next frame', async () => {
+    const { rooms } = withAFaultyRoom()
+    const faulty = rooms.create()
+    const healthy = rooms.create()
+    if (faulty === null || healthy === null) throw new Error('no rooms')
+    await settleLoopback(join(faulty.room))
+    await settleLoopback(join(healthy.room))
+
+    rooms.advance(1)
+    rooms.advance(1)
+    rooms.advance(1)
+
+    // Counted once, not once per frame: whatever put the world in that state is
+    // still in its `GameState`, so the next frame would throw forever.
+    expect(rooms.stats().faulted).toBe(1)
+    expect(healthy.room.tick).toBe(3)
+  })
+})

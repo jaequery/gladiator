@@ -11,6 +11,7 @@ import { createJitterProbe } from './jitter.ts'
 import { MAX_ROOMS } from './rooms.ts'
 import { HOST_FRAME_MS } from './scheduler.ts'
 import { startServer } from './server.ts'
+import { BYTE_BUDGET_PER_SECOND, FRAME_BUDGET_PER_SECOND } from './validate.ts'
 
 /** How long to keep reporting jitter into the boot log. */
 const JITTER_REPORT_MS = 60_000
@@ -34,6 +35,18 @@ console.log(
     `up to ${MAX_ROOMS} rooms, ` +
     `origins: ${config.allowedOrigins.length > 0 ? config.allowedOrigins.join(' ') : '(none listed)'} ` +
     `+ ${config.vercelProject}*.vercel.app${config.allowLocalhost ? ' + localhost' : ''}`,
+)
+
+// The limits, in the boot log, because "why can this player not connect" and
+// "why is this client being throttled" are questions somebody asks about a
+// running process rather than about the source. `docs/deploy.md` under
+// **Limits** is the same table with the reasoning attached.
+console.log(
+  `limits: frames ${config.maxPayloadBytes} B / ${FRAME_BUDGET_PER_SECOND} per s / ` +
+    `${BYTE_BUDGET_PER_SECOND} B per s, ` +
+    `connections ${config.connectBudgetPerSecond}/s burst ${config.connectBurst}, ` +
+    `${config.maxConnectionsPerAddress} open per address, ` +
+    `address from ${config.trustedIpHeader === '' ? 'the socket' : config.trustedIpHeader}`,
 )
 
 // The number that matters is the one measured on the machine class actually

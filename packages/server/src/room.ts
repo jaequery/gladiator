@@ -49,6 +49,16 @@
  * for a peer, because a stall on one peer's socket is a hitch in the other
  * peer's game.
  *
+ * ## Nothing is read before it has been let in
+ *
+ * Every frame goes through `validate.ts` first — a size cap, a frame rate, a
+ * byte rate and "the protocol is text" — and only what survives reaches
+ * `JSON.parse`. That door is a *room's*, not the Node edge's, because the listen
+ * server is a room behind a loopback and a limit that only existed on the socket
+ * path would be a limit single-player never exercises. The socket has its own
+ * copy of the size cap (`ws`'s `maxPayload`), which is the one that keeps an
+ * oversized frame from ever being assembled.
+ *
  * ## It does hold a stopwatch, and it is the only one
  *
  * The one wall-clock measurement a room makes about a peer is the round trip,
@@ -89,7 +99,6 @@ import type { Clock } from './clock.ts'
 import { createClockSync, type ServerClockSync } from './clockSync.ts'
 import { createInputQueue, type InputQueue } from './inputQueue.ts'
 import {
-  CLOSE_BAD_FRAME,
   CLOSE_ROOM_FULL,
   applyMessage,
   createSession,
@@ -97,6 +106,7 @@ import {
   type ServerIdentity,
   type SessionState,
 } from './session.ts'
+import { createFrameGuard, type FrameGuard, type FrameGuardOptions } from './validate.ts'
 
 /** How long a peer may say nothing before the room lets go of it. */
 export const DEFAULT_IDLE_TIMEOUT_MS = 60_000
@@ -149,6 +159,16 @@ export type RoomOptions = {
    * may reach for. The Node server passes the real one; a test passes a counter.
    */
   readonly peerId?: (index: number) => string
+  /**
+   * What a connection is allowed to send. `validate.ts`.
+   *
+   * A room's business rather than the Node edge's, because the listen server is
+   * a room behind a loopback and the door has to be the same one — a limit that
+   * only existed on the socket path would be a limit single-player never
+   * exercises. Defaults are the shipping ones; a test passes smaller numbers so
+   * it can reach them in a handful of frames.
+   */
+  readonly frameGuard?: FrameGuardOptions
   readonly log?: (line: string) => void
 }
 
@@ -188,6 +208,8 @@ export type RoomSnapshot = {
   readonly gaps: number
   /** Sub-steps in which some peer's buffer was empty and the fallback ran. */
   readonly starved: number
+  /** Frames turned away at the door: binary, oversized, or too fast. */
+  readonly refused: number
 }
 
 export type Room = {
@@ -240,6 +262,8 @@ type PeerRecord = {
   readonly clockSync: ServerClockSync
   /** Per peer, because a jitter buffer is a property of one link too. */
   readonly queue: InputQueue
+  /** Per peer, because a rate limit shared between peers is one peer's DoS. */
+  readonly guard: FrameGuard
   session: SessionState
   lastHeardMs: number
   open: boolean
@@ -283,6 +307,10 @@ export function createRoom(options: RoomOptions): Room {
   const peers: PeerRecord[] = []
   let joined = 0
   let starved = 0
+  // Frames refused at the door by peers that have since gone. A fuzzer is
+  // closed on and then forgotten, and a counter that only summed *live* peers
+  // would forget what it did on the way out.
+  let refused = 0
 
   /**
    * The commands for one sub-step, reused.
@@ -327,7 +355,9 @@ export function createRoom(options: RoomOptions): Room {
   const forget = (record: PeerRecord): void => {
     record.open = false
     const at = peers.indexOf(record)
-    if (at >= 0) peers.splice(at, 1)
+    if (at < 0) return
+    peers.splice(at, 1)
+    refused += record.guard.stats.refused
   }
 
   const send = (record: PeerRecord, message: ServerMessage): void => {
@@ -345,19 +375,26 @@ export function createRoom(options: RoomOptions): Room {
     const nowMs = clock.nowMs()
     record.lastHeardMs = nowMs
 
-    if (typeof message !== 'string') {
-      // The protocol is JSON text. A binary frame is either a client speaking
-      // something else or a client speaking the *next* protocol, and guessing
-      // which is worse than saying so.
-      send(record, { t: 'fault', code: 'binary', detail: 'this protocol is JSON text' })
-      record.transport.close(CLOSE_BAD_FRAME, 'binary frame')
+    // The door, before anything reads the frame: size, rate, and "the protocol
+    // is text". `validate.ts` owns every one of those numbers and the argument
+    // for why a flood is dropped in silence until it is closed on.
+    const verdict = record.guard.admit(message, nowMs)
+    if (verdict.text === null) {
+      if (verdict.fault !== null) send(record, verdict.fault)
+      if (verdict.close !== null) {
+        // One line per closed connection, never one per refused frame: the
+        // throttle is silent for the same reason it does not reply, and a log
+        // an attacker can fill is a log nobody can read.
+        log(`room ${id}: ${record.id} closed — ${verdict.fate}`)
+        record.transport.close(verdict.close.code, verdict.close.reason)
+      }
       return
     }
 
     // Parsed here rather than inside `applyFrame`, because a pong has to be
     // stopped at this layer: timing a round trip needs the clock, and the
     // session state machine deliberately has none.
-    const parsed: ClientMessage | null = parseClientMessage(message)
+    const parsed: ClientMessage | null = parseClientMessage(verdict.text)
     if (parsed !== null && parsed.t === 'pong') {
       record.clockSync.pong(parsed.id, nowMs)
       return
@@ -473,6 +510,7 @@ export function createRoom(options: RoomOptions): Room {
         transport,
         clockSync: createClockSync(),
         queue,
+        guard: createFrameGuard(options.frameGuard),
         session: createSession(peerId, slot, queue),
         lastHeardMs: clock.nowMs(),
         open: true,
@@ -564,6 +602,7 @@ export function createRoom(options: RoomOptions): Room {
       commands: peers.reduce((total, peer) => total + peer.session.commands, 0),
       gaps: peers.reduce((total, peer) => total + peer.session.gaps, 0),
       starved,
+      refused: refused + peers.reduce((total, peer) => total + peer.guard.stats.refused, 0),
     }),
 
     close(code = CloseReason.Normal, reason = '') {

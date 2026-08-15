@@ -133,11 +133,18 @@ describe('aiming at the next boundary', () => {
     scheduler.start()
 
     const jitter = [0, 1, 4, 0, 2, 7, 1, 0, 3, 0, 5, 1]
+    // Counted here rather than read back out of `scheduler.stats()`, which
+    // sorts the whole lateness history to answer a p99 nobody is asking for at
+    // this point in the loop — three and a half thousand times, which is the
+    // difference between this test taking milliseconds and taking seconds. The
+    // two numbers are the same: one `timer.fire()` is one frame.
+    let frames = 0
     while (clock.nowMs() < 60_000) {
-      const late = jitter[scheduler.stats().frames % jitter.length] ?? 0
+      const late = jitter[frames % jitter.length] ?? 0
       const delayMs = timer.delayMs ?? HOST_FRAME_MS
       clock.advance(delayMs + late)
       timer.fire()
+      frames += 1
     }
 
     const stats = scheduler.stats()

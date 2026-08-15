@@ -320,7 +320,8 @@ reaps a room nobody has been in for a minute so codes do not leak.
 characters of Crockford base32 — the digits and the letters minus I, L, O and U
 — which is exactly 30 bits. Read leniently and written strictly:
 `packages/server/src/roomCode.ts`; the guess rate at this deploy's concurrency
-is `docs/deploy.md`.
+*and at the connection rate it enforces* is `docs/deploy.md`. A code is a lobby,
+not a credential.
 
 **Tick scheduler** — the one timer on the machine
 (`packages/server/src/scheduler.ts`). Wakes ~62.5 times a second aiming at
@@ -423,6 +424,27 @@ is what keeps a disconnected one from running off the map.
 **Command rate limit** — commands a peer may have executed per **wall-clock
 second**, measured on the server's clock. Without it a client sends 500 Hz of
 input and moves faster than everyone else.
+
+**Frame door** — what a connection is allowed to *send*, before anything reads
+it: a size cap, a frames-per-second budget and a bytes-per-second budget, plus
+"the protocol is JSON text". `packages/server/src/validate.ts`. Distinct from the
+command rate limit, which bounds how much of the world's time one player may
+consume; the door bounds the pipe. A room's, not the Node edge's, so the listen
+server runs into the same one.
+
+**Throttle, then disconnect** — the frame door's policy. A frame over the rate is
+dropped in **silence**, because a fault per dropped frame is answering a flood
+with a flood; a connection that has had a hundred refused is told why and closed.
+
+**Token bucket** — the one shape every rate limit here has: a budget per
+wall-clock second with a burst allowance for traffic that arrived in a clump.
+`packages/server/src/rateLimit.ts`, and four sets of numbers on top of it —
+commands, frames, bytes, connections.
+
+**Client address** — what a per-address limit is charged to. `Fly-Client-IP`
+behind the proxy and the socket's own otherwise, with an IPv6 address folded to
+its **/64**: a customer handed a whole /64 would otherwise have eighteen
+quintillion fresh buckets. `rateLimit.ts`; the trust argument is `config.ts`.
 
 ---
 

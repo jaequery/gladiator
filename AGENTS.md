@@ -783,6 +783,62 @@ four commands refused at the door and moves at exactly the speed everyone else
 does — `inputQueue.test.ts` measures that in units travelled, against a third
 world simulated with no policy at all so the assertion has something to bite on.
 
+### What a stranger is allowed to do
+
+`packages/server/src/validate.ts`, `rateLimit.ts`, and the numbers `config.ts`
+reads. GLAD-V7M6PQ. The operator's copy of every threshold is `docs/deploy.md`
+under **Limits**; this is the shape of it and the four decisions inside it.
+
+The endpoint is on the public internet and needs no account to reach. The origin
+check at upgrade stops a browser on somebody else's page and *nothing else* — an
+`Origin` header is a string a non-browser writes for itself. So the defence is
+that the server is authoritative and distrusts everything it is handed.
+
+**There are three limits on a connection and they answer three different
+questions.** One frame's size (16 kB, both at `ws`'s `maxPayload` and in the
+guard), frames per second (300, burst 60), and bytes per second (128 kB). The
+second is not the command rate limit — that one is 125/s and stops a player
+consuming more of the world's time than everyone else, and a client sending ten
+thousand *empty* frames a second passes it trivially while spending a core on
+`JSON.parse`. The third is not the size cap — 300 frames a second at 16 kB is
+4.8 MB/s of individually legal traffic.
+
+**It throttles before it disconnects, and the throttle is silent.** A frame over
+the rate is dropped and not answered, because replying to a flood with one fault
+per frame is answering a flood with a flood in our own direction. Only past a
+hundred refusals is the connection told why and closed. An honest client at
+240 Hz sends 245 frames a second and is never refused one.
+
+**The door is a room's, not the Node edge's.** It lives under `room.ts` with
+`nowMs` injected, so the listen server in a browser tab runs into exactly the
+door the deployed server does — a limit that only existed on the socket path
+would be a limit single-player never exercises.
+
+**A guess at a room code costs a connection, so the guess rate is a number this
+deploy chooses.** One connection a second per client address with a burst of
+twenty, refused at the *upgrade* with a 429 rather than after a handshake,
+because paying for a handshake per guess is paying for the attack. Behind Fly the
+address is `Fly-Client-IP`, and an IPv6 one is bucketed by its /64 — a customer
+handed a whole /64 would otherwise have eighteen quintillion fresh buckets. The
+resulting numbers, and what a *distributed* attacker gets instead, are
+`docs/deploy.md` under **How guessable one is**.
+
+And the containment, which is the half that is not a limit at all: **a hostile
+client can end its own session and must not be able to end anybody else's.** A
+throw out of a `ws` handler unwinds through `EventEmitter.emit` and takes the
+process, so `net/wsTransport.ts` catches at that boundary; a throw out of a
+room's sub-step would leave every *other* room on the machine silently
+un-ticked, so `rooms.ts` runs each room behind a try/catch and counts what it
+caught as `rooms.faulted` on `/healthz`. Neither is expected to fire. That is
+precisely the claim a hardening ticket cannot rest on.
+
+The contents of a command are clamped in `sim/src/usercmd.ts` rather than out
+here, because every constant that defines a legal value is in there and a clamp
+on the other side of the package boundary would be a second opinion about all of
+them. `sanitizeUserCmd` is total, every route in goes through it, and the one
+field that *wraps* rather than clamping is yaw — 400 degrees is 40, and clamping
+it would turn an overflowed spin counter into a view that teleports to due north.
+
 ---
 
 ## Prediction, reconciliation and interpolation

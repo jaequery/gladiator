@@ -44,8 +44,11 @@
  *
  * A code is not a credential and this is not a security boundary — it is the
  * observation that at this deploy's size, an attacker spending a WebSocket
- * upgrade per guess needs weeks to walk into one stranger's duel. The rate
- * limiting that would make that worse for them is GLAD-V7M6PQ.
+ * upgrade per guess needs months to walk into one stranger's duel. What makes it
+ * months rather than days is that an upgrade is rate-limited per client address
+ * (`config.CONNECT_BUDGET_PER_SECOND`), so the guess rate is a number this
+ * deploy chooses rather than one the attacker does. `docs/deploy.md` puts the
+ * two next to each other, including what a *distributed* attacker gets instead.
  */
 
 /**
@@ -164,6 +167,33 @@ function foldSymbol(character: string): string | null {
   if (upper === 'O') return '0'
   if (upper === 'I' || upper === 'L') return '1'
   return ROOM_CODE_ALPHABET.includes(upper) ? upper : null
+}
+
+/**
+ * What to *show* for something that was supposed to be a code and was not.
+ *
+ * A rejected code ends up in two places an attacker would like to reach: a log
+ * line, and the `fault` frame the client prints. Both are places where a
+ * newline forges a record and an escape sequence rewrites a terminal, and the
+ * string came out of a query parameter, which may contain either.
+ *
+ * So the echo is the alphabet's own symbols and nothing else, capped at a code's
+ * length plus a little. Something that folds to a real code is shown as the code
+ * — a player who typed `abc-123` should be told about `ABC123`, the thing they
+ * meant — and everything else is shown as the harmless part of what arrived.
+ */
+export function describeRoomCode(raw: string | undefined | null): string {
+  const folded = normalizeRoomCode(raw)
+  if (folded !== null) return folded
+  if (typeof raw !== 'string') return '(nothing)'
+
+  let shown = ''
+  for (const character of raw.toUpperCase()) {
+    if (!ROOM_CODE_ALPHABET.includes(character)) continue
+    shown += character
+    if (shown.length >= ROOM_CODE_LENGTH + 2) break
+  }
+  return shown === '' ? '(nothing)' : shown
 }
 
 /**
