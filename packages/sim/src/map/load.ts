@@ -38,11 +38,9 @@
 import { hashInit, hashString, hashUint32, hashFloat64, formatHash } from '../hash.ts'
 import { createCollisionWorld } from '../collide.ts'
 import type { CollisionWorld } from '../collide.ts'
-import { vec3 } from '../math.ts'
-import { EntityKind, createGameState, spawnEntity } from '../state.ts'
+import { DUEL_SLOTS, buildSpawnPlan, selectSpawnPair, spawnPlayer } from '../match/spawn.ts'
+import { createGameState } from '../state.ts'
 import type { GameState } from '../state.ts'
-import { SURFACE_CLIP_EPSILON } from '../trace.ts'
-import { Weapon } from '../weapon.ts'
 import { mapCollisionBrushes } from './collide.ts'
 import { MAP_FORMAT_VERSION } from './schema.ts'
 import type {
@@ -353,7 +351,7 @@ export function loadMap(value: unknown): LoadedMap {
 }
 
 /**
- * One player, spawned into a map's first spawn point.
+ * One player, standing on a point a round could legally start from.
  *
  * The counterpart to `arena.ts`'s `createSkeletonState`, for the world a client
  * and a server actually load. It lives in the simulation rather than in either
@@ -361,29 +359,30 @@ export function loadMap(value: unknown): LoadedMap {
  * point computed twice, in two packages, is a desync waiting for someone to
  * change one of them.
  *
- * Spawn *policy* — which of a map's points, facing where, and what to do about
- * a telefrag — is GLAD-AKODBZ. This is the placeholder it replaces: the first
- * point, every time.
+ * Spawn policy is `match/spawn.ts`, and this now goes through it rather than
+ * hard-coding `spawns[0]` — there is one answer to "where does a player start"
+ * and it is not written twice. What this does *not* do is start a round: a
+ * round seats two players and flips a coin for the ends (`spawnRound`, driven
+ * by GLAD-L4SYN9). A lone player in a session has no opponent and therefore no
+ * fairness question, so they take the low end of the drawn pair and the coin
+ * is not flipped.
  *
- * The feet go `SURFACE_CLIP_EPSILON` above the floor rather than on it. A spawn
- * point names a *floor height*, and a body resting on a floor sits an eighth of
- * a unit clear of it (`docs/physics-spec.md` §2.2); placing the feet exactly on
- * the surface would start the player one rounding error inside the world.
+ * The draw comes from the seeded PRNG, so the point is a function of the seed
+ * and both peers compute the same one. It also means `state.rng` has moved on
+ * from `seedRng(seed)` before the first tick, which is fine and is why the
+ * stream is carried in the state rather than derived from the tick number.
+ *
+ * Builds a `CollisionWorld` of its own, because a `MapSource` is all it is
+ * given. That is one world build at boot, next to the one `loadMap` already
+ * did, and nothing at all per tick.
  */
 export function createMapState(map: MapSource, seed: number): GameState {
-  const spawn = map.spawns[0]
-  if (spawn === undefined) {
+  if (map.spawns.length === 0) {
     fail(`map "${map.name}"`, 'it has no spawn points, so there is nowhere to put a player.')
   }
   const state = createGameState(seed)
-  spawnEntity(state, {
-    kind: EntityKind.Player,
-    slot: 0,
-    origin: vec3(spawn.origin[0], spawn.origin[1], spawn.origin[2] + SURFACE_CLIP_EPSILON),
-    health: 100,
-    // Rocket Arena hands you both weapons at full ammo; the launcher is the one
-    // in your hands when the round starts. Selection is GLAD-0QWRYK's.
-    weapon: Weapon.RocketLauncher,
-  })
+  const plan = buildSpawnPlan(map)
+  const [point] = selectSpawnPair(plan, state)
+  spawnPlayer(state, plan, point, DUEL_SLOTS[0])
   return state
 }

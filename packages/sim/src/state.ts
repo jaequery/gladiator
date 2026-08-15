@@ -183,7 +183,13 @@ export function findEntity(state: GameState, id: number): EntityState | null {
   return state.entities.find((entity) => entity.id === id) ?? null
 }
 
-/** The player entity for a slot, or `null` if that slot is empty or dead. */
+/**
+ * The player entity for a slot, or `null` if nothing in the world has it.
+ *
+ * A *dead* player is still that slot's entity and is still returned — which is
+ * what `match/spawn.ts` relies on to respawn the same body between rounds
+ * rather than leaving a corpse and creating a stranger.
+ */
 export function findPlayer(state: GameState, slot: number): EntityState | null {
   return (
     state.entities.find(

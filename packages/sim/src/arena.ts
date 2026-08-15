@@ -112,7 +112,10 @@ export const SKELETON_SEED = 0x6c6164
  * a unit clear of it (`docs/physics-spec.md` §2.2) — placing the feet exactly
  * on the surface would start the player one rounding error inside the world.
  * Spawn *policy* — which point, facing where, and what to do about a telefrag —
- * is GLAD-AKODBZ; this is one hard-coded point.
+ * is `match/spawn.ts`, and it needs a map to choose from. This has no map, on
+ * purpose: it is the golden replay's fixed starting position, and a replay whose
+ * first frame moved with the spawn rules would stop being a regression test for
+ * the movement.
  */
 export function createSkeletonState(): GameState {
   const state = createGameState(SKELETON_SEED)
