@@ -38,6 +38,21 @@ import { createRoom, type Room } from './room.ts'
 /** How often to ping an idle socket, to notice a peer that has gone away. */
 const HEARTBEAT_MS = 20_000
 
+/**
+ * How often a room is given a beat, in milliseconds.
+ *
+ * A `Room` holds no timer of its own (`loop.ts`), so `sweep` is where its
+ * housekeeping happens — and since GLAD-5995PA that includes minting clock-sync
+ * pings, which are due five times a second. Twenty hertz, rather than exactly
+ * the ping interval, so a beat that arrives a millisecond late does not push the
+ * next ping a whole interval out and leave the cadence alternating.
+ *
+ * Beating a room and *ticking* it are different things, and this is only the
+ * first: the 125 Hz scheduler that advances a room's world is GLAD-FHKBN8, and
+ * it replaces this loop rather than joining it.
+ */
+const ROOM_BEAT_MS = 50
+
 export type GladiatorServer = {
   readonly http: Server
   readonly wss: WebSocketServer
@@ -166,13 +181,17 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
     room.join(wsTransport(socket))
   })
 
-  // The one timer. `Room` never holds one — see `loop.ts` — so the beat is
+  // The timers. `Room` never holds one — see `loop.ts` — so both beats are
   // handed to it, and the same room runs in a browser tab with no timer at all.
+  //
+  // Two of them, because they answer different questions at very different
+  // rates. This one asks "is this socket still there", which is a question
+  // about the pipe and costs a WebSocket ping to ask.
   const heartbeat = startHostLoop({
     scheduler,
     clock,
     intervalMs: HEARTBEAT_MS,
-    beat: (nowMs) => {
+    beat: () => {
       for (const [socket, connection] of connections) {
         if (!connection.alive) {
           socket.terminate()
@@ -180,8 +199,25 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
           continue
         }
         connection.alive = false
-        connection.room.sweep(nowMs)
         socket.ping()
+      }
+    },
+  })
+
+  // And this one is the room's own housekeeping: peers that have gone quiet,
+  // and the clock-sync pings, which are due five times a second. A room is
+  // swept at most once per beat however many peers it is holding — `sweep` is
+  // idempotent, but doing it twice would mint two pings for one interval.
+  const rooms = startHostLoop({
+    scheduler,
+    clock,
+    intervalMs: ROOM_BEAT_MS,
+    beat: (nowMs) => {
+      const swept = new Set<Room>()
+      for (const connection of connections.values()) {
+        if (swept.has(connection.room)) continue
+        swept.add(connection.room)
+        connection.room.sweep(nowMs)
       }
     },
   })
@@ -203,6 +239,7 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
         close: () =>
           new Promise<void>((done) => {
             heartbeat.stop()
+            rooms.stop()
             jitter.stop()
             // 1001 "going away" is what a browser is told when a server is
             // shutting down cleanly, and it is what lets a client tell a deploy

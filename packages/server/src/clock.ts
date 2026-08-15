@@ -28,8 +28,10 @@ export type Clock = {
    * Milliseconds, monotonic, with an arbitrary origin.
    *
    * Only ever compared against another reading from the *same* clock. It is not
-   * a wall-clock date and must never be sent to a peer as one — agreeing on
-   * time between two machines is clock sync, and that is GLAD-5995PA.
+   * a wall-clock date and must never be sent to a peer as one. Agreeing on time
+   * between two machines is clock sync, and the only reading of this clock that
+   * ever leaves the process is a *difference* between two of them: the round
+   * trip `clockSync.ts` measures from a ping it minted itself.
    */
   nowMs(): number
 }

@@ -35,17 +35,29 @@
  * two paths would agree only by luck.
  *
  * The tick scheduler that will eventually drive a room at a steady 125 Hz is
- * GLAD-FHKBN8, and the input-buffer policy in front of it is GLAD-5995PA. Both
- * hang off this shape rather than replacing it.
+ * GLAD-FHKBN8, and the input-buffer policy in front of it is `inputQueue.ts`.
+ * Both hang off this shape rather than replacing it.
+ *
+ * ## It does hold a stopwatch, and it is the only one
+ *
+ * The one wall-clock measurement a room makes about a peer is the round trip,
+ * and it makes it itself: `clockSync.ts` mints a ping, the peer echoes the id
+ * back, and the subtraction happens here against this room's clock. That
+ * direction is not a style choice — lag compensation rewinds by this number
+ * (GLAD-5QGO11), so a client that reported it could ask to be rewound further.
+ * A pong is therefore taken off the wire in `receive` and never reaches
+ * `session.ts`, which deliberately has no clock to measure with.
  *
  * ## One peer, for now
  *
  * {@link RoomOptions.capacity} defaults to one, and a second peer is refused
  * rather than quietly given a slot. With one peer, "a batch advances the world
  * by its own commands" is unambiguous; with two it is not — whose command does
- * a shared tick carry when only one of them has sent anything? — and answering
- * that question *is* GLAD-5995PA. A room that silently seated two players and
- * guessed would be a room that desyncs under load and looks fine in a test.
+ * a shared tick carry when only one of them has sent anything? The answer is
+ * `inputQueue.ts`: one queue per peer, one command drained from each per tick,
+ * and a documented fallback for the one that has sent nothing. Seating the
+ * second player is GLAD-FHKBN8, which is the ticket that owns the scheduler
+ * doing the draining.
  */
 import {
   CloseReason,
@@ -53,8 +65,11 @@ import {
   NO_SLOT,
   SKELETON_SEED,
   TransportState,
+  UNKNOWN_RTT,
   createMapState,
   hashState,
+  parseClientMessage,
+  type ClientMessage,
   type GameState,
   type LoadedMap,
   type ServerMessage,
@@ -64,11 +79,13 @@ import {
 } from '@gladiator/sim'
 
 import type { Clock } from './clock.ts'
+import { createClockSync, type ServerClockSync } from './clockSync.ts'
 import {
   CLOSE_BAD_FRAME,
   CLOSE_ROOM_FULL,
-  applyFrame,
+  applyMessage,
   createSession,
+  rejectBadFrame,
   type ServerIdentity,
   type SessionSim,
   type SessionState,
@@ -109,6 +126,15 @@ export type RoomPeer = {
   readonly session: SessionState
   /** The last time anything was heard from it, on the room's clock. */
   readonly lastHeardMs: number
+  /**
+   * The round trip to this peer in whole milliseconds, or `-1` before one has
+   * been measured.
+   *
+   * Measured here, from a ping this room minted, against this room's clock —
+   * never a number the client sent. `clockSync.ts` has the argument for why
+   * that direction is not negotiable.
+   */
+  readonly rttMs: number
   readonly open: boolean
   close(code?: number, reason?: string): void
 }
@@ -140,7 +166,17 @@ export type Room = {
    * dropping the connection with no explanation.
    */
   join(transport: Transport): RoomPeer
-  /** Wall-clock housekeeping. Never advances the simulation. */
+  /**
+   * Wall-clock housekeeping: peers that have gone quiet, and the clock-sync
+   * pings. Never advances the simulation.
+   *
+   * `nowMs` **must** be a reading of the same {@link RoomOptions.clock} the room
+   * was given. It is compared against readings this room took itself — when a
+   * peer was last heard from, and when a ping went out — and a second clock's
+   * origin would make an idle timeout arbitrary and a round trip meaningless.
+   * The beat that supplies it is `loop.ts` on Fly and the animation frame in a
+   * tab.
+   */
   sweep(nowMs: number): void
   hash(): number
   snapshot(): RoomSnapshot
@@ -151,6 +187,8 @@ type PeerRecord = {
   readonly id: string
   readonly slot: number
   readonly transport: Transport
+  /** Per peer, because a round trip is a property of one link, not of a room. */
+  readonly clockSync: ServerClockSync
   session: SessionState
   lastHeardMs: number
   open: boolean
@@ -201,6 +239,9 @@ export function createRoom(options: RoomOptions): Room {
     get lastHeardMs() {
       return record.lastHeardMs
     },
+    get rttMs() {
+      return record.clockSync.rttMs
+    },
     get open() {
       return record.open
     },
@@ -220,7 +261,12 @@ export function createRoom(options: RoomOptions): Room {
   }
 
   const receive = (record: PeerRecord, message: TransportMessage): void => {
-    record.lastHeardMs = clock.nowMs()
+    // Read once, and used for both the idle sweep and the round trip. Two
+    // readings of a clock inside one delivery is two opinions about when the
+    // frame arrived, and the second of them would be the one the RTT is
+    // measured against.
+    const nowMs = clock.nowMs()
+    record.lastHeardMs = nowMs
 
     if (typeof message !== 'string') {
       // The protocol is JSON text. A binary frame is either a client speaking
@@ -231,7 +277,19 @@ export function createRoom(options: RoomOptions): Room {
       return
     }
 
-    const step = applyFrame(record.session, message, identity)
+    // Parsed here rather than inside `applyFrame`, because a pong has to be
+    // stopped at this layer: timing a round trip needs the clock, and the
+    // session state machine deliberately has none.
+    const parsed: ClientMessage | null = parseClientMessage(message)
+    if (parsed !== null && parsed.t === 'pong') {
+      record.clockSync.pong(parsed.id, nowMs)
+      return
+    }
+
+    const step =
+      parsed === null
+        ? rejectBadFrame(record.session)
+        : applyMessage(record.session, parsed, identity)
     record.session = step.session
     for (const reply of step.replies) send(record, reply)
     if (step.close !== undefined) record.transport.close(step.close.code, step.close.reason)
@@ -272,6 +330,7 @@ export function createRoom(options: RoomOptions): Room {
           slot: NO_SLOT,
           session: createSession(peerId, sim, NO_SLOT),
           lastHeardMs: clock.nowMs(),
+          rttMs: UNKNOWN_RTT,
           open: false,
           close: (code = CloseReason.Normal, reason = '') => transport.close(code, reason),
         }
@@ -281,6 +340,7 @@ export function createRoom(options: RoomOptions): Room {
         id: peerId,
         slot,
         transport,
+        clockSync: createClockSync(),
         session: createSession(peerId, sim, slot),
         lastHeardMs: clock.nowMs(),
         open: true,
@@ -310,10 +370,27 @@ export function createRoom(options: RoomOptions): Room {
           forget(record)
           continue
         }
-        if (nowMs - record.lastHeardMs < idleTimeoutMs) continue
-        log(`room ${id}: ${record.id} went quiet for ${idleTimeoutMs} ms`)
-        record.transport.close(CloseReason.Abnormal, 'idle')
-        forget(record)
+        if (nowMs - record.lastHeardMs >= idleTimeoutMs) {
+          log(`room ${id}: ${record.id} went quiet for ${idleTimeoutMs} ms`)
+          record.transport.close(CloseReason.Abnormal, 'idle')
+          forget(record)
+          continue
+        }
+
+        // Clock sync rides on the housekeeping beat rather than a timer of its
+        // own, for the same reason the room has no timer at all: a beat is
+        // something the host is given (`loop.ts`), so a test drives a
+        // conversation of hundreds of pings in the microseconds it takes to run
+        // them. A peer that has not greeted us is not pinged — it may be a
+        // client one deploy behind that is about to be told so.
+        if (!record.session.greeted || record.session.rejected) continue
+        if (!record.clockSync.due(nowMs)) continue
+        // Nothing is buffered yet: today a command batch advances the world by
+        // its own commands the moment it lands, so the depth of the jitter
+        // buffer in front of that is zero by construction. The scheduler that
+        // drains `inputQueue.ts` at a steady 125 Hz, and makes this number the
+        // real one, is GLAD-FHKBN8.
+        send(record, record.clockSync.ping(nowMs, state.tick, 0))
       }
     },
 

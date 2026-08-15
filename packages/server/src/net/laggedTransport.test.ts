@@ -9,6 +9,7 @@
  * one.
  */
 import {
+  PROTOCOL_VERSION,
   SKELETON_SEED,
   TransportState,
   type ServerMessage,
@@ -222,7 +223,14 @@ async function runMatrix(profile: LagProfile, ticks: number): Promise<MatrixRun>
 
   const stream = recordStream(ticks)
   let nowMs = 0
-  link.send(JSON.stringify({ t: 'hello', protocol: 3, build: 'matrix', mapHash: SERVER_MAP_HASH }))
+  link.send(
+    JSON.stringify({
+      t: 'hello',
+      protocol: PROTOCOL_VERSION,
+      build: 'matrix',
+      mapHash: SERVER_MAP_HASH,
+    }),
+  )
   for (const batch of stream.batches) {
     link.send(batchFrame(batch))
     // Wall-clock advances by exactly the simulated time in the batch, so a

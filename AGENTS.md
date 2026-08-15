@@ -517,7 +517,8 @@ batch was worth, the two would agree only by luck.
 It is also why a test can run a whole match in the microseconds it takes rather
 than the minute a timer would charge. The tick scheduler that will drive rooms
 at a steady 125 Hz is GLAD-FHKBN8; the input-buffer policy in front of it is
-GLAD-5995PA. Both hang off this shape rather than replacing it.
+**The input buffer policy** below. Both hang off this shape rather than
+replacing it.
 
 ### Nothing but bytes crosses the loopback
 
@@ -559,6 +560,131 @@ interface, `websocketTransport.ts` is the browser adapter, and
 `listenServer.ts` is a `Room` in this tab behind a loopback pair. `?local=1`
 boots one. There is no offline branch in the frame loop, because there is
 nothing for one to be a branch *of*.
+
+### Clock sync, and who holds the stopwatch
+
+`packages/server/src/clockSync.ts`, `packages/client/src/net/clockSync.ts`, and
+the two frames they speak in `sim/src/protocol.ts`. GLAD-5995PA.
+
+Everything in this design is a shared tick number. The client simulates *ahead*
+of the server so its commands land just before the server needs them, and the
+server rewinds by the same measure to decide whether a railgun shot connected.
+Both numbers are useless if the two ends disagree about what tick it is, and
+nothing about a browser tab's `performance.now()` says anything about a Fly
+machine's.
+
+Three things are load-bearing, and the first is a security property rather than
+an engineering one:
+
+**The server pings and the client echoes.** Whoever sends the ping holds the
+stopwatch, and the stopwatch has to be the server's — round-trip time decides
+how far lag compensation rewinds the world (GLAD-5QGO11), so a client that could
+report its own RTT could report a bigger one and be handed extra rewind: it
+would shoot at where you *were* and win duels it did not win. `ClientPong`
+therefore carries **nothing but the id**, and there is deliberately no timestamp
+field in it for anyone to helpfully add later. The residual cheat — answering
+late — inflates your own RTT, lengthens your own lead and buffers more of your
+own input before it executes, so it defends itself.
+
+**One filter is a minimum and the other is a maximum, for the same reason.**
+Jitter is one-sided: a packet can be delayed and cannot be hurried. So every RTT
+sample is the truth plus something non-negative and the server takes the
+**minimum** over a sliding window; every offset sample is the truth *minus*
+something non-negative, and the client takes the **maximum**. An average is
+dragged around by exactly the outliers worth ignoring. The client's estimate
+then **floors** rather than rounds, because a tick counter is a step function of
+wall-clock and rounding would sit half a tick ahead of the truth half the time —
+free lead nobody measured.
+
+**A correction is slewed, not jumped.** When the estimate moves, the client's
+tick counter is wrong by some ticks. Jumping it means simulating several ticks in
+one frame, and the camera is written from simulation state every frame, so that
+jump is a jump the player *sees*. `slewMs` instead hands the frame accumulator a
+few extra or fewer milliseconds, bounded to an eighth of the frame: the world
+runs 12.5% fast for about 190 ms and closes a three-tick error, which is a rate
+change rather than a discontinuity. Past `SNAP_TICKS` — 240 ms, which means a
+backgrounded tab or a reconnect rather than drift — it snaps and admits the
+lurch, because slewing that would be two seconds of a visibly fast world.
+
+The client's lead is **feed-forward**: half the measured trip plus the jitter
+buffer's target depth, and nothing else. It deliberately does *not* also steer on
+the buffer depth the server reports, because the server already corrects depth
+(below) and two controllers closing one loop with a round trip of dead time
+between them is how you get an oscillation the player can feel.
+
+### The input buffer policy
+
+`packages/server/src/inputQueue.ts`. GLAD-5995PA. This is the single largest
+determinant of how the game feels under a real network, so all of it is a
+decision with a reason rather than an implementation accident. The executable
+copy is that file's header; this is the short version, and the two must not
+drift apart.
+
+One queue per peer, drained **one command per server tick**. It holds
+`JITTER_BUFFER_TICKS` (two) commands on purpose, so the next tick has something
+to execute when the packet carrying it is 16 ms late. Deeper is not better:
+every buffered command is latency the player paid for and cannot get back.
+
+**The tick label admits a command; it does not schedule it.** The head of the
+queue executes next, whatever it is labelled. Executing command T at server tick
+T exactly would mean stalling whenever it was late — and a stall on one peer's
+socket is a hitch in the *other* peer's game, which is the one failure this
+policy will not accept.
+
+| Arrives | Policy | Because |
+| ------- | ------ | ------- |
+| **duplicate** (tick already buffered) | dropped | the transport promises exactly-once; a second copy is a free tick of movement |
+| **out of order** (below one buffered, not yet executed) | **kept**, inserted in tick order | it is still intent for a moment that has not happened |
+| **late** (at or below the last executed) | dropped | applying it means rewinding the world for *input*; the world is only ever rewound for *hits* |
+| **missing** | the fallback below | never a stall |
+
+**The missing-command fallback is: repeat the last command with the trigger
+cleared, for at most `MAX_REPEAT_TICKS` (62 ticks, ~0.5 s), then a command that
+holds the angles and the weapon and zeroes everything else.** The three
+candidates and what each costs:
+
+- *Stall the tick* — refused outright, per above.
+- *Insert an empty command* — zeroes `forwardMove` and `sideMove`, which are
+  exactly the two numbers air control reads. A player mid strafe-jump drops out
+  of the hop. One lost packet and the movement the whole game is built around
+  visibly breaks.
+- *Repeat the last command* — the player keeps holding what they were holding.
+  Angles are absolute in a `UserCmd`, so a repeat holds the aim still rather than
+  continuing to turn; only the movement axes and the buttons carry over, which is
+  precisely the intent that was continuous.
+
+Two clauses in that sentence are the whole decision. **The trigger is cleared**
+because firing is an *edge* and movement is a *state*: repeating "still holding
+forward" reproduces an intent the player still has, while repeating "still
+holding fire" invents rockets they never asked for — and both weapons are fully
+automatic, so it would keep inventing one every refire interval. Jump is left
+alone, because `PM_CheckJump` latches on a held button and a repeat can only
+preserve the state the player was in. **The repeat is bounded** because
+repeat-last otherwise means a disconnected player keeps running; at half a second
+the body comes to rest, so the connection lifecycle (GLAD-DVDV6P) inherits a body
+that has stopped. That is this ticket's half of the disconnect policy — *when* a
+silent peer is declared gone is that ticket's half, and 500 ms is deliberately
+far shorter than any timeout it could reasonably pick, so the two cannot
+disagree.
+
+**Drift is corrected by consuming two commands in a tick, never by applying
+two.** A client whose clock runs fast delivers more than one command per tick and
+the buffer grows. When it is deeper than the target after a take, the take
+consumes two and applies one, **merged**: the newer command's angles and axes,
+with the buttons of both OR'd together. Applying both would advance that player
+through two ticks of movement in one tick of the world, which is the speedhack.
+Merging rather than discarding keeps a jump or a shot in the dropped command,
+at worst 8 ms early.
+
+**The rate limit is the actual anti-speedhack**, and it is in the only unit that
+matters: commands per **wall-clock second**, on the server's clock, `TICK_RATE`
+of them with a 32-command burst for a batch that arrived in a clump. Bounding the
+buffer caps how far *ahead* a client can get; it does not by itself cap how much
+of the world's time it can consume, because the drift correction would happily
+keep consuming two per tick. A client sending 500 Hz of input has three of every
+four commands refused at the door and moves at exactly the speed everyone else
+does — `inputQueue.test.ts` measures that in units travelled, against a third
+world simulated with no policy at all so the assertion has something to bite on.
 
 ---
 

@@ -11,6 +11,7 @@ import {
   PROTOCOL_VERSION,
   SKELETON_SEED,
   TransportState,
+  UNKNOWN_RTT,
   createMapState,
   hashState,
   parseServerMessage,
@@ -229,6 +230,104 @@ describe('sweep', () => {
     for (let beat = 0; beat < 100; beat += 1) room.sweep(clock.advance(8))
     expect(room.tick).toBe(0)
     expect(room.hash()).toBe(before)
+  })
+})
+
+describe('clock sync over a room', () => {
+  /** Beat the room for `ms` of wall-clock, answering every ping it sends. */
+  async function converse(
+    clock: ReturnType<typeof manualClock>,
+    room: Room,
+    pair: LoopbackPair,
+    heard: ServerMessage[],
+    ms: number,
+    lagMs = 0,
+  ): Promise<void> {
+    for (let beat = 0; beat * 8 < ms; beat += 1) {
+      const nowMs = clock.advance(8)
+      room.sweep(nowMs)
+      await settleLoopback(pair)
+      for (const frame of heard) {
+        if (frame.t !== 'ping') continue
+        // The pong goes out `lagMs` later on the room's own clock, which is the
+        // whole of what the room is measuring.
+        clock.set(nowMs + lagMs)
+        pair.client.send(JSON.stringify({ t: 'pong', id: frame.id }))
+        await settleLoopback(pair)
+        clock.set(nowMs)
+      }
+      heard.length = 0
+    }
+  }
+
+  it('pings a seated peer and measures the trip on its own clock', async () => {
+    const clock = manualClock()
+    const { pair, room, heard } = hosted({ clock })
+    const peer = room.join(pair.server)
+    pair.client.send(helloFrame())
+    await settleLoopback(pair)
+    heard.length = 0
+
+    expect(peer.rttMs).toBe(UNKNOWN_RTT)
+    await converse(clock, room, pair, heard, 1_000, 37)
+    expect(peer.rttMs).toBe(37)
+  })
+
+  it('does not ping a peer that has not said hello', async () => {
+    // It may be a client one deploy behind, on its way to being told so.
+    const clock = manualClock()
+    const { pair, room, heard } = hosted({ clock })
+    room.join(pair.server)
+
+    for (let beat = 0; beat < 200; beat += 1) {
+      room.sweep(clock.advance(8))
+      await settleLoopback(pair)
+    }
+    expect(heard.filter((frame) => frame.t === 'ping')).toHaveLength(0)
+  })
+
+  it('takes a pong off the wire without touching the world', async () => {
+    // A pong is not a command. It reaches the peer's stopwatch and nothing
+    // else — no tick, no hash, no reply.
+    const clock = manualClock()
+    const { pair, room, heard } = hosted({ clock })
+    room.join(pair.server)
+    pair.client.send(helloFrame())
+    await settleLoopback(pair)
+
+    room.sweep(clock.advance(8))
+    await settleLoopback(pair)
+    const ping = heard.find((frame) => frame.t === 'ping')
+    expect(ping?.t).toBe('ping')
+    heard.length = 0
+
+    const before = room.hash()
+    pair.client.send(JSON.stringify({ t: 'pong', id: ping?.t === 'ping' ? ping.id : 0 }))
+    await settleLoopback(pair)
+
+    expect(heard).toEqual([])
+    expect(room.tick).toBe(0)
+    expect(room.hash()).toBe(before)
+    expect(room.peers[0]?.open).toBe(true)
+  })
+
+  it('keeps a peer that answers ids it was never sent, and measures nothing from them', async () => {
+    // Closing the socket over it is GLAD-V7M6PQ's call to make. What this
+    // ticket owes is that the lie buys nothing: no sample, no round trip, no
+    // extra rewind out of lag compensation.
+    const clock = manualClock()
+    const { pair, room } = hosted({ clock })
+    const peer = room.join(pair.server)
+    pair.client.send(helloFrame())
+    await settleLoopback(pair)
+
+    for (let id = 0; id < 50; id += 1) {
+      pair.client.send(JSON.stringify({ t: 'pong', id }))
+    }
+    await settleLoopback(pair)
+
+    expect(peer.rttMs).toBe(UNKNOWN_RTT)
+    expect(peer.open).toBe(true)
   })
 })
 

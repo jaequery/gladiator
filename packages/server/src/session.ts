@@ -22,9 +22,12 @@
  * what `net/parity.test.ts` asserts, and it is the property the whole
  * listen-server pattern rests on.
  *
- * The buffering policy that will eventually sit in front of this — how far
- * ahead a peer may run, what a tick does when its buffer is empty — is
- * GLAD-5995PA, and the tick scheduler that will call it is GLAD-FHKBN8.
+ * The buffering policy that sits in front of this — how far ahead a peer may
+ * run, what a tick does when its buffer is empty, how many commands a second a
+ * peer may have executed — is `inputQueue.ts`, and the tick scheduler that will
+ * drain it at a steady 125 Hz is GLAD-FHKBN8. Until that scheduler exists the
+ * rule above is still the one in force: a batch advances the world by its own
+ * commands, the moment it lands.
  */
 import {
   PROTOCOL_VERSION,
@@ -201,6 +204,14 @@ export function applyMessage(
     }
   }
 
+  // A pong is not this layer's business. Timing a round trip needs a clock, and
+  // the clock belongs to the room (`clock.ts`), so `room.ts` takes pongs off
+  // the wire before they reach here and hands them to that peer's
+  // `clockSync.ts`. One arriving anyway — a caller driving `applyFrame`
+  // directly — is dropped rather than treated as an error: it costs a
+  // measurement, not a session.
+  if (message.t === 'pong') return { session, replies: [] }
+
   // A batch that does not start where we left off means frames were lost or
   // reordered. Counted rather than corrected: reconciliation is GLAD-6RT64L,
   // and quietly renumbering here would hide exactly the desync this ticket
@@ -228,6 +239,22 @@ export function applyMessage(
   }
 }
 
+/**
+ * The step for a frame that could not be parsed.
+ *
+ * Exported because `room.ts` parses frames itself — it has to, to take pongs
+ * off the wire before they reach a layer with no clock — and two spellings of
+ * "we could not read that" is two things a test can pin and one of them being
+ * wrong.
+ */
+export function rejectBadFrame(session: SessionState): SessionStep {
+  return {
+    session,
+    replies: [{ t: 'fault', code: 'bad-frame', detail: 'could not parse that frame' }],
+    close: { code: CLOSE_BAD_FRAME, reason: 'bad frame' },
+  }
+}
+
 /** Apply one raw frame from the wire. */
 export function applyFrame(
   session: SessionState,
@@ -235,12 +262,6 @@ export function applyFrame(
   identity: ServerIdentity,
 ): SessionStep {
   const message: ClientMessage | null = parseClientMessage(raw)
-  if (message === null) {
-    return {
-      session,
-      replies: [{ t: 'fault', code: 'bad-frame', detail: 'could not parse that frame' }],
-      close: { code: CLOSE_BAD_FRAME, reason: 'bad frame' },
-    }
-  }
+  if (message === null) return rejectBadFrame(session)
   return applyMessage(session, message, identity)
 }
