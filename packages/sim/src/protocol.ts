@@ -49,8 +49,16 @@ import { sanitizeUserCmd, type UserCmd } from './usercmd.ts'
  * and be answered with a hash, and it is now admitted to a jitter buffer that a
  * fixed-rate scheduler drains. A version-5 client would wait forever for a
  * reply to a batch, which is the confusion this number exists to prevent.
+ *
+ * Version 7 adds {@link ServerDrain} (GLAD-G41FQ9): the frame a host sends on
+ * its way out of a deploy, carrying the room code, when to come back, and the
+ * signed ticket that lets the next machine rebuild the match at the score it
+ * was on. A version-6 client cannot parse it, so a deploy looks to it exactly
+ * as it did before this ticket — a 1001 and a dead socket, with the match gone
+ * — which is survivable and is precisely the experience being replaced. Being
+ * told to reload is better than silently getting the old one.
  */
-export const PROTOCOL_VERSION = 6
+export const PROTOCOL_VERSION = 7
 
 /**
  * The most commands one frame may carry. The client's accumulator clamps a
@@ -63,6 +71,18 @@ export const PROTOCOL_VERSION = 6
  * — message sizes, connection-level limits, malformed frames — is GLAD-V7M6PQ.
  */
 export const MAX_CMDS_PER_BATCH = 256
+
+/**
+ * The longest resume ticket this protocol will carry, in characters.
+ *
+ * A ticket is a payload and a signature, both base64url (`server/resume.ts`),
+ * and the one this deploy mints is a little over 200 characters. The cap is a
+ * bound on what a *client* can hand back on a reconnect — it arrives in a query
+ * string, so somewhere it is a URL, and a URL nobody bounded is a place to put
+ * a megabyte. Generous enough that the payload can grow a field, small enough
+ * that it is never the reason a request is large.
+ */
+export const MAX_RESUME_TICKET_CHARS = 512
 
 /**
  * A `UserCmd` on the wire: `[forwardMove, sideMove, yaw, pitch, buttons,
@@ -165,6 +185,46 @@ export type ServerFault = {
 }
 
 /**
+ * "This host is going away in a moment; here is how to come back."
+ *
+ * What a deploy looks like from inside a live match. The close that follows is
+ * a {@link CloseReason.GoingAway}, which already says *that* the host is
+ * leaving — this frame is what says **where the match went**, and it is a frame
+ * rather than a close reason because a close carries 123 bytes of free text and
+ * nothing a client should parse.
+ *
+ * A room is a live `GameState` in one process's memory (`server/rooms.ts`), so
+ * a machine swap destroys it: there is nothing to reconnect *to*. The
+ * {@link ServerDrain.resume} ticket is the match's score and this peer's seat,
+ * signed by the deploy, so the next machine can rebuild the room at the score
+ * it was on without taking a client's word for who was winning.
+ *
+ * `server/shutdown.ts` sends it; `server/resume.ts` mints and checks the
+ * ticket. The reconnect policy that acts on it — the backoff, the grace window,
+ * what the player is shown while it happens — is GLAD-DVDV6P's.
+ */
+export type ServerDrain = {
+  readonly t: 'drain'
+  /** The room code to rejoin, canonical. Same string as `ServerWelcome.room`. */
+  readonly room: string
+  /**
+   * How long to wait before the first reconnect attempt, in milliseconds.
+   *
+   * The server's estimate of how long the swap takes, not a rule: a client that
+   * dials sooner finds nothing listening, and one that waits far longer has a
+   * ticket that has expired. Backoff on top of it is the client's business.
+   */
+  readonly retryAfterMs: number
+  /**
+   * The opaque, signed resume ticket. Sent back as `?resume=` on the next
+   * connection. Empty when this deploy has no {@link ServerDrain.resume} secret
+   * configured, which is a deploy that cannot resume rather than a match that
+   * cannot be rejoined — see `server/resume.ts`.
+   */
+  readonly resume: string
+}
+
+/**
  * The server's half of clock sync: "it is tick `tick` here, the last round trip
  * took `rttMs`, and I am holding `queued` of your commands".
  *
@@ -254,6 +314,7 @@ export type ServerMessage =
   | ServerVersionMismatch
   | ServerMapMismatch
   | ServerFault
+  | ServerDrain
 
 /** No round trip has completed yet, so there is nothing to report. */
 export const UNKNOWN_RTT = -1
@@ -427,6 +488,18 @@ export function parseServerMessage(raw: string): ServerMessage | null {
     const detail = asString(record['detail'], 256)
     if (code === null || detail === null) return null
     return { t: 'fault', code, detail }
+  }
+
+  if (record['t'] === 'drain') {
+    const room = asString(record['room'], 32)
+    const retryAfterMs = asFiniteInteger(record['retryAfterMs'])
+    // Bounded rather than parsed: the ticket's shape is `server/resume.ts`'s
+    // business and a second opinion about it here would be a second copy to
+    // keep in step. Empty is legal and means "this deploy cannot resume".
+    const resume = asString(record['resume'], MAX_RESUME_TICKET_CHARS)
+    if (room === null || retryAfterMs === null || resume === null) return null
+    if (retryAfterMs < 0) return null
+    return { t: 'drain', room, retryAfterMs, resume }
   }
 
   return null

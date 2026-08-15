@@ -90,5 +90,8 @@ USER node
 EXPOSE 8080
 
 # node is PID 1 and installs its own SIGTERM handler in `index.ts`, which is
-# what `kill_timeout` in fly.toml gives time to run.
+# what `kill_timeout` in fly.toml gives time to run: the drain in `shutdown.ts`
+# hands every player a resume ticket and closes their sockets with a 1001 before
+# the process exits. Exec form, and no shell wrapper — a shell as PID 1 would
+# swallow the signal and every deploy would be a SIGKILL.
 CMD ["node", "index.js"]

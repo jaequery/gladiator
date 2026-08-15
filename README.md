@@ -106,6 +106,7 @@ scripts/          guardrails.mjs        — proves the boundaries reject violati
                   raw-input.mjs         — measures raw mouse input, per browser
 docs/             physics-spec.md, renderer.md, audio.md, deploy.md,
                   browser-support.md
+NOTES.md          the operational decisions: region, origin policy, machine, drain
 CREDITS.md        every shipped asset, its source and its licence
 Dockerfile        the Fly.io image for packages/server
 fly.toml          the Fly.io app
@@ -135,5 +136,9 @@ their licence is ours to give. Reasoning and the measurements:
 ## Deploying
 
 The client is a static bundle on Vercel; the server is a long-lived process on
-Fly.io, and they talk over `wss://`. The runbook, the origin-allowlist decision
-and the recorded server timer jitter are in [`docs/deploy.md`](./docs/deploy.md).
+Fly.io, and they talk over `wss://`. The runbook — what to run, the secrets it
+needs, and the recorded server timer jitter — is
+[`docs/deploy.md`](./docs/deploy.md). The decisions it rests on are
+[`NOTES.md`](./NOTES.md): the region and the latency budget by geography, the
+origin allowlist, the machine class and what it costs, and the drain that means
+a deploy interrupts a duel rather than ending it.

@@ -1,16 +1,23 @@
 app = "gladiator"
 
-# The owner's nearest region, for now. A room-code game means the other player
-# may be on another continent, and whichever of the two is further eats the
-# whole round-trip. Picking properly needs a latency budget by geography, which
-# is GLAD-G41FQ9 — this is deliberately a placeholder, not a decision.
+# US East, and this is a decision rather than the owner's postcode.
+#
+# One machine holds every room (`packages/server/src/rooms.ts`), so both players
+# in a duel connect to the *same* region and the pair's experience is the worse
+# of their two round trips. `iad` is the single region that keeps a North
+# American and a European player inside — or within sight of — the 80 ms the
+# netcode was measured against; the table by geography, the budget it comes
+# from, and what would change the answer are in `NOTES.md`.
 primary_region = "iad"
 
 kill_signal = "SIGTERM"
 
-# Fly sends SIGTERM, waits this long, then SIGKILLs. The server closes its
-# sockets with 1001 "going away" on SIGTERM so a client can tell a deploy apart
-# from a crash; 30s is room for that plus a round in flight.
+# Fly sends SIGTERM, waits this long, then SIGKILLs. The drain
+# (`packages/server/src/shutdown.ts`) gives itself 20s — `DRAIN_DEADLINE_MS` —
+# to hand every player a resume ticket, close their sockets with a 1001 and let
+# the handshakes finish. The ten seconds of margin is not padding: being
+# SIGKILLed mid-drain is indistinguishable from the crash the drain exists to
+# avoid, so the process must always be the one that decides to go.
 kill_timeout = "30s"
 
 [build]
@@ -19,6 +26,29 @@ kill_timeout = "30s"
 [env]
   PORT = "8080"
   NODE_ENV = "production"
+  # VERCEL_SCOPE is the Vercel team slug preview hostnames end with, and it is
+  # what makes the preview origin pattern a control rather than a wildcard
+  # (`packages/server/src/origin.ts`). Deliberately not committed with a guessed
+  # value: with it unset the server admits no previews at all and says so at
+  # boot, which is a visible failure. Set it with the real slug:
+  #   flyctl secrets set VERCEL_SCOPE=<team-slug>
+  #
+  # RESUME_SECRET is the other one, and matches survive a deploy only if it is
+  # set and identical on every machine:
+  #   flyctl secrets set RESUME_SECRET="$(openssl rand -hex 32)"
+
+# Blue/green, because the old machine's players have somewhere to go.
+#
+# The default rolling strategy on a single machine stops the old one and starts
+# the new one, so for a few seconds there is nothing listening — and every
+# client handed a resume ticket dials into a closed port and spends its backoff
+# on it. Blue/green brings the replacement up, waits for it to pass the health
+# check below, moves the proxy, and only then SIGTERMs the old machine: by the
+# time the drain frames go out, the machine that will rebuild those rooms is
+# already answering. It costs one extra machine for the length of a deploy.
+[deploy]
+  strategy = "bluegreen"
+  wait_timeout = "5m"
 
 [http_service]
   internal_port = 8080
@@ -43,6 +73,15 @@ kill_timeout = "30s"
     soft_limit = 150
     hard_limit = 200
 
+  # Readiness, not liveness. `/healthz` answers 503 while the machine is
+  # draining, full, or not ticking — three states in which it is running
+  # perfectly and should be sent no new players (`packages/server/src/health.ts`).
+  # Failing it takes the machine out of rotation for *new* connections and
+  # leaves the WebSockets already open alone, which is exactly what a drain
+  # needs. `/livez` is the other question and never fails on purpose.
+  #
+  # This is also the check blue/green waits on above, so a machine that cannot
+  # tick is a deploy that does not complete rather than one that succeeds.
   [[http_service.checks]]
     grace_period = "10s"
     interval = "15s"
@@ -51,6 +90,15 @@ kill_timeout = "30s"
     protocol = "http"
     timeout = "2s"
 
+# `shared-cpu-1x`, from measurement rather than from thrift.
+#
+# The budget is a p99 wakeup lateness of one tick, 8 ms (`scheduler.ts`), and a
+# contended shared box holds 3.8 ms at eight rooms with no resyncs and exactly
+# 125.0 Hz — `pnpm --filter @gladiator/server run jitter`, recorded in
+# `NOTES.md` with the escalation rule. If `/healthz`'s `scheduler.withinBudget`
+# goes false on the real machine with resyncs or dropped time beside it, the
+# answer is `performance-1x` (a dedicated core, ten times the price), not a
+# slower host frame.
 [[vm]]
   size = "shared-cpu-1x"
   memory = "512mb"
