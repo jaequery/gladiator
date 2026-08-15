@@ -11,7 +11,7 @@
  */
 import { formatHash } from '@gladiator/sim'
 
-import type { NetSnapshot } from './net.ts'
+import { isFatal, type NetSnapshot } from './net.ts'
 
 export type HudModel = {
   readonly build: string
@@ -71,6 +71,10 @@ export function createHud(root: HTMLElement): Hud {
 
   const panel = document.createElement('section')
   panel.className = 'hud-panel'
+  // Part of the no-overlap set the aspect-ratio check in `scripts/e2e.mjs`
+  // measures: the in-match HUD (GLAD-BHNPOE) shares the overlay with this
+  // panel, and "nothing overlaps" has to mean nothing.
+  panel.dataset['hudBox'] = ''
 
   const title = document.createElement('h1')
   title.className = 'hud-title'
@@ -97,6 +101,7 @@ export function createHud(root: HTMLElement): Hud {
   const prompt = document.createElement('div')
   prompt.className = 'hud-prompt'
   prompt.dataset['hud'] = 'prompt'
+  prompt.dataset['hudBox'] = ''
   prompt.textContent = 'click to play — WASD to run, space to jump, esc to release the mouse'
 
   root.append(panel, banner, prompt)
@@ -150,13 +155,9 @@ export function createHud(root: HTMLElement): Hud {
       setState(statusValue, net.status)
 
       // A version or map mismatch is worth interrupting the player for:
-      // nothing they do will work until they reload.
-      const shout =
-        net.status === 'version-mismatch' ||
-        net.status === 'map-mismatch' ||
-        net.status === 'unconfigured'
-          ? net.message
-          : null
+      // nothing they do will work until they reload. `isFatal` is shared with
+      // `main.ts`, which takes the in-match HUD down for the same three states.
+      const shout = isFatal(net.status) ? net.message : null
       if (banner.hidden !== (shout === null)) banner.hidden = shout === null
       setText(banner, shout ?? '')
 
