@@ -22,29 +22,36 @@
  * model does not carry and this function emits the identical stream of
  * commands, bit for bit.
  *
- * ## What is deliberately still a stub
+ * ## Who fills in what
  *
- * Aiming *at* a contact, closing on it and holding fire is the smallest policy
- * that makes the fairness harness mean something — a bot that stood still would
- * pass the mutation test by doing nothing. Path following over the nav graph is
- * GLAD-TSED8V, and weapon choice, splash aiming, leading a target and dodging a
- * rocket are GLAD-HK3ATM. Both build on {@link BotDecision}: the first fills in
- * `goal`, the second `aim`, `weapon` and `buttons`.
+ * {@link BotDecision} is the seam. This file fills in `aim` and `goal`; the
+ * movement layer turns `goal` into a route and a stick position
+ * (`movement/move.ts`, GLAD-TSED8V); weapon choice, splash aiming, leading a target
+ * and dodging a rocket fill in `weapon` and `buttons` (GLAD-HK3ATM). Neither
+ * reaches past it.
+ *
+ * The 125 Hz half of this file is now assembly rather than steering: the aim
+ * decides `yaw` and `pitch`, and the movement layer — which needs the yaw, because
+ * the two axes are relative to it — decides `forwardMove`, `sideMove` and the jump
+ * bit. That order is the only one available, and it is the same order a player's
+ * hands work in.
  */
 
 import {
   ANGLE_UNITS,
   ANGLE_UNITS_PER_DEGREE,
+  BUTTON_JUMP,
   MAX_PITCH_UNITS,
   PLAYER_VIEW_HEIGHT,
   RADIANS_PER_ANGLE_UNIT,
   TICK_RATE,
   Weapon,
-  angleVectors,
   vec3,
 } from '@gladiator/sim'
 import type { MutVec3, UserCmd, Vec3 } from '@gladiator/sim'
 
+import { moveBot } from './movement/move.ts'
+import type { MoveState } from './movement/move.ts'
 import { DAMAGE_ASSUMED_RANGE, hasContact, isAlert } from './perception/worldModel.ts'
 import type { WorldModel } from './perception/worldModel.ts'
 
@@ -81,18 +88,6 @@ export const MAX_TURN_UNITS = Math.round((TURN_RATE_DEGREES * ANGLE_UNITS_PER_DE
  * advancing on somebody is the same as standing in their explosion.
  */
 export const ENGAGE_RANGE = 600
-
-/**
- * How far off a direction has to be before the bot stops asking for it, as a
- * cosine.
- *
- * `forwardMove` and `sideMove` are `-1`, `0` or `+1` (`usercmd.ts`) — there is
- * no analogue axis to be subtle with — so a direction is resolved on to at most
- * two of the four cardinals. 0.35 is a little under 70 degrees, which is what
- * makes a bearing halfway between forward and right come out as *both* rather
- * than as whichever won by a hair and flickered.
- */
-export const MOVE_DEADZONE = 0.35
 
 /** A standing intention. Two ticks in three, this is what the command is built from. */
 export type BotDecision = {
@@ -146,8 +141,12 @@ export function createBrain(): BotBrain {
  *    is the whole arrangement.
  * 2. **A shove and no contact.** Look down the bearing the hit came from. There
  *    is no position in a hit, so there is nowhere to walk to.
- * 3. **Nothing.** Hold. Sweeping for a target is search behaviour and belongs
- *    with the movement that would carry it out (GLAD-TSED8V).
+ * 3. **Nothing.** Hold, and say nothing about where to go. Sweeping for a target
+ *    is search behaviour and it belongs with the movement that carries it out —
+ *    `movement/roam.ts`, which is what answers an absent goal when there is no
+ *    contact at all. The distinction is load-bearing: no goal *with* a contact is
+ *    a bot holding its ground on purpose, and the movement layer leaves that
+ *    alone.
  */
 export function decide(brain: BotBrain, model: WorldModel): void {
   const d = brain.decision
@@ -188,53 +187,84 @@ export function decide(brain: BotBrain, model: WorldModel): void {
  * The 125 Hz half
  * ----------------------------------------------------------------------- */
 
-/* Scratch. Single-threaded and synchronous; see `perception/sight.ts`. */
-const forward: MutVec3 = vec3()
-const right: MutVec3 = vec3()
-const toGoal: MutVec3 = vec3()
+/** Where the view is pointing this sub-step. Both in angle units. */
+export type BotView = {
+  yaw: number
+  pitch: number
+}
 
 /**
- * Turn the standing decision into one tick of intent.
+ * Turn the standing decision into a view.
  *
- * Everything in a `UserCmd` is an integer (`usercmd.ts`), and everything below
- * arrives at one by `Math.round` over a bounded step, so the same model
- * produces the same command on every engine — which is what makes the mutation
- * test's "bit-identical" a claim about the bot rather than about floating point.
+ * A turn is a **rate**, which is why this is in the 125 Hz half: sampled at 20 Hz
+ * it would be a staircase, and a staircase is the one artefact in a bot's motion a
+ * player reads instantly. {@link MAX_TURN_UNITS} is the whole of the rate limit,
+ * applied per sub-step, so the acceptance check's "no yaw delta exceeds the turn
+ * rate divided by the tick rate" is a property of this one clamp.
+ *
+ * Everything here is an integer (`usercmd.ts`), and everything arrives at one by
+ * `Math.round` over a bounded step, so the same model produces the same view on
+ * every engine — which is what makes the mutation test's "bit-identical" a claim
+ * about the bot rather than about floating point.
  */
-export function command(brain: BotBrain, model: WorldModel): UserCmd {
+export function aimView(brain: BotBrain, model: WorldModel, out: BotView): BotView {
   const d = brain.decision
   const self = model.self
 
-  let pitch = Math.round(self.angles[0])
-  let yaw = wrapUnits(Math.round(self.angles[1]))
+  out.pitch = clampPitch(Math.round(self.angles[0]))
+  out.yaw = wrapUnits(Math.round(self.angles[1]))
 
-  if (d.hasAim) {
-    const ex = self.origin[0]
-    const ey = self.origin[1]
-    const ez = self.origin[2] + PLAYER_VIEW_HEIGHT
-    yaw = wrapUnits(yaw + stepToward(wrapDelta(yawUnitsToward(ex, ey, d.aim) - yaw)))
-    pitch = clampPitch(pitch + stepToward(pitchUnitsToward(ex, ey, ez, d.aim) - pitch))
-  }
+  if (!d.hasAim) return out
 
-  let forwardMove = 0
-  let sideMove = 0
-  if (d.hasGoal) {
-    // The movement basis is yaw-only, exactly as `pmove`'s `wishDirection`
-    // builds it — a bot that projected on to a pitched forward vector would
-    // walk slower whenever it was looking at the floor.
-    angleVectors(0, yaw, 0, forward, right, null)
-    toGoal[0] = d.goal[0] - self.origin[0]
-    toGoal[1] = d.goal[1] - self.origin[1]
-    const length = Math.sqrt(toGoal[0] * toGoal[0] + toGoal[1] * toGoal[1])
-    if (length > 0) {
-      const ux = toGoal[0] / length
-      const uy = toGoal[1] / length
-      forwardMove = axis(ux * forward[0] + uy * forward[1])
-      sideMove = axis(ux * right[0] + uy * right[1])
+  const ex = self.origin[0]
+  const ey = self.origin[1]
+  const ez = self.origin[2] + PLAYER_VIEW_HEIGHT
+  out.yaw = wrapUnits(out.yaw + stepToward(wrapDelta(yawUnitsToward(ex, ey, d.aim) - out.yaw)))
+  out.pitch = clampPitch(out.pitch + stepToward(pitchUnitsToward(ex, ey, ez, d.aim) - out.pitch))
+  return out
+}
+
+/* Scratch. Single-threaded and synchronous; see `perception/sight.ts`. */
+const view: BotView = { yaw: 0, pitch: 0 }
+
+/**
+ * Assemble one sub-step's command out of a view and a stick position.
+ *
+ * The order is forced and it is the same order a player's hands work in: the aim
+ * decides where the view is, and *then* the feet are resolved against it, because
+ * `forwardMove` and `sideMove` are relative to the yaw (`movement/steer.ts`).
+ *
+ * `move` may be `null`, and that is the shape the walking skeleton had: no
+ * routing, no ledge probes, no jump — a bot that aims and stands. It is kept
+ * because the reverse — a movement layer that could not be left out — would make
+ * every test of the aim depend on a nav graph.
+ */
+export function command(brain: BotBrain, model: WorldModel, move: MoveState | null): UserCmd {
+  const d = brain.decision
+  aimView(brain, model, view)
+
+  if (move === null) {
+    return {
+      forwardMove: 0,
+      sideMove: 0,
+      yaw: view.yaw,
+      pitch: view.pitch,
+      buttons: d.buttons,
+      weapon: d.weapon,
     }
   }
 
-  return { forwardMove, sideMove, yaw, pitch, buttons: d.buttons, weapon: d.weapon }
+  moveBot(move, model, d, view.yaw)
+  return {
+    forwardMove: move.axes.forwardMove,
+    sideMove: move.axes.sideMove,
+    yaw: view.yaw,
+    pitch: view.pitch,
+    // OR'd rather than assigned: jump is the movement layer's bit and attack is
+    // the combat layer's, and a command carries both.
+    buttons: move.jump ? d.buttons | BUTTON_JUMP : d.buttons,
+    weapon: d.weapon,
+  }
 }
 
 /**
@@ -245,12 +275,12 @@ export function command(brain: BotBrain, model: WorldModel): UserCmd {
  * bot happened to be created — two bots in one world think on the same ticks,
  * and a replay reproduces both.
  */
-export function think(brain: BotBrain, model: WorldModel): UserCmd {
+export function think(brain: BotBrain, model: WorldModel, move: MoveState | null): UserCmd {
   if (brain.lastDecisionTick < 0 || model.tick - brain.lastDecisionTick >= BRAIN_INTERVAL_TICKS) {
     decide(brain, model)
     brain.lastDecisionTick = model.tick
   }
-  return command(brain, model)
+  return command(brain, model, move)
 }
 
 /* --------------------------------------------------------------------------
@@ -314,11 +344,4 @@ export function pitchUnitsToward(ex: number, ey: number, ez: number, target: Vec
   const dz = target[2] - ez
   const flat = Math.sqrt(dx * dx + dy * dy)
   return clampPitch(Math.round(Math.atan2(-dz, flat) * ANGLE_UNITS_PER_RADIAN))
-}
-
-/** A projection on to one of `-1`, `0`, `+1`. See {@link MOVE_DEADZONE}. */
-function axis(projection: number): number {
-  if (projection > MOVE_DEADZONE) return 1
-  if (projection < -MOVE_DEADZONE) return -1
-  return 0
 }

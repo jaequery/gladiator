@@ -620,8 +620,8 @@ wrong.
 **Link kind** — how a body gets from one nav node to the next: `walk`, `jump`,
 `drop` or `teleport`. Directed, always — a ledge you can drop off and cannot
 climb back on to is the commonest shape in an arena and an undirected graph
-cannot say it. Each kind maps to exactly one traversal controller in the bot's
-movement (GLAD-TSED8V). `rocketjump` is a v2 kind.
+cannot say it. Each kind maps to exactly one **traversal controller** in the
+bot's movement. `rocketjump` is a v2 kind.
 
 **Ground / perch** — the two routing classes a nav node can be in. Every
 `ground` node has to route to every other one and the bake refuses a graph
@@ -646,6 +646,42 @@ require the bot's `UserCmd` stream to come out **bit-identical**. Binary and
 un-gameable, unlike a correlation threshold. A positive control moves the
 opponent somewhere the bot can see and requires the stream to *differ*, so it
 cannot pass by the bot doing nothing.
+
+**Follower** — the bot's movement loop: a route, one link, and one `UserCmd`'s
+worth of axes. `packages/bot/src/movement/move.ts` (GLAD-TSED8V). It never
+expresses "move to point P" — only which of nine stick positions produces
+velocity towards P, given the yaw the aim controller chose.
+
+**Hop** — the link the bot is on right now, held until it arrives, is displaced
+off it, or runs out of budget. Exactly one at a time, which is what makes
+"falling while the link is a `walk`" a bug rather than a case to handle.
+
+**Traversal controller** — one link kind's worth of driving:
+`packages/bot/src/travel/`. Answers which direction and whether to press jump,
+and nothing else. The table is exhaustive by type, so a new link kind fails to
+compile until it has one.
+
+**Ledge guard** — a downward point trace at the position the bot's next stride
+lands on, and a re-steer when there is no floor within a step. The lookahead is
+a stopping distance rather than a constant, and the guard is off for `drop` and
+`jump` — the kinds that mean there is supposed to be nothing under you.
+
+**Circle jump** — v1's whole answer to strafe-jumping: one jump at the start of
+a straight run, with the wish held 45 degrees off the direction of travel for
+24 sub-steps. 369 ups measured, and no continuous yaw control, so the aim
+controller keeps the view.
+
+**Roam** — where the bot goes when the decision layer has nothing to ask for: a
+`ground` node drawn from its own seeded stream. Standing still is never the
+default, because "stop closing" is not "stop moving".
+
+**Stuck** — 32 units of progress not made in three seconds, while there is
+something to walk towards. Recovery is bounded to 1.5 seconds and is *steering*,
+never a position write; four seconds emits `NAV_STUCK` with the position in it.
+
+**Soak** — `pnpm bot:soak`: two bots, 200 matches of two minutes, and the
+movement's acceptance checks measured from the world rather than from the bot's
+own bookkeeping. `tools/bot-arena.ts`.
 
 ---
 
