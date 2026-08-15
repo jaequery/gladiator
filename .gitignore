@@ -8,6 +8,25 @@ coverage/
 .env
 .env.local
 
+# Authoring sources, which are not what ships.
+#
+# A `.blend` is ten times the size of the `.gltf` it exports and changes on
+# every save; committing one would put a binary nobody can diff into the history
+# of a repository whose asset budget is 24 MB. The *export* is committed, under
+# `assets/`, and `pnpm assets:build` compresses it from there. Keep the
+# originals somewhere they are backed up — just not here. See docs/assets.md §8.
+*.blend
+*.blend[0-9]
+*.psd
+*.xcf
+*.substance
+*.sbs
+*.sbsar
+*.wav
+*.aif
+*.aiff
+*.flac
+
 # Written and deleted again by `pnpm run guardrails`. Ignored so that a probe
 # surviving a crashed run can never be committed. ESLint and tsc still see it —
 # neither reads .gitignore — which is the whole point of the file.

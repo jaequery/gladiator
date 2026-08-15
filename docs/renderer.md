@@ -317,7 +317,16 @@ The model is boxes: a wide chest, a small head, limbs that swing visibly, and
 two weapons whose outlines cannot be confused. Polygon count buys nothing here
 that a clearer outline does not buy more of — and placeholder geometry that
 this repository authored has no licence attached to it, which a downloaded rig
-very often turns out to. GLAD-PGS73O owns the real asset pipeline.
+very often turns out to.
+
+The pipeline that replaces those boxes is [`docs/assets.md`](./assets.md):
+`pnpm assets:build` compresses a glTF and its textures into
+`packages/client/public/`, `render/gltf.ts` loads the result behind an
+`await import()`, and `render/ktx2.ts` decides what a compressed texture is
+allowed to be transcoded to. Three of its rules bind anything drawn here — a
+lightmap samples through `uv2` and nothing but `applyLightmap` may attach one,
+content is CC0 or it does not ship, and every committed asset is in
+`credits.json` or the build fails.
 
 The body is sized to sit **inside** the simulation's 30x30x56 box, and
 `playerModel.test.ts` asserts it, so what a player aims at and what they see

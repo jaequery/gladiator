@@ -32,6 +32,7 @@ import {
   tick as simTick,
 } from '@gladiator/sim'
 
+import { createCreditsScreen, creditsRequested } from './credits.ts'
 import { dummyMode, dummyOpponent } from './dummyOpponent.ts'
 import { createHud } from './hud.ts'
 import { createInputController } from './input/controller.ts'
@@ -243,6 +244,23 @@ async function boot(): Promise<void> {
   const input = createInputController(canvas)
   if (!shot) canvas.addEventListener('click', () => input.requestLock())
   window.addEventListener('resize', () => renderer.resize())
+
+  // The credits, rendered from the file `pnpm assets:build` generates. Mounted
+  // hidden and fetched on first open, so it costs an empty `<div>` until
+  // somebody asks for it — and never in shot mode, where the page is a picture
+  // with nothing moving in it on purpose.
+  //
+  // `C` only while the pointer is unlocked: a menu that can open mid-duel is a
+  // duel someone loses to a mistyped key. The real menu is GLAD-NPCTU8's.
+  const credits = createCreditsScreen(overlay)
+  if (!shot) {
+    window.addEventListener('keydown', (event) => {
+      if (event.repeat) return
+      if (event.code === 'Escape' && credits.isOpen) credits.close()
+      else if (event.code === 'KeyC' && !input.locked) credits.toggle()
+    })
+    if (creditsRequested(window.location.search)) credits.open()
+  }
 
   const override = protocolOverride(window.location.search)
   const mapOverride = mapHashOverride(window.location.search)

@@ -238,6 +238,32 @@ data) into the compact form the sim loads (GLAD-G2M8QQ, GLAD-OB46VC).
 the format version, the map, and the content hash. Committed, so a build needs
 no bake step in front of it. `docs/physics-spec.md` §4.
 
+**Asset registry** — `credits.json`: every asset this repository ships, with its
+author, its source URL, its licence, and — for a texture — its class.
+`CREDITS.md` and the credits screen's `credits.json` are both generated from it,
+so the two cannot drift. `docs/assets.md` §6.
+
+**Texture class** — what a texture is *for*, which is what decides how it is
+compressed: `albedo` and `normal` get UASTC, `srgb` and `linear` get ETC1S.
+Declared per entry in the registry, never inferred from a filename.
+`docs/assets.md` §2.
+
+**Transcode target** — the compressed GPU format a `.ktx2` is turned into in the
+browser, chosen per texture from the engine's capabilities. Two Babylon defaults
+would pick *uncompressed* RGBA on an integrated GPU; both are off, and
+`render/ktx2.test.ts` proves it over every capability combination.
+`docs/assets.md` §5.
+
+**Second UV set** — the lightmap unwrap. `TEXCOORD_1` in glTF, `uv2` in Babylon,
+`coordinatesIndex = 1` on the texture. The first set tiles a material; the
+second gives every triangle a unique patch of one atlas, and confusing them
+renders a level lit from the wrong wall or renders it black. `docs/assets.md`
+§3.
+
+**Asset budget** — 5 MB per committed file and 24 MB across all of them, checked
+by `pnpm assets:budget` over `git ls-files`. Git has no forget, so the check has
+to run before the commit lands. `docs/assets.md` §7.
+
 **Ramp** — a brush that is an axis-aligned box with its top face replaced by one
 sloped plane. Exactly two gradients exist, `1:1` (45°) and `1:2` (26.57°), so
 that a level designer cannot make a physics decision by typing an angle. §4.3.

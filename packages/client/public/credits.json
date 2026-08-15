@@ -1,0 +1,60 @@
+{
+  "entries": [
+    {
+      "id": "crucible-crate",
+      "title": "Crucible crate",
+      "author": "Gladiator contributors",
+      "source": "https://github.com/jaequery/gladiator/blob/main/tools/assets-placeholders.ts",
+      "licence": "CC0-1.0",
+      "kind": "model"
+    },
+    {
+      "id": "crucible-crate-albedo",
+      "title": "Crucible crate albedo",
+      "author": "Gladiator contributors",
+      "source": "https://github.com/jaequery/gladiator/blob/main/tools/assets-placeholders.ts",
+      "licence": "CC0-1.0",
+      "kind": "texture"
+    },
+    {
+      "id": "crucible-crate-normal",
+      "title": "Crucible crate normal map",
+      "author": "Gladiator contributors",
+      "source": "https://github.com/jaequery/gladiator/blob/main/tools/assets-placeholders.ts",
+      "licence": "CC0-1.0",
+      "kind": "texture"
+    },
+    {
+      "id": "crucible-crate-orm",
+      "title": "Crucible crate occlusion/roughness/metalness",
+      "author": "Gladiator contributors",
+      "source": "https://github.com/jaequery/gladiator/blob/main/tools/assets-placeholders.ts",
+      "licence": "CC0-1.0",
+      "kind": "texture"
+    },
+    {
+      "id": "crucible-lightmap",
+      "title": "Crucible lightmap",
+      "author": "Gladiator contributors",
+      "source": "https://github.com/jaequery/gladiator/blob/main/tools/assets-placeholders.ts",
+      "licence": "CC0-1.0",
+      "kind": "texture"
+    },
+    {
+      "id": "babylon-ktx2-transcoders",
+      "title": "Babylon.js KTX2 decoder and Basis transcoders",
+      "author": "Microsoft and the Babylon.js contributors",
+      "source": "https://github.com/BabylonJS/Babylon.js",
+      "licence": "Apache-2.0",
+      "kind": "vendored"
+    },
+    {
+      "id": "meshopt-decoder",
+      "title": "meshoptimizer decoder",
+      "author": "Arseny Kapoulkine",
+      "source": "https://github.com/zeux/meshoptimizer",
+      "licence": "MIT",
+      "kind": "vendored"
+    }
+  ]
+}

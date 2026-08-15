@@ -14,18 +14,39 @@ importers:
       '@gladiator/sim':
         specifier: workspace:*
         version: link:packages/sim
+      '@gltf-transform/core':
+        specifier: 4.4.2
+        version: 4.4.2
+      '@gltf-transform/extensions':
+        specifier: 4.4.2
+        version: 4.4.2
       '@types/node':
         specifier: 22.20.1
         version: 22.20.1
+      '@types/pngjs':
+        specifier: 6.0.5
+        version: 6.0.5
       eslint:
         specifier: 10.8.1
         version: 10.8.1
       globals:
         specifier: 17.11.0
         version: 17.11.0
+      ktx-parse:
+        specifier: 1.1.0
+        version: 1.1.0
+      ktx2-encoder:
+        specifier: 0.6.0
+        version: 0.6.0
+      meshoptimizer:
+        specifier: 1.2.0
+        version: 1.2.0
       playwright:
         specifier: 1.62.1
         version: 1.62.1
+      pngjs:
+        specifier: 7.0.0
+        version: 7.0.0
       tsx:
         specifier: 4.23.12
         version: 4.23.12
@@ -50,6 +71,9 @@ importers:
       '@babylonjs/core':
         specifier: 9.21.1
         version: 9.21.1
+      '@babylonjs/loaders':
+        specifier: 9.21.1
+        version: 9.21.1(@babylonjs/core@9.21.1)(babylonjs-gltf2interface@9.21.2)
       '@gladiator/bot':
         specifier: workspace:*
         version: link:../bot
@@ -57,6 +81,9 @@ importers:
         specifier: workspace:*
         version: link:../sim
     devDependencies:
+      '@babylonjs/ktx2decoder':
+        specifier: 9.21.1
+        version: 9.21.1(@babylonjs/core@9.21.1)
       vite:
         specifier: 8.2.1
         version: 8.2.1(@types/node@22.20.1)(esbuild@0.28.2)(tsx@4.23.12)
@@ -92,6 +119,17 @@ packages:
 
   '@babylonjs/core@9.21.1':
     resolution: {integrity: sha512-aDg/VxXd+vMQgigDm3ybjZv1b4wiw+yMZfdpNaITR7mF6nIXAmW/fcV4xLkD+wroBjtm4GrQB+4FrvtgPjfFdA==}
+
+  '@babylonjs/ktx2decoder@9.21.1':
+    resolution: {integrity: sha512-Kw8jY4z2TrS9xsjrqacxgC5YBMYx20+UcUOllJs5vuh0Rn74m659Lst+kSfBiYjmkjK9mBSKXTBPAUxlbV+/vQ==}
+    peerDependencies:
+      '@babylonjs/core': ^9.0.0
+
+  '@babylonjs/loaders@9.21.1':
+    resolution: {integrity: sha512-f479FZ4ip6h44wmmWQ30HA756HZAod2370Q5MZhPBv9yxX/lQXkF0U5Xgx9bRB5M/cXldQ2HGvYyaU3ZHwnhbQ==}
+    peerDependencies:
+      '@babylonjs/core': ^9.0.0
+      babylonjs-gltf2interface: ^9.0.0
 
   '@esbuild/aix-ppc64@0.28.2':
     resolution: {integrity: sha512-XExcO+dvLKvVtNTibSTBej1NCAbaGhWn9Ww1ZPx80qsahhPFe/8jgWP0IchNe0F3HwkU7n8ejhH8bjonqht8mQ==}
@@ -288,6 +326,12 @@ packages:
     resolution: {integrity: sha512-+CNAzxglkrpNf/kKywqQfk74QjtceuOE7Qm+AF8miRvPF/wmmK5+OJOgVh3AVTT3RP2mH3+FOaxlE5v72owk0A==}
     engines: {node: ^20.19.0 || ^22.13.0 || >=24}
 
+  '@gltf-transform/core@4.4.2':
+    resolution: {integrity: sha512-qsWKwNSwK+2s834Mt4xbYcyHqCrgNFP7hIv5s487JxebngRfDgelpghNF+kSswGb2/NuapasfK3UViFoSJJoMg==}
+
+  '@gltf-transform/extensions@4.4.2':
+    resolution: {integrity: sha512-HJH1FM+edC5eNvl6xO0SOXJ/j/3oDoIpSu150OTdJaLBoM3TgCCGIfh4wyhgWAqZrkvgHKVGiZKxcKV5LkgPCQ==}
+
   '@humanfs/core@0.19.2':
     resolution: {integrity: sha512-UhXNm+CFMWcbChXywFwkmhqjs3PRCmcSa/hfBgLIb7oQ5HNb1wS0icWsGtSAUNgefHeI+eBrA8I1fxmbHsGdvA==}
     engines: {node: '>=18.18.0'}
@@ -428,6 +472,9 @@ packages:
   '@types/node@22.20.1':
     resolution: {integrity: sha512-EANqOCF9QFyra+4pfxUcX9STKJpCLjMbObVzljIJomAWSnuSIEAvyzEU53GaajbXJEgdh0iEcPL+DGvpUd4k1Q==}
 
+  '@types/pngjs@6.0.5':
+    resolution: {integrity: sha512-0k5eKfrA83JOZPppLtS2C7OUtyNAl2wKNxfyYl9Q5g9lPkgBl/9hNyAu6HuEH2J4XmIv2znEpkDd0SaZVxW6iQ==}
+
   '@types/ws@8.18.1':
     resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
 
@@ -535,6 +582,9 @@ packages:
   assertion-error@2.0.1:
     resolution: {integrity: sha512-Izi8RQcffqCeNVgFigKli1ssklIbpHnCYc6AknXGYoB6grJqyeby7jv12JUQgmTAnIDnbck1uxksT4dzN3PWBA==}
     engines: {node: '>=12'}
+
+  babylonjs-gltf2interface@9.21.2:
+    resolution: {integrity: sha512-L4tPMoIgDz/lWQFYKkQMG0oIq5S24Z6Sc3aBX6nvczDLoFDs13auaC2ObOL2Tc24IiUVESjCnDa1DzrJq/m0NQ==}
 
   balanced-match@4.0.4:
     resolution: {integrity: sha512-BLrgEcRTwX2o6gGxGOCNyMvGSp35YofuYzw9h1IMTRmKqttAZZVU67bdb9Pr2vUHA8+j3i2tJfjO6C6+4myGTA==}
@@ -718,6 +768,12 @@ packages:
   keyv@4.5.4:
     resolution: {integrity: sha512-oxVHkHR/EJf2CNXnWxRLW6mg7JyCCUcG0DtEGmL2ctUo1PNTin1PUil+r/+4r5MpVgC/fn1kjsx7mjSujKqIpw==}
 
+  ktx-parse@1.1.0:
+    resolution: {integrity: sha512-mKp3y+FaYgR7mXWAbyyzpa/r1zDWeaunH+INJO4fou3hb45XuNSwar+7llrRyvpMWafxSIi99RNFJ05MHedaJQ==}
+
+  ktx2-encoder@0.6.0:
+    resolution: {integrity: sha512-gEWkw2YUlhKO4hXhqVLQQWJ+fGJObsXIwz0pGjJMclnQ4MQU3SAtN1MzutjFxO3ejWvxHyvFk5kr8+RtLmHiTA==}
+
   levn@0.4.1:
     resolution: {integrity: sha512-+bT2uH4E5LGE7h/n3evcS/sQlJXCpIp6ym8OWJ5eV6+67Dsql/LaaT7qJBAt2rzfoa/5QBGBhxDix1dMt2kQKQ==}
     engines: {node: '>= 0.8.0'}
@@ -803,6 +859,9 @@ packages:
   magic-string@0.30.21:
     resolution: {integrity: sha512-vd2F4YUyEXKGcLHoq+TEyCjxueSeHnFxyyjNp80yg0XV4vUhnDer/lvvlqM/arB5bXQN5K2/3oinyCRyx8T2CQ==}
 
+  meshoptimizer@1.2.0:
+    resolution: {integrity: sha512-davRZeIJbxJrE24cwQle7ZDsxjdk/OphNOV83oX+efQinyoHY9Jcyz3MHbaoG0qySZajldGztNZ1RN/T19PZsg==}
+
   minimatch@10.2.6:
     resolution: {integrity: sha512-vpLQEs+VLCr1nU0BXS07maYoFwlDAH0gngQuuttxIwutDFEMHq2blX+8vpgxDdK3J1PwjCJiep77OitTZ4Ll1A==}
     engines: {node: 18 || 20 || >=22}
@@ -862,6 +921,10 @@ packages:
     engines: {node: '>=20'}
     hasBin: true
 
+  pngjs@7.0.0:
+    resolution: {integrity: sha512-LKWqWJRhstyYo9pGvgor/ivk2w94eSjE3RGVuzLGlr3NmD8bf7RcYGze1mNdEHRP6TRP6rMuDHk5t44hnTRyow==}
+    engines: {node: '>=14.19.0'}
+
   postcss@8.5.26:
     resolution: {integrity: sha512-u82N74LFzG8ca+dD8puPnplTXoGH4fTPpVGuIbt36G3qvNlkvfD0lEAZSxaly3KX8TS/L1A1gsCEmvKmBcVbkQ==}
     engines: {node: ^10 || ^12 || >=14}
@@ -869,6 +932,9 @@ packages:
   prelude-ls@1.2.1:
     resolution: {integrity: sha512-vkcDPrRZo1QZLbn5RLGPpg/WmIQ65qoWWhcGKf/b5eplkkarX0m9z8ppCat4mlOqUsWpyNuYgO3VRyrYHSzX5g==}
     engines: {node: '>= 0.8.0'}
+
+  property-graph@4.1.0:
+    resolution: {integrity: sha512-AvPcP7XECNWy4LGmFQ77k7un4lSKM4eS29PTvW4ck95uYeLxXPWJM7hLuBqK91FaHqCcgJvIUCuNJjjxKE7VKQ==}
 
   punycode@2.3.1:
     resolution: {integrity: sha512-vYt7UD1U9Wg6138shLtLOvdAu+8DsC/ilFtEVHcH+wydcSpNE20AfSOduf6MkRFahL5FY7X1oU7nKVZFtfq8Fg==}
@@ -1071,6 +1137,15 @@ snapshots:
 
   '@babylonjs/core@9.21.1': {}
 
+  '@babylonjs/ktx2decoder@9.21.1(@babylonjs/core@9.21.1)':
+    dependencies:
+      '@babylonjs/core': 9.21.1
+
+  '@babylonjs/loaders@9.21.1(@babylonjs/core@9.21.1)(babylonjs-gltf2interface@9.21.2)':
+    dependencies:
+      '@babylonjs/core': 9.21.1
+      babylonjs-gltf2interface: 9.21.2
+
   '@esbuild/aix-ppc64@0.28.2':
     optional: true
 
@@ -1183,6 +1258,15 @@ snapshots:
       '@eslint/core': 1.2.1
       levn: 0.4.1
 
+  '@gltf-transform/core@4.4.2':
+    dependencies:
+      property-graph: 4.1.0
+
+  '@gltf-transform/extensions@4.4.2':
+    dependencies:
+      '@gltf-transform/core': 4.4.2
+      ktx-parse: 1.1.0
+
   '@humanfs/core@0.19.2':
     dependencies:
       '@humanfs/types': 0.15.0
@@ -1265,6 +1349,10 @@ snapshots:
   '@types/node@22.20.1':
     dependencies:
       undici-types: 6.21.0
+
+  '@types/pngjs@6.0.5':
+    dependencies:
+      '@types/node': 22.20.1
 
   '@types/ws@8.18.1':
     dependencies:
@@ -1416,6 +1504,8 @@ snapshots:
       uri-js: 4.4.1
 
   assertion-error@2.0.1: {}
+
+  babylonjs-gltf2interface@9.21.2: {}
 
   balanced-match@4.0.4: {}
 
@@ -1606,6 +1696,12 @@ snapshots:
     dependencies:
       json-buffer: 3.0.1
 
+  ktx-parse@1.1.0: {}
+
+  ktx2-encoder@0.6.0:
+    dependencies:
+      ktx-parse: 1.1.0
+
   levn@0.4.1:
     dependencies:
       prelude-ls: 1.2.1
@@ -1668,6 +1764,8 @@ snapshots:
     dependencies:
       '@jridgewell/sourcemap-codec': 1.5.5
 
+  meshoptimizer@1.2.0: {}
+
   minimatch@10.2.6:
     dependencies:
       brace-expansion: 5.0.9
@@ -1715,6 +1813,8 @@ snapshots:
     optionalDependencies:
       fsevents: 2.3.2
 
+  pngjs@7.0.0: {}
+
   postcss@8.5.26:
     dependencies:
       nanoid: 3.3.18
@@ -1722,6 +1822,8 @@ snapshots:
       source-map-js: 1.2.1
 
   prelude-ls@1.2.1: {}
+
+  property-graph@4.1.0: {}
 
   punycode@2.3.1: {}
 
