@@ -1,5 +1,5 @@
 /**
- * The HTTP and WebSocket server.
+ * The HTTP and WebSocket server: the Node *edge* around the host.
  *
  * Split from `index.ts` so the tests can start a real one on an ephemeral port
  * and talk to it over a real socket. Everything this ticket claims about the
@@ -7,22 +7,33 @@
  * is readable, that a disallowed origin is refused — is asserted against *this*,
  * not against a mock.
  *
- * The tick scheduler, room registry and connection lifecycle are GLAD-FHKBN8
- * and GLAD-DVDV6P. Here a session is created on connect and forgotten on close.
+ * What this file is *not* is the host. A connection is turned into a
+ * `Transport` by `net/wsTransport.ts` and handed to a `Room` (`room.ts`), and
+ * the room is the same object the browser runs behind a loopback for
+ * single-player. Everything Node-specific — the HTTP server, the upgrade,
+ * `ws`, the origin policy, `randomUUID` — lives on this side of that line and
+ * nothing on the other side of it may reach back over.
+ *
+ * The tick scheduler and the room registry are GLAD-FHKBN8; the connection
+ * lifecycle is GLAD-DVDV6P. Here one connection gets one single-seat room,
+ * created on connect and forgotten on close.
  */
 import { createServer, type IncomingMessage, type Server } from 'node:http'
 import { randomUUID } from 'node:crypto'
 import { Socket } from 'node:net'
 import type { Duplex } from 'node:stream'
 
-import { PROTOCOL_VERSION, type ServerMessage } from '@gladiator/sim'
+import { PROTOCOL_VERSION } from '@gladiator/sim'
 import { WebSocketServer, type WebSocket } from 'ws'
 
+import { systemClock, type Clock } from './clock.ts'
 import type { ServerConfig } from './config.ts'
 import { createJitterProbe, type JitterProbe } from './jitter.ts'
+import { startHostLoop, systemScheduler, type Scheduler } from './loop.ts'
 import { createOriginPolicy } from './origin.ts'
 import { SERVER_MAP, SERVER_MAP_HASH } from './map.ts'
-import { applyFrame, createSession, type ServerIdentity, type SessionState } from './session.ts'
+import { wsTransport } from './net/wsTransport.ts'
+import { createRoom, type Room } from './room.ts'
 
 /** How often to ping an idle socket, to notice a peer that has gone away. */
 const HEARTBEAT_MS = 20_000
@@ -37,19 +48,18 @@ export type GladiatorServer = {
 }
 
 type Connection = {
-  session: SessionState
+  room: Room
   alive: boolean
-}
-
-function send(socket: WebSocket, message: ServerMessage): void {
-  if (socket.readyState !== socket.OPEN) return
-  socket.send(JSON.stringify(message))
 }
 
 export type StartOptions = {
   readonly config: ServerConfig
   /** Injected so tests can run without a live timer. */
   readonly jitter?: JitterProbe
+  /** Injected, because `Room` is not allowed to read one. `clock.ts`. */
+  readonly clock?: Clock
+  /** Injected, because nothing that holds a world may hold a timer. `loop.ts`. */
+  readonly scheduler?: Scheduler
   readonly log?: (line: string) => void
 }
 
@@ -57,11 +67,9 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
   const { config } = options
   const log = options.log ?? ((line: string) => console.log(line))
   const jitter = options.jitter ?? createJitterProbe()
+  const clock = options.clock ?? systemClock()
+  const scheduler = options.scheduler ?? systemScheduler()
   const isOriginAllowed = createOriginPolicy(config)
-  // Which commit and which world. Both are fixed for the life of the process:
-  // the map is bundled, so a server cannot start holding one map and finish
-  // holding another.
-  const identity: ServerIdentity = { build: config.build, mapHash: SERVER_MAP_HASH }
   const startedAtMs = Date.now()
 
   const connections = new Map<WebSocket, Connection>()
@@ -128,48 +136,55 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
   })
 
   wss.on('connection', (socket: WebSocket) => {
-    const connection: Connection = { session: createSession(randomUUID()), alive: true }
+    // One connection, one single-seat room. Which commit and which world are
+    // fixed for the life of the process: the map is bundled, so a server
+    // cannot start holding one map and finish holding another. Rooms that
+    // outlive a connection and seat two players are GLAD-FHKBN8.
+    const room = createRoom({
+      map: SERVER_MAP,
+      clock,
+      build: config.build,
+      peerId: () => randomUUID(),
+      log,
+    })
+    const connection: Connection = { room, alive: true }
     connections.set(socket, connection)
 
+    // `pong` is the one socket event the room has no opinion about: it is the
+    // liveness of the *pipe*, which is exactly what a transport abstracts away.
     socket.on('pong', () => {
       connection.alive = true
     })
-
-    socket.on('message', (data: unknown, isBinary: boolean) => {
-      if (isBinary) {
-        send(socket, { t: 'fault', code: 'binary', detail: 'this protocol is JSON text' })
-        socket.close(4002, 'binary frame')
-        return
-      }
-      const step = applyFrame(connection.session, String(data), identity)
-      connection.session = step.session
-      for (const reply of step.replies) send(socket, reply)
-      if (step.close !== undefined) socket.close(step.close.code, step.close.reason)
-    })
-
     socket.on('close', () => {
       connections.delete(socket)
     })
-
     socket.on('error', () => {
       connections.delete(socket)
       socket.terminate()
     })
+
+    room.join(wsTransport(socket))
   })
 
-  const heartbeat = setInterval(() => {
-    for (const [socket, connection] of connections) {
-      if (!connection.alive) {
-        socket.terminate()
-        connections.delete(socket)
-        continue
+  // The one timer. `Room` never holds one — see `loop.ts` — so the beat is
+  // handed to it, and the same room runs in a browser tab with no timer at all.
+  const heartbeat = startHostLoop({
+    scheduler,
+    clock,
+    intervalMs: HEARTBEAT_MS,
+    beat: (nowMs) => {
+      for (const [socket, connection] of connections) {
+        if (!connection.alive) {
+          socket.terminate()
+          connections.delete(socket)
+          continue
+        }
+        connection.alive = false
+        connection.room.sweep(nowMs)
+        socket.ping()
       }
-      connection.alive = false
-      socket.ping()
-    }
-  }, HEARTBEAT_MS)
-  // The heartbeat must never be the thing keeping the process alive.
-  heartbeat.unref()
+    },
+  })
 
   jitter.start()
 
@@ -187,7 +202,7 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
         },
         close: () =>
           new Promise<void>((done) => {
-            clearInterval(heartbeat)
+            heartbeat.stop()
             jitter.stop()
             // 1001 "going away" is what a browser is told when a server is
             // shutting down cleanly, and it is what lets a client tell a deploy

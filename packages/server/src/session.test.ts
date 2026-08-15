@@ -38,6 +38,22 @@ function hello(over: Record<string, unknown> = {}) {
   })
 }
 
+/**
+ * A session over a world of its own.
+ *
+ * The world is handed in rather than made by `createSession`, because a room
+ * owns one world and seats peers in it (`room.ts`) — and because a module that
+ * loaded a map for itself could not run in a browser, which is what the listen
+ * server needs it to do.
+ */
+function fresh() {
+  return createSession('s1', {
+    state: createMapState(SERVER_MAP.source, SKELETON_SEED),
+    world: SERVER_MAP.world,
+    plan: null,
+  })
+}
+
 /** The one player a session's world holds. */
 function playerOf(state: GameState) {
   const player = findPlayer(state, 0)
@@ -46,13 +62,13 @@ function playerOf(state: GameState) {
 }
 
 function greeted() {
-  return applyFrame(createSession('s1'), hello(), IDENTITY).session
+  return applyFrame(fresh(), hello(), IDENTITY).session
 }
 
 describe('session handshake', () => {
   it('welcomes a client on the same protocol', () => {
     const step = applyFrame(
-      createSession('s1'),
+      fresh(),
       hello(),
       IDENTITY,
     )
@@ -67,7 +83,7 @@ describe('session handshake', () => {
     // The failure mode this replaces is a socket that closes with no frame at
     // all, which is indistinguishable from the server being down.
     const step = applyFrame(
-      createSession('s1'),
+      fresh(),
       hello({ protocol: PROTOCOL_VERSION + 1, build: 'stale' }),
       IDENTITY,
     )
@@ -86,7 +102,7 @@ describe('session handshake', () => {
     // The scenario: Vercel has deployed and Fly has not (or the reverse). The
     // protocol matches, the build string does not have to, and the two would
     // simulate different worlds from identical inputs.
-    const step = applyFrame(createSession('s1'), hello({ mapHash: 'deadbeef' }), IDENTITY)
+    const step = applyFrame(fresh(), hello({ mapHash: 'deadbeef' }), IDENTITY)
     expect(step.replies).toEqual([
       { t: 'map_mismatch', serverMapHash: MAP_HASH, clientMapHash: 'deadbeef' },
     ])
@@ -98,7 +114,7 @@ describe('session handshake', () => {
   it('does not adopt the map the client claims', () => {
     // A server that played whichever arena it was told about is a server that
     // can be told where the walls are.
-    const step = applyFrame(createSession('s1'), hello({ mapHash: 'deadbeef' }), IDENTITY)
+    const step = applyFrame(fresh(), hello({ mapHash: 'deadbeef' }), IDENTITY)
     const after = applyFrame(
       step.session,
       JSON.stringify({ t: 'cmds', startTick: 1, cmds: [encodeCmd(NULL_CMD)] }),
@@ -109,7 +125,7 @@ describe('session handshake', () => {
 
   it('rejects a hello with no map hash at all rather than assuming ours', () => {
     const step = applyFrame(
-      createSession('s1'),
+      fresh(),
       JSON.stringify({ t: 'hello', protocol: PROTOCOL_VERSION, build: 'client' }),
       IDENTITY,
     )
@@ -118,7 +134,7 @@ describe('session handshake', () => {
 
   it('refuses commands before a hello', () => {
     const step = applyFrame(
-      createSession('s1'),
+      fresh(),
       JSON.stringify({ t: 'cmds', startTick: 1, cmds: [encodeCmd(NULL_CMD)] }),
       IDENTITY,
     )
@@ -149,7 +165,7 @@ describe('session simulation', () => {
     // Measured from the map's spawn rather than from the origin: the session
     // starts where `testbed` says a player starts, not at (0, 0, 0).
     const spawn = createMapState(SERVER_MAP.source, SKELETON_SEED)
-    expect(playerOf(step.session.state).origin[0]).toBeGreaterThan(playerOf(spawn).origin[0])
+    expect(playerOf(step.session.sim.state).origin[0]).toBeGreaterThan(playerOf(spawn).origin[0])
   })
 
   it('counts a gap instead of silently renumbering it', () => {
@@ -177,7 +193,7 @@ describe('session simulation', () => {
     )
     const hash = step.replies[0]
     expect(hash).toMatchObject({ t: 'hash', tick: 1 })
-    const player = playerOf(step.session.state)
+    const player = playerOf(step.session.sim.state)
     for (const value of [...player.origin, ...player.velocity]) {
       expect(Number.isFinite(value)).toBe(true)
     }

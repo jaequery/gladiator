@@ -80,6 +80,9 @@ importers:
       '@gladiator/bot':
         specifier: workspace:*
         version: link:../bot
+      '@gladiator/server':
+        specifier: workspace:*
+        version: link:../server
       '@gladiator/sim':
         specifier: workspace:*
         version: link:../sim

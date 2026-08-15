@@ -59,6 +59,33 @@
  *
  * ---
  *
+ * ## The loopback's extra obligations
+ *
+ * The in-process implementation (`@gladiator/server/net/loopbackTransport.ts`,
+ * GLAD-4G4W2T) is the one that makes single-player run the multiplayer code
+ * path, and it is the one with a way to cheat. Two rules, both of which a
+ * socket gets for free and an in-process pipe has to be *made* to obey:
+ *
+ * 1. **Bytes cross, never objects.** A loopback that handed the receiver the
+ *    sender's own value would share a mutable reference: a mutation on one side
+ *    would appear on the other with no serialisation in between, every test
+ *    would pass, and the bug would surface the first time a real socket was
+ *    involved. So a `string` is UTF-8 encoded on send and decoded on delivery,
+ *    and a `Uint8Array` is **copied**. The wire is bytes even when the wire is
+ *    a field in the same heap.
+ *
+ * 2. **Delivery is asynchronous.** A synchronous hand-off lets a client's
+ *    `send` re-enter the host in the middle of a tick — a re-entrancy a socket
+ *    can never produce, so nothing downstream is written to survive it. The
+ *    loopback defers on a microtask, which is the smallest boundary that makes
+ *    the two paths behave the same.
+ *
+ * Both rules apply to *any* implementation that does not go through a kernel
+ * socket, which is why they are written here rather than beside the one that
+ * exists.
+ *
+ * ---
+ *
  * ## What a `Transport` is not
  *
  * It does not know what a message *means* — it moves bytes. Framing, the
@@ -66,6 +93,11 @@
  * (GLAD-FHKBN8, GLAD-V7M6PQ). It does not reconnect on its own either:
  * reconnection changes match state, so it belongs to the connection lifecycle
  * (GLAD-DVDV6P), not to the pipe.
+ *
+ * It does not own a clock, either. Latency, jitter, loss and reordering are a
+ * *decorator* over a transport and a test harness rather than a mode of one —
+ * `@gladiator/server/net/laggedTransport.ts`, driven by a `pump(nowMs)` so a
+ * latency matrix costs CI no wall-clock at all.
  */
 
 /**

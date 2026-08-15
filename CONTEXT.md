@@ -239,14 +239,35 @@ device's `baseLatency` is the other half. §5.
 
 ## The network
 
-**Listen server** — a server running inside the client process. How
-single-player works: the bot match runs the real server code over a loopback
-transport, so there is one code path, not two (GLAD-4G4W2T).
+**Host** — whatever is authoritative over a world: `packages/server/src/room.ts`
+and the modules it reaches. Runs unchanged behind a WebSocket on Fly and inside
+a browser tab behind a loopback, which is why `@gladiator/server` is a
+dependency of the client and not only of the deploy.
 
-**Loopback transport** — a `Transport` implementation that hands messages
-straight to the other end with no socket in between.
+**Listen server** — a host running inside the client process
+(`packages/client/src/net/listenServer.ts`). How single-player works: the bot
+match runs the real host over a loopback transport, so there is one code path,
+not two (GLAD-4G4W2T). `?local=1` boots one today.
 
-**Room** — one match's worth of server state, addressed by a room code.
+**Loopback transport** — a `Transport` implementation that hands messages to the
+other end with no socket in between. It still runs the real codec — a string is
+UTF-8 encoded and decoded, a `Uint8Array` is copied — because sharing a mutable
+reference across a "network" is the one failure the pattern has. Delivery is a
+`queueMicrotask`, so a send can never re-enter a tick.
+
+**Lagged transport** — a decorator that puts the network back for tests:
+latency, jitter, loss, reordering and duplication from a seeded PRNG, released
+by a `pump(nowMs)` rather than a timer. Test harness only; single-player ships
+at ~0 ms.
+
+**Clock** — wall-clock as an injected value (`packages/server/src/clock.ts`). A
+host reads one to notice a peer that has gone quiet, and never to decide how far
+to advance the world: a room's world is a function of the commands it received,
+which is what makes one recorded input stream produce one hash over a socket and
+in-process.
+
+**Room** — one match's worth of host state, addressed by a room code. Seats
+peers, owns one `GameState`, holds no timer and opens no socket.
 
 **Room code** — the short string a player sends a friend to be dueled by.
 
