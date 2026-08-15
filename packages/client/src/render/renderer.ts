@@ -100,6 +100,15 @@ export type RendererOptions = {
 export type Renderer = {
   /** Draw one frame. `intervalMs` is the wall-clock since the last one. */
   render(view: RenderView, intervalMs: number): void
+  /**
+   * The camera's **vertical** field of view, in radians.
+   *
+   * A setter rather than a field on `RenderView`, because it is a property of
+   * the player rather than of the frame: it changes when somebody drags a
+   * slider and not sixty times a second. `ui/settings.ts` turns the
+   * horizontal-at-4:3 degrees a player sets into this.
+   */
+  setFov(radians: number): void
   resize(): void
   dispose(): void
   /** A copy of the last frame, scaled. For the reference screenshot. */
@@ -271,6 +280,14 @@ export async function createRenderer(options: RendererOptions): Promise<Renderer
     },
     get effects() {
       return fx.counts
+    },
+
+    setFov(radians) {
+      // The one camera property a player owns. Vertical, because that is what
+      // the camera takes and what "hor+" fixes; `ui/settings.ts` is where the
+      // horizontal-at-4:3 degrees a player thinks in are converted, so that the
+      // conversion lives beside the setting rather than beside the camera.
+      camera.fov = radians
     },
 
     render(view, intervalMs) {

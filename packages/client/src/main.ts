@@ -50,19 +50,28 @@ import {
   createBrowserAudioContext,
 } from './audio/engine.ts'
 import { createCueTracker, playCues } from './audio/cues.ts'
-import { armGesture } from './audio/gesture.ts'
+import { armGesture, runGesture } from './audio/gesture.ts'
 import { type OfflineHost, renderHrtfProbe, renderOnset } from './audio/probe.ts'
 import { ALL_SOUNDS, SoundId } from './audio/sounds.ts'
 import { createCreditsScreen, creditsRequested } from './credits.ts'
 import { dummyMode, dummyOpponent } from './dummyOpponent.ts'
 import { createHud } from './hud.ts'
 import { createInputController } from './input/controller.ts'
+import type { RawInput } from './input/pointerLock.ts'
 import { advance, alphaOf } from './loop.ts'
 import { shouldSnap, slewMs } from './net/clockSync.ts'
 import { CLIENT_MAP, CLIENT_MAP_HASH } from './map.ts'
-import { createNetClient, isFatal, joinUrl, mustHoldStill, resolveServerUrl } from './net/client.ts'
+import {
+  NO_SESSION,
+  type NetClient,
+  createNetClient,
+  isFatal,
+  joinUrl,
+  mustHoldStill,
+  resolveServerUrl,
+} from './net/client.ts'
 import { createEntityBuffer, createInterpolationClock } from './net/interpolate.ts'
-import { createListenServer } from './net/listenServer.ts'
+import { type ListenServer, createListenServer } from './net/listenServer.ts'
 import { createPredictor } from './net/prediction.ts'
 import { CorrectionBand, decayMsFor } from './net/reconcile.ts'
 import { websocketTransport } from './net/websocketTransport.ts'
@@ -78,10 +87,21 @@ import { FRAME_BUDGET_MS, type FrameVerdict } from './render/frameStats.ts'
 import { createRenderOffset, withRenderOffset } from './render/renderOffset.ts'
 import { type Renderer, createRenderer } from './render/renderer.ts'
 import { REFERENCE_VIEW, interpolateNetState, interpolateOrigin } from './render/view.ts'
+import { browserCopyEnv } from './ui/clipboard.ts'
 import { demoMode, demoModel } from './ui/demo.ts'
 import { createFeedbackTracker } from './ui/feedback.ts'
 import { createMatchHud } from './ui/hud.ts'
 import { type HudModel, hudModel } from './ui/hudModel.ts'
+import { type MenuScreen, createMenu } from './ui/menu.ts'
+import { matchIntent, roomUrl, shareLink } from './ui/roomFlow.ts'
+import {
+  type Settings,
+  browserStorage,
+  createSettingsStore,
+  degreesPerCount,
+  verticalFovRadians,
+} from './ui/settings.ts'
+import { bounceReason, createBouncePage, probeDevice } from './ui/unsupported.ts'
 
 const BUILD = import.meta.env.VITE_BUILD ?? 'dev'
 
@@ -150,9 +170,15 @@ export type DebugSnapshot = {
   readonly clientHash: number
   readonly locked: boolean
   readonly raw: boolean
+  /** The raw-input verdict with its uncertainty intact. `input/pointerLock.ts`. */
+  readonly rawInput: RawInput
+  /** Which menu screen is up, or `hidden`. `ui/menu.ts`. */
+  readonly menu: MenuScreen
+  /** What this browser has stored. Presentation only — the server never sees it. */
+  readonly settings: Settings
   readonly render: RenderSnapshot
   readonly audio: AudioSnapshot
-  readonly net: ReturnType<ReturnType<typeof createNetClient>['snapshot']>
+  readonly net: ReturnType<NetClient['snapshot']>
   /**
    * The in-match readout, projected **fresh at the moment of the call** rather
    * than the copy the HUD last drew from.
@@ -227,19 +253,6 @@ function protocolOverride(search: string): number | undefined {
 function mapHashOverride(search: string): string | undefined {
   const raw = new URLSearchParams(search).get('map')
   return raw !== null && /^[0-9a-f]{8}$/.test(raw) ? raw : undefined
-}
-
-/**
- * `?local=1` — the listen server.
- *
- * Hosts the authoritative `Room` in this tab and talks to it over a loopback,
- * which is the same code path a duel on Fly takes: same handshake, same map
- * hash check, same framing, same hash echo. It is what single-player will run
- * on once there is a bot to play against (GLAD-TSED8V), and it is how anybody
- * plays with no server up.
- */
-function localMode(search: string): boolean {
-  return new URLSearchParams(search).get('local') !== null
 }
 
 /**
@@ -371,15 +384,38 @@ async function boot(): Promise<void> {
   overlay.id = 'overlay'
   app.append(canvas, overlay)
 
+  const shot = shotMode(window.location.search)
+  // What this URL is asking for: the menu, a room, single-player, or a match
+  // opened without a menu in front of it. `ui/roomFlow.ts`.
+  const intent = matchIntent(window.location.search)
+
+  // Before the renderer, before the socket, and before anything asks for a
+  // pointer lock: a room code is a link sent through a chat app, and a chat app
+  // is mostly read on a phone. What that player must not get is the game trying
+  // anyway. `ui/unsupported.ts` argues the detection at length.
+  const bounce = shot ? null : bounceReason(probeDevice())
+  if (bounce !== null) {
+    canvas.remove()
+    const code = intent.kind === 'join' ? intent.code : null
+    createBouncePage(overlay, {
+      reason: bounce,
+      code,
+      // Their own address bar, so the link they are handed is the one they
+      // arrived on — including the room, if there is one.
+      link: window.location.href,
+      copy: browserCopyEnv(),
+    })
+    return
+  }
+
   const hud = createHud(overlay)
   // The in-match readout, alongside the diagnostics panel rather than instead
   // of it: that panel is the netcode's instrument and the browser test's, and
-  // turning it into a setting belongs to the menus (GLAD-NPCTU8). The two are
-  // laid out so as not to collide, which `scripts/e2e.mjs` checks at three
-  // aspect ratios.
+  // it is now a setting (`ui/settings.ts`) rather than furniture nobody asked
+  // for. The two are laid out so as not to collide, which `scripts/e2e.mjs`
+  // checks at three aspect ratios.
   const matchHud = createMatchHud(overlay)
   const feedback = createFeedbackTracker()
-  const shot = shotMode(window.location.search)
   if (shot) overlay.hidden = true
   // Nothing sends snapshots yet, so there is otherwise no opponent to draw.
   // `dummyOpponent.ts` says why this exists and why it stays out of the
@@ -417,7 +453,30 @@ async function boot(): Promise<void> {
     return
   }
 
-  const input = createInputController(canvas)
+  // What the player has set, out of this browser's own storage.
+  //
+  // Read before the input controller and the first frame, because both are
+  // written from it: a sensitivity that arrived a frame late would be a flick
+  // taken at the default. Nothing in here ever reaches the server —
+  // `ui/settings.ts` says why that is a rule rather than an accident.
+  const settings = createSettingsStore(browserStorage())
+
+  const input = createInputController(canvas, {
+    degreesPerCount: degreesPerCount(settings.value),
+  })
+
+  const applySettings = (value: Settings) => {
+    input.setDegreesPerCount(degreesPerCount(value))
+    renderer.setFov(verticalFovRadians(value.fovDegrees))
+    hud.setVisible(value.diagnostics)
+  }
+  // Never in shot mode. A reference screenshot has to be a picture of the same
+  // page on every machine, and a stored field of view is the one setting that
+  // would quietly change what is in frame.
+  if (!shot) {
+    settings.onChange(applySettings)
+    applySettings(settings.value)
+  }
 
   // The effects fold, and the one thing it cannot derive: where a shot landed.
   // It is handed the simulation's own hitscan over the map the client is
@@ -463,17 +522,10 @@ async function boot(): Promise<void> {
   // somebody asks for it — and never in shot mode, where the page is a picture
   // with nothing moving in it on purpose.
   //
-  // `C` only while the pointer is unlocked: a menu that can open mid-duel is a
-  // duel someone loses to a mistyped key. The real menu is GLAD-NPCTU8's.
+  // `C` only while the pointer is unlocked and no menu is up: a screen that can
+  // open mid-duel is a duel someone loses to a mistyped key, and a `C` typed
+  // into the room-code box is a room code, not a shortcut.
   const credits = createCreditsScreen(overlay)
-  if (!shot) {
-    window.addEventListener('keydown', (event) => {
-      if (event.repeat) return
-      if (event.code === 'Escape' && credits.isOpen) credits.close()
-      else if (event.code === 'KeyC' && !input.locked) credits.toggle()
-    })
-    if (creditsRequested(window.location.search)) credits.open()
-  }
 
   const override = protocolOverride(window.location.search)
   const mapOverride = mapHashOverride(window.location.search)
@@ -519,66 +571,268 @@ async function boot(): Promise<void> {
   // nothing happening on it, and a page that opened a socket would be one where
   // something was.
   const serverUrl = resolveServerUrl(import.meta.env.VITE_SERVER_URL, window.location)
-  const listen = !shot && localMode(window.location.search)
-    ? createListenServer({ map: CLIENT_MAP, build: BUILD })
-    : null
 
-  let transport: Transport | null = null
-  let endpoint = 'nowhere'
-  if (listen !== null) {
-    transport = listen.transport
-    endpoint = 'the host in this tab'
-  } else if (!shot && serverUrl !== null) {
-    // `?room=ABC123` joins the match that code names; no code at all asks the
-    // host for a new one, and the code it mints comes back in the welcome. The
-    // menu that puts a link in front of a player rather than a query string is
-    // GLAD-NPCTU8; this is the wire underneath it.
-    const url = joinUrl(serverUrl, window.location.search)
-    transport = websocketTransport(url)
-    endpoint = url
+  /**
+   * A match: the pipe to a host, and the host itself when it is in this tab.
+   *
+   * `null` until the player picks something, which is the state a page now
+   * opens in. That is the whole shape change this ticket made here — the socket
+   * used to be opened at boot from whatever was in the query string, and a menu
+   * is exactly the thing that cannot work that way.
+   */
+  type Session = {
+    readonly net: NetClient
+    /** The host in this tab, for single-player. `null` over a socket. */
+    readonly listen: ListenServer | null
+    /** Whether the room code this session ends up in is one a friend can join. */
+    readonly shareable: boolean
+  }
+  let session: Session | null = null
+
+  const openSession = (transport: Transport | null, endpoint: string): NetClient =>
+    createNetClient({
+      transport,
+      endpoint,
+      build: BUILD,
+      mapHash: CLIENT_MAP_HASH,
+      onSnapshot: (snapshot) => {
+        // The history first. `accept` overwrites the world with this state and
+        // then replays our unacknowledged commands on top of it, so the
+        // authoritative entities the interpolator wants are gone by the time it
+        // returns.
+        opponentHistory.push(snapshot.state)
+
+        const correction = predictor.accept(snapshot)
+        if (correction === null) return
+
+        if (correction.band === CorrectionBand.Snap) {
+          // Past a splash radius there is nothing honest left to smooth: the
+          // player is somewhere else, and carrying 200 units of offset would
+          // draw them somewhere they demonstrably are not.
+          renderOffset.clear()
+          snapped = true
+          console.warn(
+            `gladiator: hard snap of ${correction.distance.toFixed(0)} qu at tick ${correction.tick}`,
+          )
+          return
+        }
+
+        renderOffset.push(correction.offset, decayMsFor(correction.band))
+        if (correction.band === CorrectionBand.Loud) {
+          // Logged rather than silently smoothed. Thirty units is past what a
+          // couple of unpredicted ticks can account for, so it is worth knowing
+          // that it happened even though the player will not see it.
+          console.warn(
+            `gladiator: correction of ${correction.distance.toFixed(1)} qu at tick ${correction.tick}`,
+          )
+        }
+      },
+      ...(override === undefined ? {} : { protocolOverride: override }),
+      ...(mapOverride === undefined ? {} : { mapHashOverride: mapOverride }),
+    })
+
+  /**
+   * Single-player: the authoritative host, in this tab.
+   *
+   * The same code path a duel on Fly takes — same handshake, same map hash
+   * check, same framing, same hash echo — over a loopback instead of a socket.
+   * It is what the bot will be dueled through (GLAD-TSED8V) and how anybody
+   * plays with no server up. `net/listenServer.ts`; `?local=1` boots straight
+   * into it, and "play the bot" is the same call.
+   */
+  const startBotMatch = (): void => {
+    if (session !== null || shot) return
+    const listen = createListenServer({ map: CLIENT_MAP, build: BUILD })
+    session = {
+      listen,
+      net: openSession(listen.transport, 'the host in this tab'),
+      // A tab's room has no registry behind it and no socket in front of it, so
+      // its code names nothing anybody else can reach.
+      shareable: false,
+    }
+    session.net.connect()
   }
 
-  const net = createNetClient({
-    transport,
-    endpoint,
-    build: BUILD,
-    mapHash: CLIENT_MAP_HASH,
-    onSnapshot: (snapshot) => {
-      // The history first. `accept` overwrites the world with this state and
-      // then replays our unacknowledged commands on top of it, so the
-      // authoritative entities the interpolator wants are gone by the time it
-      // returns.
-      opponentHistory.push(snapshot.state)
+  /**
+   * A match on the host: `code` joins that room, `null` asks for a new one.
+   *
+   * The two are one function because they are one thing over the wire — the
+   * only difference is a query parameter — and because "create" and "join" are
+   * the same button as far as everything downstream is concerned.
+   */
+  const startRemoteMatch = (code: string | null): void => {
+    if (session !== null || shot) return
+    if (serverUrl === null) {
+      // Built with no host to talk to. `createNetClient` says so on the page
+      // rather than failing to dial something that was never configured.
+      session = { listen: null, net: openSession(null, 'nowhere'), shareable: false }
+      session.net.connect()
+      return
+    }
+    const url = joinUrl(serverUrl, code)
+    session = { listen: null, net: openSession(websocketTransport(url), url), shareable: true }
+    session.net.connect()
+  }
 
-      const correction = predictor.accept(snapshot)
-      if (correction === null) return
+  /**
+   * Whether there is a menu on this page at all.
+   *
+   * The two URLs that are pictures rather than games do not get one: `?shot=1`
+   * is a reference screenshot of a world with nothing happening in it, and
+   * `?hud=demo` is the in-match readout being *looked at* — a menu over either
+   * would be a menu in the photograph.
+   */
+  const menuAllowed = !shot && !hudDemo
 
-      if (correction.band === CorrectionBand.Snap) {
-        // Past a splash radius there is nothing honest left to smooth: the
-        // player is somewhere else, and carrying 200 units of offset would draw
-        // them somewhere they demonstrably are not.
-        renderOffset.clear()
-        snapped = true
-        console.warn(
-          `gladiator: hard snap of ${correction.distance.toFixed(0)} qu at tick ${correction.tick}`,
-        )
+  // The two things a browser will only do inside a user gesture, together. Held
+  // as one value because they have to be one click: `audio/gesture.ts`.
+  const gesture = {
+    resume: () => audio?.resume(),
+    requestLock: () => input.requestLock(),
+  }
+
+  const menu = createMenu(overlay, {
+    settings,
+    copy: browserCopyEnv(),
+    // Built from this page's own address, so a link handed out on a preview
+    // deploy points at the preview and one handed out on the real origin points
+    // at the real origin. `ui/roomFlow.ts` throws the query string away first.
+    shareLink: (code) => shareLink(window.location.href, code),
+    openCredits: () => credits.open(),
+    startBot: () => {
+      startBotMatch()
+      // The click that chose single-player is a perfectly good gesture, and
+      // making the player produce a second one to get into a game they already
+      // asked for is the friction this ticket is about.
+      runGesture(gesture)
+    },
+    createRoom: () => {
+      startRemoteMatch(null)
+      menu.setRoom(null)
+      menu.setStatus('opening a room…')
+      menu.show('room')
+    },
+    joinRoom: (code) => {
+      startRemoteMatch(code)
+      menu.setRoom(code)
+      menu.setTypedCode(code)
+      menu.setStatus('joining…')
+      menu.show('room')
+    },
+    enterArena: () => runGesture(gesture),
+    back: () => menu.show(session === null ? 'main' : 'paused'),
+    // A reload rather than a teardown: it drops the socket, the room in the
+    // address bar and every scrap of match state in one move, and lands on
+    // exactly the page a stranger gets.
+    leave: () => {
+      window.location.href = window.location.pathname
+    },
+  })
+
+  // The pointer lock is what says whether the player is *in* the match, so it is
+  // what opens and closes the pause screen. Escape is the browser's, not ours:
+  // it drops the lock, this notices, and the menu comes up over a match that is
+  // still running. Nothing is torn down, which is why resuming is one click.
+  input.onLockChange((locked) => {
+    if (locked) {
+      menu.setLockDenied(null)
+      menu.show('hidden')
+    } else if (menuAllowed && session !== null) {
+      menu.show('paused')
+    }
+  })
+  // Every browser refuses to re-lock for a moment after the player released the
+  // lock themselves. The cure is another gesture and never a timer, so this
+  // says so on screen and waits to be clicked again. `input/pointerLock.ts`.
+  input.onLockDenied((reason) => {
+    if (input.locked) return
+    menu.setLockDenied(reason)
+    if (menuAllowed && session !== null) menu.show('paused')
+  })
+
+  if (!shot) {
+    window.addEventListener('keydown', (event) => {
+      if (event.repeat) return
+      if (event.code === 'Escape') {
+        if (credits.isOpen) credits.close()
+        // Inside the menu, escape steps back. It never *opens* the pause
+        // screen: the browser does that by taking the lock away, and a second
+        // path to the same state is a state machine with two owners.
+        else if (menu.screen === 'settings' || menu.screen === 'join' || menu.screen === 'room') {
+          menu.show(session === null ? 'main' : 'paused')
+        }
         return
       }
+      if (event.code === 'KeyC' && !input.locked && !menu.isOpen) credits.toggle()
+    })
+    if (creditsRequested(window.location.search)) credits.open()
+  }
 
-      renderOffset.push(correction.offset, decayMsFor(correction.band))
-      if (correction.band === CorrectionBand.Loud) {
-        // Logged rather than silently smoothed. Thirty units is past what a
-        // couple of unpredicted ticks can account for, so it is worth knowing
-        // that it happened even though the player will not see it.
-        console.warn(
-          `gladiator: correction of ${correction.distance.toFixed(1)} qu at tick ${correction.tick}`,
-        )
-      }
-    },
-    ...(override === undefined ? {} : { protocolOverride: override }),
-    ...(mapOverride === undefined ? {} : { mapHashOverride: mapOverride }),
-  })
-  if (!shot) net.connect()
+  // What the URL asked for, acted on. Every branch here is reachable from the
+  // menu as well — the URL is a shortcut into the same three calls, never a
+  // second way of doing them.
+  if (menuAllowed) {
+    menu.setRawInput(input.rawInput)
+    if (intent.kind === 'bot') startBotMatch()
+    else if (intent.kind === 'create') startRemoteMatch(null)
+    else if (intent.kind === 'join') {
+      // The whole point of the room-code flow: a player who was sent a link
+      // lands here already connecting, with the code in the box, and the only
+      // thing left is the click the browser demands before it will lock a
+      // pointer. Nothing is typed twice.
+      startRemoteMatch(intent.code)
+      menu.setRoom(intent.code)
+      menu.setTypedCode(intent.code)
+      menu.setStatus('joining…')
+      menu.show('room')
+    } else if (intent.kind === 'join-typo') {
+      // Something arrived in `?room=` that is not a code — a chat client ate a
+      // character, or it was read out over a bad line. The join box, open, with
+      // their attempt still in it.
+      menu.setTypedCode(intent.typed)
+      menu.show('join')
+    } else {
+      menu.show('main')
+    }
+  } else if (!shot) {
+    // No menu on this page, so the URL is the only thing that can start a
+    // match, and `?hud=demo` deliberately starts none.
+    if (intent.kind === 'bot') startBotMatch()
+  }
+
+  /** The room already written into the address bar, so it is written once. */
+  let addressedRoom: string | null = intent.kind === 'join' ? intent.code : null
+  /** Whether a real opponent has been in a snapshot, for the room's status. */
+  let opponentSeen = false
+
+  /** What the room screen says under the code. */
+  const roomStatus = (net: ReturnType<NetClient['snapshot']>): string => {
+    if (net.status === 'connecting' || net.status === 'idle') return 'connecting to the host…'
+    if (net.status !== 'live') return net.message
+    if (opponentSeen) return 'your opponent is here — good luck'
+    return 'waiting for your friend. Send them the link; they land straight in this match.'
+  }
+
+  /**
+   * The menu, told what the session is doing. Ten times a second, with the
+   * diagnostics panel, because none of it changes faster than that.
+   */
+  const syncMenu = (): void => {
+    if (!menuAllowed) return
+    menu.setRawInput(input.rawInput)
+    if (session === null) return
+    const net = session.net.snapshot()
+    if (session.shareable && net.room !== null && net.room !== addressedRoom) {
+      // The host minted a code and this is the first we have heard of it. Into
+      // the address bar it goes, so that a reload rejoins this match rather
+      // than opening a second empty one — and so that the browser's own share
+      // button hands out something that works.
+      addressedRoom = net.room
+      menu.setRoom(net.room)
+      window.history.replaceState(null, '', roomUrl(net.room, window.location.search))
+    }
+    menu.setStatus(roomStatus(net))
+  }
 
   // Adopt the yaw the spawn point was authored with.
   //
@@ -673,9 +927,12 @@ async function boot(): Promise<void> {
       clientHash,
       locked: input.locked,
       raw: input.raw,
+      rawInput: input.rawInput,
+      menu: menu.screen,
+      settings: settings.value,
       render: renderSnapshot(),
       audio: audio?.snapshot() ?? NO_AUDIO,
-      net: net.snapshot(),
+      net: session?.net.snapshot() ?? NO_SESSION,
       hud: hudModel(state, LOCAL_SLOT),
       hudFrames: matchHud.frames,
     }),
@@ -749,15 +1006,19 @@ async function boot(): Promise<void> {
     // last frame into whole 8 ms sub-steps, runs them, and does the
     // housekeeping the clock-sync conversation rides on. On Fly the same two
     // calls are made by `scheduler.ts`; here they are made by the display.
-    listen?.beat(nowMs)
+    session?.listen?.beat(nowMs)
 
     // Input is sampled once per frame, not once per tick: a browser only
     // delivers mouse and key events between frames, so a per-tick sample would
     // be the same value read several times with extra steps.
     const cmd = input.sample()
-    const status = net.snapshot().status
+    // `idle` before a match has been picked, which is also what
+    // `mustHoldStill` wants to hear: a page sitting on the menu has no host to
+    // agree with, so its world does not advance. See `NO_SESSION`.
+    const net = session?.net ?? null
+    const status = net?.snapshot().status ?? NO_SESSION.status
 
-    if (mustHoldStill(status)) {
+    if (net === null || mustHoldStill(status)) {
       // Hold the world still until we know whether there is a server to agree
       // with — and stop it again if we turn out to be holding a different map
       // than the one it is authoritative over. See `mustHoldStill`.
@@ -839,6 +1100,10 @@ async function boot(): Promise<void> {
       )
     const opponents: PlayerNetState[] =
       drawnPlayers.length > 0 ? drawnPlayers : dummy ? [dummyAt(state.tick, alpha)] : []
+    // Sticky, because the room screen's line is about whether anybody ever
+    // turned up rather than about whether they are in this frame's snapshot: a
+    // dropped packet is not your friend leaving.
+    if (drawnPlayers.length > 0) opponentSeen = true
 
     // The eye, interpolated once and used twice: the camera is put here and so
     // is the listener. Literally the same vector, because ears half a tick from
@@ -912,9 +1177,12 @@ async function boot(): Promise<void> {
       ? demoModel(Math.floor(demoTicks), LOCAL_SLOT, cmd.yaw)
       : hudModel(state, LOCAL_SLOT)
     matchHud.update(readout, feedback.observe(readout))
-    // Off the screen entirely when the session is unrecoverable: the panel is
-    // already saying "reload", and a round score in front of it is furniture.
-    matchHud.setVisible(!isFatal(status))
+    // Off the screen entirely when the session is unrecoverable — the panel is
+    // already saying "reload", and a round score in front of it is furniture —
+    // and before there is a match at all, where a full health bar over the main
+    // menu would be a readout of nothing. The demo is the exception, because
+    // being looked at with no match on is the whole point of it.
+    matchHud.setVisible(!isFatal(status) && (session !== null || hudDemo))
 
     hudDueMs -= elapsedMs
     if (hudDueMs > 0) {
@@ -922,6 +1190,10 @@ async function boot(): Promise<void> {
       return
     }
     hudDueMs = HUD_INTERVAL_MS
+    // The menu's own reading of the session: the room code, whether the friend
+    // arrived, and what the browser did with the pointer lock. Ten times a
+    // second, with everything else that changes slowly.
+    syncMenu()
     // A percentile costs a sort of the whole window, so it is computed here,
     // ten times a second, rather than once a frame. Measuring frame pacing is
     // not allowed to be the thing that costs a frame.
@@ -937,8 +1209,10 @@ async function boot(): Promise<void> {
       tick: state.tick,
       ticksPerSecond: TICK_RATE,
       clientHash,
-      locked: input.locked,
-      net: net.snapshot(),
+      // "Click to play" is for a page with nothing in front of it. The menu
+      // has a button that says the same thing with a room code above it.
+      prompt: !input.locked && !menu.isOpen,
+      net: net?.snapshot() ?? NO_SESSION,
       corrected: predictor.stats.soft + predictor.stats.loud + predictor.stats.snaps,
       pending: predictor.pending,
     })

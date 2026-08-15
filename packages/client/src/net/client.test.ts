@@ -92,26 +92,25 @@ function connected(protocolOverride?: number) {
 }
 
 describe('joinUrl', () => {
-  it('asks for a new room when the page names none', () => {
+  it('asks for a new room when the player named none', () => {
     // The host mints the code and puts it in the welcome, so a player who
-    // opened the page with nothing in the query string has a link to send.
+    // pressed "create a match" has a link to send.
+    expect(joinUrl('wss://gladiator.fly.dev', null)).toBe('wss://gladiator.fly.dev')
     expect(joinUrl('wss://gladiator.fly.dev', '')).toBe('wss://gladiator.fly.dev')
-    expect(joinUrl('wss://gladiator.fly.dev', '?local=1')).toBe('wss://gladiator.fly.dev')
-    expect(joinUrl('wss://gladiator.fly.dev', '?room=')).toBe('wss://gladiator.fly.dev')
   })
 
   it('carries the code through verbatim, whatever the player typed', () => {
     // Not folded here. The host is the only thing that knows which codes exist
     // and it does the folding (`@gladiator/server/roomCode.ts`); a client with
     // its own opinion of the alphabet would be a second copy to keep in step.
-    expect(joinUrl('wss://gladiator.fly.dev', '?room=H7K2Q9')).toBe(
+    expect(joinUrl('wss://gladiator.fly.dev', 'H7K2Q9')).toBe(
       'wss://gladiator.fly.dev/?room=H7K2Q9',
     )
-    expect(joinUrl('wss://gladiator.fly.dev', '?room=h7k-2q9')).toContain('room=h7k-2q9')
+    expect(joinUrl('wss://gladiator.fly.dev', 'h7k-2q9')).toContain('room=h7k-2q9')
   })
 
   it('keeps whatever else the socket URL already carried', () => {
-    expect(joinUrl('ws://localhost:8787/?x=1', '?room=H7K2Q9')).toBe(
+    expect(joinUrl('ws://localhost:8787/?x=1', 'H7K2Q9')).toBe(
       'ws://localhost:8787/?x=1&room=H7K2Q9',
     )
   })
@@ -206,6 +205,23 @@ describe('net client', () => {
     })
     expect(client.snapshot().serverMapHash).toBe(MAP_HASH)
     expect(mustHoldStill(client.snapshot().status)).toBe(false)
+  })
+
+  it('carries the room the host seated this session in', () => {
+    // How a player who *created* a match learns the code to send: they asked
+    // for no room at all, and this is the host's answer. `ui/menu.ts` puts it
+    // on screen and `main.ts` writes it into the address bar.
+    const { transport, client } = connected()
+    expect(client.snapshot().room).toBe(null)
+    transport.deliver({
+      t: 'welcome',
+      protocol: PROTOCOL_VERSION,
+      build: 'srv',
+      session: 's1',
+      mapHash: MAP_HASH,
+      room: ROOM,
+    })
+    expect(client.snapshot().room).toBe(ROOM)
   })
 
   it('reports agreement when the hashes match', () => {

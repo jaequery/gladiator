@@ -277,6 +277,40 @@ anything else. `scripts/e2e.mjs`.
 
 ---
 
+## The menus
+
+**Menu** — everything around the match: the main screen, the join box, the room,
+the settings and the pause. Five screens, one file, and no decisions —
+`packages/client/src/ui/menu.ts` is a view over state `main.ts` owns.
+
+**Session** — a match this page is in: a `NetClient`, and the host in this tab
+when there is one. `null` until the player picks something, which is what makes
+a menu possible at all. `client/src/main.ts`.
+
+**Share link** — the page's own address with a room code on it and nothing else.
+What a host sends a friend; opening one is the entire join flow.
+`ui/roomFlow.ts`.
+
+**Match intent** — what a URL is asking for: the menu, a room to join, the bot,
+or a room to open. `?room=` outranks `?host=1`, so a host who reloads rejoins
+rather than opening a second, empty room. `ui/roomFlow.ts`.
+
+**cm/360** — the sensitivity setting: centimetres of mouse movement per 360
+degrees. A *distance*, because that is what transfers between shooters, and it
+needs the mouse's counts per inch to become an angle. `ui/settings.ts`.
+
+**Raw input verdict** — `granted`, `refused` or `unknown`: whether the browser
+said it applied `unadjustedMovement`. Three states because a browser on the
+events-only Pointer Lock specification cannot answer at all, and a game that
+guessed would be a game whose cm/360 quietly means something else.
+`input/pointerLock.ts`; the matrix is `docs/browser-support.md`.
+
+**Bounce page** — what a device with no mouse gets instead of the game: one
+sentence, the room code, and the link back. Detected from capabilities and never
+from a user-agent string. `ui/unsupported.ts`.
+
+---
+
 ## The network
 
 **Host** — whatever is authoritative over a world: `packages/server/src/room.ts`

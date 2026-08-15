@@ -36,6 +36,7 @@ recorded in [`credits.json`](./credits.json) and rendered to
 | `pnpm run assets:budget` | fails if a committed asset is over 5 MB, or all of them over 24 MB |
 | `pnpm run ci`        | all seven, in that order — the whole gate in one command |
 | `pnpm run e2e`       | the browser smoke test — needs Chromium, own CI job    |
+| `pnpm run raw-input` | measures `unadjustedMovement` per browser; `--write` updates `docs/browser-support.md`, `--check` fails on drift |
 
 Two more exist and are not part of `ci`, because both write files that are then
 reviewed: `pnpm run assets:vendor` re-fetches the KTX2 transcoders on a Babylon
@@ -1032,6 +1033,60 @@ Layout is checked rather than eyeballed: every element carrying `data-hud-box`
 is measured by `pnpm run e2e` at 16:9, 21:9 and 4:3, and must be on screen and
 overlapping nothing. That set includes the diagnostics panel and the pointer
 prompt, because "nothing overlaps" has to mean nothing.
+
+---
+
+## The menus
+
+`packages/client/src/ui/menu.ts`, `roomFlow.ts`, `settings.ts`,
+`unsupported.ts`, and the browser matrix in
+[`docs/browser-support.md`](./docs/browser-support.md). Five things to know
+before changing any of it.
+
+**A page opens on a menu and connects to nothing.** The socket used to be dialled
+at boot from whatever was in the query string; a menu is exactly the thing that
+cannot work that way. `main.ts` now holds a `Session | null` — a `NetClient` and,
+for single-player, the host in this tab — and every mode is one of three calls
+into it. Before there is one, `mustHoldStill` is true and the world does not
+advance, which is the same rule that already covered a socket that has not
+opened yet.
+
+**The room code lives in the query string and nowhere else.** `?room=H7K2Q9` is
+the whole lobby: it is what a host sends, what a reload rejoins on, and what the
+address bar is rewritten to the moment the host mints one. A code is folded by
+the *server's* `normalizeRoomCode` — imported, never restated — because a client
+with its own copy of the alphabet is a second opinion to keep in step, and the
+failure mode is a player being told a perfectly good code does not exist.
+
+**Three URLs skip the menu, and they are siblings of `?shot=1`.** `?local=1` is
+single-player, `?host=1` opens a room and goes straight in, `?room=` joins one.
+`?host=1` is what `scripts/e2e.mjs` drives so the browser test measures the game
+rather than a menu; a player never types it, they press "create a match", which
+is the same call with the menu still on screen.
+
+**Sensitivity is cm/360 and it never leaves the machine.** Centimetres of mouse
+travel per full turn, converted through the mouse's own counts per inch, because
+a *distance* is what transfers between shooters and a multiplier is not.
+`controller.test.ts` measures a full turn through the real accumulation rather
+than restating the arithmetic. Settings are `localStorage` and presentation
+only: the server receives angles, already quantised, and has no opinion about the
+hand that produced them — a client that could tell the host its FOV is a client
+that could ask for a wider one.
+
+**Raw mouse input has three answers, not two.** `granted`, `refused` and
+`unknown`, because a browser on the events-only Pointer Lock specification takes
+the option, ignores it, and never says — and a game that guessed "granted" would
+be a game whose cm/360 quietly means something else. The fallback warning covers
+`unknown` too. Escape is the browser's: it drops the lock, the pause screen goes
+up over a match that is still running, and getting back in is a *fresh click*,
+never a timer — every engine refuses to re-lock straight after the default
+unlock gesture, transient activation or not.
+
+And one that is not about the menus at all: **somebody will open the room link on
+a phone.** `ui/unsupported.ts` bounces them, before the renderer and before any
+socket, with the code and the link still in their hands. It detects
+capabilities — pointer lock, `(pointer: fine)` — and never the user-agent
+string, and it lets through anything it cannot classify.
 
 ---
 

@@ -18,13 +18,27 @@ import {
   yawUnitsFromDegrees,
 } from '@gladiator/sim'
 
-import { createPointerLock } from './pointerLock.ts'
+import { type RawInput, createPointerLock } from './pointerLock.ts'
 
-/** Degrees of view rotation per unit of raw mouse movement. Quake's `m_yaw`. */
+/**
+ * Degrees of view rotation per unit of raw mouse movement, in Quake: `m_yaw`.
+ *
+ * Kept because it is the constant every `sensitivity` figure in every Quake
+ * config is implicitly multiplied by, and `ui/settings.ts` quotes it back to a
+ * player who thinks in those terms. It is *not* what this game multiplies by:
+ * the setting is centimetres per 360 degrees, which the settings module turns
+ * into degrees per count directly.
+ */
 export const DEGREES_PER_COUNT = 0.022
 
-/** The `sensitivity` cvar, in spirit. Settings are GLAD-NPCTU8. */
-export const DEFAULT_SENSITIVITY = 2.5
+/**
+ * Degrees per count before the settings store has said otherwise.
+ *
+ * Only ever seen by a controller constructed without one — a test, or the
+ * handful of frames before the first `setDegreesPerCount`. `ui/settings.ts`
+ * owns the real number and `DEFAULT_CM_360` is where it comes from.
+ */
+export const DEFAULT_DEGREES_PER_COUNT = 0.0381
 
 /** Movement keys, by `KeyboardEvent.code` so the layout does not matter. */
 const FORWARD_KEYS = ['KeyW', 'ArrowUp']
@@ -45,6 +59,10 @@ const WEAPON_KEYS: readonly (readonly [string, Weapon])[] = [
   ['Digit1', Weapon.RocketLauncher],
   ['Digit2', Weapon.Railgun],
 ]
+
+/** Nothing held at all — what {@link InputController.sample} reads when the
+ *  pointer is loose. One shared empty set; it is never written to. */
+const NO_KEYS: ReadonlySet<string> = new Set()
 
 const TRACKED_KEYS = new Set([
   ...FORWARD_KEYS,
@@ -67,6 +85,8 @@ export type InputController = {
   readonly locked: boolean
   /** Whether the browser is giving us unaccelerated mouse deltas. */
   readonly raw: boolean
+  /** The same, with its uncertainty intact. `pointerLock.ts`. */
+  readonly rawInput: RawInput
   readonly angles: ViewAngles
   /** Build the command for the tick about to be simulated. */
   sample(): UserCmd
@@ -74,6 +94,17 @@ export type InputController = {
   requestLock(): void
   /** Called on every pointer-lock state change, with the new state. */
   onLockChange(listener: (locked: boolean) => void): void
+  /** Called when the browser refused a lock — see `pointerLock.ts`. */
+  onLockDenied(listener: (reason: string) => void): void
+  /**
+   * Change how far the view turns per mouse count, mid-session.
+   *
+   * The settings screen writes cm/360 and this is what it comes out as
+   * (`ui/settings.ts`). A live setter rather than a constructor argument
+   * because a player adjusts sensitivity by feel — turn, look, adjust, turn —
+   * and a change that needed a reload would be adjusted once and left.
+   */
+  setDegreesPerCount(value: number): void
   dispose(): void
 }
 
@@ -104,8 +135,32 @@ export function commandFrom(
   }
 }
 
+/**
+ * Turn one mouse event into a view, in place.
+ *
+ * Exported and pure so that "30 cm/360 turns exactly once" is a claim a test
+ * can *measure* rather than an arithmetic identity restated — `controller.test.ts`
+ * walks the counts a full turn is supposed to take through this and checks
+ * where the view ended up. The DOM handler below is a two-line call to it, so
+ * what the test measures is what a mouse drives.
+ */
+export function applyMouseDelta(
+  angles: ViewAngles,
+  movementX: number,
+  movementY: number,
+  degreesPerCount: number,
+): void {
+  angles.yawDegrees -= movementX * degreesPerCount
+  angles.pitchDegrees -= movementY * degreesPerCount
+  // Keep yaw in a band a float can hold precisely over a long session.
+  angles.yawDegrees = ((angles.yawDegrees % 360) + 360) % 360
+  if (angles.pitchDegrees > 89) angles.pitchDegrees = 89
+  if (angles.pitchDegrees < -89) angles.pitchDegrees = -89
+}
+
 export type InputOptions = {
-  readonly sensitivity?: number
+  /** Degrees of view rotation per mouse count. `ui/settings.ts` computes it. */
+  readonly degreesPerCount?: number
 }
 
 /** Wire up a canvas for play. */
@@ -113,7 +168,7 @@ export function createInputController(
   canvas: HTMLCanvasElement,
   options: InputOptions = {},
 ): InputController {
-  const sensitivity = options.sensitivity ?? DEFAULT_SENSITIVITY
+  let degreesPerCount = options.degreesPerCount ?? DEFAULT_DEGREES_PER_COUNT
   const held = new Set<string>()
   const angles: ViewAngles = { yawDegrees: 0, pitchDegrees: 0 }
   const pointer = createPointerLock(canvas)
@@ -137,12 +192,7 @@ export function createInputController(
 
   const onMouseMove = (event: MouseEvent) => {
     if (!pointer.locked) return
-    angles.yawDegrees -= event.movementX * DEGREES_PER_COUNT * sensitivity
-    angles.pitchDegrees -= event.movementY * DEGREES_PER_COUNT * sensitivity
-    // Keep yaw in a band a float can hold precisely over a long session.
-    angles.yawDegrees = ((angles.yawDegrees % 360) + 360) % 360
-    if (angles.pitchDegrees > 89) angles.pitchDegrees = 89
-    if (angles.pitchDegrees < -89) angles.pitchDegrees = -89
+    applyMouseDelta(angles, event.movementX, event.movementY, degreesPerCount)
   }
 
   // Fire is only fire while the pointer is locked. Otherwise the click that
@@ -180,10 +230,26 @@ export function createInputController(
     get raw() {
       return pointer.raw
     },
+    get rawInput() {
+      return pointer.rawInput
+    },
     angles,
-    sample: () => commandFrom(held, angles, weapon),
+    // No lock, no movement — and the view angles left exactly where they were.
+    //
+    // A match keeps running while the pause menu is up (the host has not
+    // stopped, and neither has the opponent), so "not playing" has to mean
+    // *sending nothing*, not sending nothing new. Without this, a W held when
+    // the player pressed escape, or a space that pressed the focused menu
+    // button, is also a command: the player walks off a ledge while reading
+    // their own room code. `ui/menu.ts` swallows the keys that land inside the
+    // menu; this covers every other key on the board.
+    sample: () => commandFrom(pointer.locked ? held : NO_KEYS, angles, weapon),
     requestLock: () => pointer.request(),
     onLockChange: (listener) => pointer.onChange(listener),
+    onLockDenied: (listener) => pointer.onDenied(listener),
+    setDegreesPerCount: (value) => {
+      degreesPerCount = value
+    },
     dispose: () => {
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)

@@ -111,6 +111,16 @@ export type NetSnapshot = {
   /** One line, already written for a human. The HUD prints it verbatim. */
   readonly message: string
   readonly serverBuild: string | null
+  /**
+   * The room this session ended up in, once the host has said, in canonical
+   * form — never an echo of what this client asked for.
+   *
+   * It is how a player who *created* a match learns the code to send: they sent
+   * none, the host minted one, and it arrives in the welcome. `ui/menu.ts` puts
+   * it on screen and `main.ts` writes it into the address bar, so that a reload
+   * rejoins rather than opening a second empty room.
+   */
+  readonly room: string | null
   /** The map hash this client actually sent — which `mapHashOverride` changes. */
   readonly mapHash: string
   /** The map the server is authoritative over, once it has said. */
@@ -243,7 +253,7 @@ export function resolveServerUrl(
 }
 
 /**
- * The socket URL for this page's `?room=`, or a plain one to open a new match.
+ * The socket URL for a room code, or a plain one to open a new match.
  *
  * `wss://host/` asks the host for a new room and the code it mints comes back
  * in the welcome; `wss://host/?room=ABC123` joins the match that code names.
@@ -256,11 +266,11 @@ export function resolveServerUrl(
  * does: an unknown code is answered with a `fault` frame, which lands in
  * {@link NetSnapshot.message} and goes on the screen verbatim.
  *
- * The menu that puts a shareable link in front of a player instead of a query
- * string is GLAD-NPCTU8.
+ * A *code* rather than a query string, because the page's own URL is no longer
+ * the only place one can come from: `ui/menu.ts` has a join box, and the code a
+ * player types there has never been near `window.location`.
  */
-export function joinUrl(serverUrl: string, search: string): string {
-  const room = new URLSearchParams(search).get('room')
+export function joinUrl(serverUrl: string, room: string | null): string {
   if (room === null || room === '') return serverUrl
   const url = new URL(serverUrl)
   url.searchParams.set('room', room)
@@ -270,6 +280,38 @@ export function joinUrl(serverUrl: string, search: string): string {
 /** What the HUD says when a deploy was built with no host to talk to. */
 export const NO_SERVER_CONFIGURED =
   'VITE_SERVER_URL is not set for this deploy, so there is no server to talk to.'
+
+/**
+ * The reading before a match has been picked.
+ *
+ * A page now opens on a menu and connects to nothing until a player chooses
+ * something (`ui/menu.ts`), so there is a real state in which no `NetClient`
+ * exists yet — and the diagnostics panel still has to draw. `idle` rather than
+ * a fourth status word because it already means exactly this everywhere else,
+ * including in {@link mustHoldStill}: a world with no host to agree with does
+ * not advance.
+ */
+export const NO_SESSION: NetSnapshot = {
+  status: 'idle',
+  message: 'no match yet — pick one from the menu',
+  serverBuild: null,
+  room: null,
+  mapHash: '',
+  serverMapHash: null,
+  serverTick: null,
+  serverHash: null,
+  clientHash: null,
+  agree: null,
+  compared: 0,
+  mismatched: 0,
+  dropped: 0,
+  rttMs: null,
+  serverTickEstimate: null,
+  leadTicks: 0,
+  queuedAtServer: 0,
+  pings: 0,
+  snapshots: 0,
+}
 
 export function createNetClient(options: NetOptions): NetClient {
   const now = options.now ?? (() => performance.now())
@@ -294,6 +336,7 @@ export function createNetClient(options: NetOptions): NetClient {
       ? (options.unconfiguredMessage ?? NO_SERVER_CONFIGURED)
       : 'not connected yet'
   let serverBuild: string | null = null
+  let room: string | null = null
   let serverMapHash: string | null = null
   let serverTick: number | null = null
   let serverHash: number | null = null
@@ -319,6 +362,9 @@ export function createNetClient(options: NetOptions): NetClient {
     if (parsed.t === 'welcome') {
       serverBuild = parsed.build
       serverMapHash = parsed.mapHash
+      // The host's answer, and the only place a code a player can send comes
+      // from. See {@link NetSnapshot.room}.
+      room = parsed.room === '' ? null : parsed.room
       status = 'live'
       message = `connected to build ${parsed.build}, protocol ${parsed.protocol}, arena ${parsed.mapHash}`
       return
@@ -453,6 +499,7 @@ export function createNetClient(options: NetOptions): NetClient {
       status,
       message,
       serverBuild,
+      room,
       mapHash,
       serverMapHash,
       serverTick,

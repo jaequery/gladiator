@@ -42,27 +42,35 @@ export type ArmedGesture = {
 export const GESTURE_EVENT = 'click'
 
 /**
- * Run both actions on every {@link GESTURE_EVENT} on `target`.
+ * Both actions, once.
  *
  * Audio first, and it is not arbitrary: `requestPointerLock` can throw
  * synchronously — a document that is not focused, a lock request the browser
  * declines outright — and if it did so first, the resume would never run and
  * the failure mode would be exactly the silent one this file is about. Neither
  * call is allowed to take the other down, so both are guarded.
+ *
+ * Exported as well as armed, because the click that starts a match is not
+ * always on the canvas: the menu's "enter the arena" button is a gesture too
+ * (`ui/menu.ts`), and a second copy of these two calls somewhere else is
+ * exactly how one of them gets forgotten.
  */
-export function armGesture(target: GestureTarget, actions: GestureActions): ArmedGesture {
-  const handler = () => {
-    try {
-      actions.resume()
-    } catch (cause) {
-      console.warn(`gladiator: audio could not resume: ${String(cause)}`)
-    }
-    try {
-      actions.requestLock()
-    } catch (cause) {
-      console.warn(`gladiator: pointer lock was refused: ${String(cause)}`)
-    }
+export function runGesture(actions: GestureActions): void {
+  try {
+    actions.resume()
+  } catch (cause) {
+    console.warn(`gladiator: audio could not resume: ${String(cause)}`)
   }
+  try {
+    actions.requestLock()
+  } catch (cause) {
+    console.warn(`gladiator: pointer lock was refused: ${String(cause)}`)
+  }
+}
+
+/** Run {@link runGesture} on every {@link GESTURE_EVENT} on `target`. */
+export function armGesture(target: GestureTarget, actions: GestureActions): ArmedGesture {
+  const handler = () => runGesture(actions)
 
   target.addEventListener(GESTURE_EVENT, handler)
 
