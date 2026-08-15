@@ -26,7 +26,14 @@ export type HudModel = {
   readonly tick: number
   readonly ticksPerSecond: number
   readonly clientHash: number
-  readonly locked: boolean
+  /**
+   * Whether to show the "click to play" prompt.
+   *
+   * Not "is the pointer locked", though that is most of it: the menu is also a
+   * reason not to show it (`ui/menu.ts` has a button that says the same thing,
+   * with a room code above it), and a prompt behind a menu is furniture.
+   */
+  readonly prompt: boolean
   readonly net: NetSnapshot
   /**
    * Reconciliations that actually moved the player, and commands still
@@ -73,6 +80,14 @@ export const MISPREDICTION_TOLERANCE = 0.02
 
 export type Hud = {
   update(model: HudModel): void
+  /**
+   * Show or hide the panel — the diagnostics *setting*, and only the panel.
+   *
+   * The banner and the pointer prompt stay: a version mismatch is not a
+   * diagnostic, it is the only thing on the page that matters, and a player who
+   * turned the numbers off still needs to be told to reload.
+   */
+  setVisible(visible: boolean): void
   /** A fatal message, in place of everything else. */
   fail(message: string): void
 }
@@ -211,7 +226,11 @@ export function createHud(root: HTMLElement): Hud {
       if (banner.hidden !== (shout === null)) banner.hidden = shout === null
       setText(banner, shout ?? '')
 
-      if (prompt.hidden !== model.locked) prompt.hidden = model.locked
+      if (prompt.hidden === model.prompt) prompt.hidden = !model.prompt
+    },
+
+    setVisible(visible) {
+      if (panel.hidden === visible) panel.hidden = !visible
     },
 
     fail(message) {

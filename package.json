@@ -19,6 +19,7 @@
     "guardrails": "node scripts/guardrails.mjs",
     "no-physics": "node scripts/no-physics-plugin.mjs",
     "e2e": "node scripts/e2e.mjs",
+    "raw-input": "node scripts/raw-input.mjs",
     "map:bake": "tsx tools/bake-map.ts",
     "nav:bake": "tsx tools/nav-bake.ts",
     "bot:soak": "tsx tools/bot-soak.ts",

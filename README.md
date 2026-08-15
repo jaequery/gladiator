@@ -26,8 +26,23 @@ pnpm --filter @gladiator/server dev    # the authoritative server, on :8787
 pnpm --filter @gladiator/client dev    # the browser client, on :5173
 ```
 
-Open the client, click to lock the pointer, and run around with `W`/`A`/`S`/`D`
-and space. The HUD prints both state hashes and whether they agree.
+Open the client and you land on a menu: play the bot, create a match, or join
+one with a code. Creating a match gets a room code from the host and a link to
+send — whoever opens that link lands in the same room with nothing to type. Then
+`W`/`A`/`S`/`D` and space, escape to give the mouse back, and the HUD prints
+both state hashes and whether they agree.
+
+Four URLs skip the menu, for when you know what you want: `?local=1` is
+single-player against the host in your own tab, `?host=1` opens a room and goes
+straight in, `?room=H7K2Q9` joins the match that code names, and `?queue=1` asks
+to be matched with whoever else is waiting. The queue says how long it will keep
+looking before it gives up and hands back a code to send a friend instead, and a
+code beats the queue when a page carries both. `AGENTS.md`, "Quick match is a
+line of rooms".
+
+Sensitivity is set in cm/360 under Settings; which browsers give the raw mouse
+deltas that number depends on is
+[`docs/browser-support.md`](./docs/browser-support.md).
 
 ```sh
 pnpm run e2e         # the whole acceptance list, in headless Chromium
@@ -65,11 +80,6 @@ playback: `replay` compares the hash trace it produces against the one the file
 carries. Set `GLADIATOR_DEMO_DIR` and the server records every match; add
 `?dev=1` and a tab hosting single-player records its own. `docs/deploy.md`.
 
-`?room=ABC123` joins the match that code names; `?queue=1` asks to be matched
-with whoever else is waiting, and says how long it will keep looking before it
-gives up and hands back a code to send a friend instead. A code beats the queue
-when a page carries both. `AGENTS.md`, "Quick match is a line of rooms".
-
 `?dev=1` also puts the netcode panel on screen: tick, round trip, unacknowledged
 commands, prediction error in units, snapshot bytes per second, and two counters
 that should never move. `docs/latency.md` is what the response time is made of
@@ -99,7 +109,9 @@ scripts/          guardrails.mjs        — proves the boundaries reject violati
                   no-physics-plugin.mjs — fails if a physics engine is installed
                   e2e.mjs               — the browser smoke test
                   audio-check.mjs       — the audio checks, in a real browser
-docs/             physics-spec.md, renderer.md, audio.md, deploy.md
+                  raw-input.mjs         — measures raw mouse input, per browser
+docs/             physics-spec.md, renderer.md, audio.md, deploy.md,
+                  browser-support.md
 NOTES.md          the operational decisions: region, origin policy, machine, drain
 CREDITS.md        every shipped asset, its source and its licence
 Dockerfile        the Fly.io image for packages/server
