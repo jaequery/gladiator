@@ -1,13 +1,15 @@
 /**
  * A scripted readout, for looking at.
  *
- * `?hud=demo`. Nothing starts a match yet — the listen server is GLAD-4G4W2T
- * and the room is GLAD-FHKBN8 — so a page loaded today sits in warmup on full
- * health with nobody to shoot, and every interesting state this HUD has is
- * unreachable. Which is a problem, because one of this ticket's acceptance
- * checks is explicitly *"verified by a reviewer, not an assertion"*: hit
- * confirmation is a feel feature, and nobody can tell you whether it reads in
- * peripheral vision from a unit test.
+ * `?hud=demo`. Nothing calls `startMatch` yet — a `Room` holds one world in
+ * warmup and leaves the round rules to whoever knows both players have arrived
+ * (`server/src/room.ts`; GLAD-DVDV6P), and that is as true down a loopback
+ * transport at `?local=1` as it is over a socket to Fly. So a page loaded today
+ * sits on full health with nobody to shoot, and every interesting state this
+ * HUD has is unreachable. Which is a problem, because one of this ticket's
+ * acceptance checks is explicitly *"verified by a reviewer, not an
+ * assertion"*: hit confirmation is a feel feature, and nobody can tell you
+ * whether it reads in peripheral vision from a unit test.
  *
  * So this is `dummyOpponent.ts`'s trick for the HUD, and it earns its place the
  * same three ways:

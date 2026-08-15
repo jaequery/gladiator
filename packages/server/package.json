@@ -3,7 +3,11 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "The authoritative server: tick scheduler, rooms, WebSocket transport.",
+  "description": "The authoritative host: rooms, sessions, transports — over a socket on Fly and in-process in a tab.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
   "dependencies": {
     "@gladiator/bot": "workspace:*",
     "@gladiator/sim": "workspace:*",

@@ -59,8 +59,11 @@ afterEach(async () => {
 async function start(): Promise<GladiatorServer> {
   running = await startServer({
     // Port 0: the OS picks a free one, so the suite never collides with a
-    // developer's own `pnpm dev`.
-    config: { ...readConfig({ PORT: '0' }), allowedOrigins: [ALLOWED_ORIGIN] },
+    // developer's own `pnpm dev` — or with another test file, which vitest runs
+    // in a worker of its own. Set on the config rather than through
+    // `readConfig({ PORT: '0' })`, which rejects a zero and hands back 8787: a
+    // `PORT=0` arriving from the environment is a mistake, not a request.
+    config: { ...readConfig({}), port: 0, allowedOrigins: [ALLOWED_ORIGIN] },
     log: () => undefined,
   })
   return running

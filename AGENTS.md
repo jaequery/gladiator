@@ -47,16 +47,23 @@ upgrade, and `pnpm run assets:placeholders` regenerates the stand-in art.
 
 ## Packages
 
-| Package             | May depend on            | Built?                        |
-| ------------------- | ------------------------ | ----------------------------- |
-| `packages/sim`      | **nothing**              | never — consumed as source    |
-| `packages/bot`      | `sim`                    | never — consumed as source    |
-| `packages/client`   | `sim`, `bot`, Babylon    | Vite                          |
-| `packages/server`   | `sim`, `bot`, `ws`       | esbuild                       |
+| Package             | May depend on                      | Built?                        |
+| ------------------- | ---------------------------------- | ----------------------------- |
+| `packages/sim`      | **nothing**                        | never — consumed as source    |
+| `packages/bot`      | `sim`                              | never — consumed as source    |
+| `packages/server`   | `sim`, `bot`, `ws`                 | esbuild                       |
+| `packages/client`   | `sim`, `bot`, `server`, Babylon    | Vite                          |
 
-`sim` and `bot` are source-only. Their `exports` point straight at `./src/*.ts`
-and there is no `dist`, so there is exactly one resolution condition and nothing
-for `bundler` and `NodeNext` to disagree about.
+`sim`, `bot` and `server` are consumed as source. Their `exports` point straight
+at `./src/*.ts` and there is no `dist` on the resolution path, so there is
+exactly one resolution condition and nothing for `bundler` and `NodeNext` to
+disagree about.
+
+**The client depends on the server, and that is the listen server.** The
+authoritative host — `server/src/room.ts` and what it reaches — runs in a
+browser tab as well as on Fly, which is what makes single-player the multiplayer
+code path rather than a second one. See **The host** below. The arrow only
+points one way: nothing in `packages/server` may import the client.
 
 Two directories belong to no package and ship with neither build: `maps/` (the
 authored maps, the nav graphs, and their baked artifacts) and `tools/` (the
@@ -465,6 +472,93 @@ and this package does not have one.
 `hashState` hashes raw IEEE 754 bit patterns — it never rounds, because
 rounding is precisely what would hide a slow drift. It does normalise `-0` to
 `+0` and every NaN to one NaN; see `encoding.ts` for why both are necessary.
+
+---
+
+## The host
+
+`packages/server/src/room.ts`, and everything it reaches. It is the
+authoritative side of a duel, and it runs **unchanged** behind a WebSocket on
+Fly and inside a browser tab behind a loopback (GLAD-4G4W2T). One host, not a
+server and an offline mode that resemble each other — the listen-server pattern,
+which is how Quake, Source and most engines have always done
+single-player-on-multiplayer-code.
+
+The value is that there is no second implementation of the rules, because the
+second one is always the one with the bug. The cost is four constraints, and all
+four are enforced rather than asked for.
+
+### `Room` is isomorphic, and a test proves it
+
+No `node:` import, no `process`, no `Buffer`, no `ws`, no `setInterval`, no
+`Date.now()`. Everything from outside arrives as a constructor argument: the
+map, a `Clock`, a peer-id generator, and every peer as a `Transport`.
+
+Two layers hold that up. `room.isomorphic.test.ts` walks the import graph from
+`room.ts` and fails on any of those names — the same reasoning as
+`scripts/guardrails.mjs`, and it has been watched to fire. And
+`packages/client` typechecks what it imports under a tsconfig with no
+`@types/node` in it, so a `Buffer` in the host is a compile error in the client.
+
+`net/wsTransport.ts` is the *only* module on the authoritative side that knows
+what a WebSocket is, and `server.ts` is the Node edge around it: HTTP, the
+upgrade, the origin policy, `randomUUID`. Nothing on the other side of that line
+may reach back over.
+
+### The clock never reaches the simulation
+
+A host reads its `Clock` to notice a peer that has gone quiet. It never reads
+one to decide how far to advance the world: **a command batch advances the world
+by exactly its own commands**. That is what makes one recorded input stream
+produce the same state hash in-process and over a real socket, which is what
+`net/parity.test.ts` asserts — and the moment wall-clock decided how many ticks a
+batch was worth, the two would agree only by luck.
+
+It is also why a test can run a whole match in the microseconds it takes rather
+than the minute a timer would charge. The tick scheduler that will drive rooms
+at a steady 125 Hz is GLAD-FHKBN8; the input-buffer policy in front of it is
+GLAD-5995PA. Both hang off this shape rather than replacing it.
+
+### Nothing but bytes crosses the loopback
+
+`net/loopbackTransport.ts`. A string is UTF-8 encoded on send and decoded on
+delivery; a `Uint8Array` is **copied**. The tempting implementation hands the
+receiver the value the sender passed — shorter, faster, and it shares a mutable
+reference between the two ends of a "network", so mutations propagate with no
+serialisation, every test goes green, and the bug surfaces the first time there
+is a real socket in the middle.
+
+Delivery is a `queueMicrotask`, because a synchronous hand-off would let a
+client's send re-enter the host mid-tick — a re-entrancy a socket cannot
+produce, so nothing downstream is written to survive it.
+
+Not a Web Worker, on purpose: at ~40 µs a tick the jank isolation buys nothing,
+and it costs structured-clone marshalling, materially worse debugging, and — the
+moment anyone reaches for `SharedArrayBuffer` — the COOP/COEP headers that break
+every embed.
+
+### Lag lives in the harness, never in the build
+
+Zero RTT hides everything reconciliation exists for. The answer is
+`net/laggedTransport.ts`: latency, jitter, loss, reordering and duplication from
+a seeded PRNG, so a failure is a seed rather than an anecdote, and released by a
+`pump(nowMs)` rather than a timer, so a latency matrix costs CI no wall-clock.
+
+Jitter does **not** reorder — a WebSocket over TCP does not, so neither does the
+model. Reordering is its own knob and turning it on is a deliberate violation of
+the transport contract, offered so the cost of unreliable datagrams can be
+measured rather than guessed at (`sim/src/transport.ts` lists what would break).
+
+Single-player ships at ~0 ms. Do not put self-inflicted lag into the mode whose
+selling point is feel.
+
+### The client talks to a `Transport`, not to a socket
+
+`packages/client/src/net/`: `client.ts` is written entirely against the
+interface, `websocketTransport.ts` is the browser adapter, and
+`listenServer.ts` is a `Room` in this tab behind a loopback pair. `?local=1`
+boots one. There is no offline branch in the frame loop, because there is
+nothing for one to be a branch *of*.
 
 ---
 
