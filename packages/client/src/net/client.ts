@@ -242,6 +242,31 @@ export function resolveServerUrl(
   return null
 }
 
+/**
+ * The socket URL for this page's `?room=`, or a plain one to open a new match.
+ *
+ * `wss://host/` asks the host for a new room and the code it mints comes back
+ * in the welcome; `wss://host/?room=ABC123` joins the match that code names.
+ *
+ * A code is carried through verbatim rather than validated here: the host is
+ * the only thing that knows which codes exist, it folds the ones a human typed
+ * (`@gladiator/server/roomCode.ts`), and a client that pre-judged the shape
+ * would be a second opinion to keep in step. What a client *does* owe is that a
+ * code the host cannot serve produces a sentence rather than silence — and it
+ * does: an unknown code is answered with a `fault` frame, which lands in
+ * {@link NetSnapshot.message} and goes on the screen verbatim.
+ *
+ * The menu that puts a shareable link in front of a player instead of a query
+ * string is GLAD-NPCTU8.
+ */
+export function joinUrl(serverUrl: string, search: string): string {
+  const room = new URLSearchParams(search).get('room')
+  if (room === null || room === '') return serverUrl
+  const url = new URL(serverUrl)
+  url.searchParams.set('room', room)
+  return url.toString()
+}
+
 /** What the HUD says when a deploy was built with no host to talk to. */
 export const NO_SERVER_CONFIGURED =
   'VITE_SERVER_URL is not set for this deploy, so there is no server to talk to.'

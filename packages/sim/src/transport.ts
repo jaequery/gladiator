@@ -90,9 +90,9 @@
  *
  * It does not know what a message *means* — it moves bytes. Framing, the
  * message union and validation are the server's and the client's business
- * (GLAD-FHKBN8, GLAD-V7M6PQ). It does not reconnect on its own either:
- * reconnection changes match state, so it belongs to the connection lifecycle
- * (GLAD-DVDV6P), not to the pipe.
+ * (`server/src/session.ts`; the hardening is GLAD-V7M6PQ). It does not reconnect
+ * on its own either: reconnection changes match state, so it belongs to the
+ * connection lifecycle (GLAD-DVDV6P), not to the pipe.
  *
  * It does not own a clock, either. Latency, jitter, loss and reordering are a
  * *decorator* over a transport and a test harness rather than a mode of one —
@@ -133,10 +133,21 @@ export type TransportState = (typeof TransportState)[keyof typeof TransportState
 export const CloseReason = {
   /** Either side asked. The normal path. */
   Normal: 1000,
+  /**
+   * The host is shutting down or the tab is navigating away.
+   *
+   * What a deploy looks like from the client's side, and the reason it is worth
+   * having its own code: a 1001 is "come back in a moment" and a 1006 is "the
+   * wire broke", and a reconnect policy that could not tell them apart would
+   * either hammer a dead host or give up on a rolling restart.
+   */
+  GoingAway: 1001,
   /** The pipe broke: socket error, timeout, tab closed. */
   Abnormal: 1006,
   /** Rejected: bad room code, room full, protocol violation (GLAD-V7M6PQ). */
   PolicyViolation: 1008,
+  /** The host is at capacity. Not a fault in the client; a reason to wait. */
+  TryAgainLater: 1013,
 } as const
 
 export type CloseReason = (typeof CloseReason)[keyof typeof CloseReason]

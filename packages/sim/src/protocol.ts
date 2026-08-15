@@ -40,8 +40,17 @@ import { sanitizeUserCmd, type UserCmd } from './usercmd.ts'
  * whole, so a client can replay its unacknowledged commands on top of it. A
  * version-4 client is handed a frame it cannot parse and treats it as a host
  * speaking a language it does not know, which is exactly what has happened.
+ *
+ * Version 6 is the second kind of change again (GLAD-FHKBN8). {@link
+ * ServerWelcome} grew a `room`, because the host now mints the room code and a
+ * player who created a match has no other way to learn the six characters they
+ * are supposed to send their friend. And *what a `cmds` frame means* changed
+ * underneath it: a batch used to advance the world by exactly its own commands
+ * and be answered with a hash, and it is now admitted to a jitter buffer that a
+ * fixed-rate scheduler drains. A version-5 client would wait forever for a
+ * reply to a batch, which is the confusion this number exists to prevent.
  */
-export const PROTOCOL_VERSION = 5
+export const PROTOCOL_VERSION = 6
 
 /**
  * The most commands one frame may carry. The client's accumulator clamps a
@@ -117,6 +126,16 @@ export type ServerWelcome = {
   /** The map the server is authoritative over. Matches the client's, or the
    *  session would have been refused with a {@link ServerMapMismatch}. */
   readonly mapHash: string
+  /**
+   * The room this peer was seated in, in canonical form.
+   *
+   * The host's answer and never an echo of the client's: a player who asked for
+   * a new match sent no code at all, and one who joined by code may have typed
+   * it in a form the server folded (`server/roomCode.ts`). Six characters of
+   * Crockford base32, which is what makes it something a person can read out
+   * over a voice call.
+   */
+  readonly room: string
 }
 
 export type ServerHash = {
@@ -348,8 +367,13 @@ export function parseServerMessage(raw: string): ServerMessage | null {
     const build = asString(record['build'], 64)
     const session = asString(record['session'], 64)
     const mapHash = asMapHash(record['mapHash'])
+    // Bounded rather than validated against the alphabet: the code's *shape* is
+    // `server/roomCode.ts`'s business, and a parser in the simulation package
+    // that knew the alphabet would be a second copy of it to keep in step.
+    const room = asString(record['room'], 32)
     if (protocol === null || build === null || session === null || mapHash === null) return null
-    return { t: 'welcome', protocol, build, session, mapHash }
+    if (room === null) return null
+    return { t: 'welcome', protocol, build, session, mapHash, room }
   }
 
   if (record['t'] === 'hash') {

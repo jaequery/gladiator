@@ -1,18 +1,7 @@
-import {
-  NULL_CMD,
-  PROTOCOL_VERSION,
-  SKELETON_SEED,
-  type GameState,
-  applyWireState,
-  createMapState,
-  encodeCmd,
-  findPlayer,
-  hashState,
-  tick as simTick,
-} from '@gladiator/sim'
+import { NULL_CMD, PROTOCOL_VERSION, encodeCmd } from '@gladiator/sim'
 import { describe, expect, it } from 'vitest'
 
-import { SERVER_MAP } from './map.ts'
+import { COMMAND_BURST, MAX_BUFFERED_COMMANDS, createInputQueue } from './inputQueue.ts'
 import {
   CLOSE_BAD_FRAME,
   CLOSE_MAP_MISMATCH,
@@ -24,10 +13,11 @@ import {
 
 const BUILD = '9f3c1d2'
 
-/** Which commit and which world. A fake map hash: this is a unit test of the
- *  state machine, and it never has to load a map to run one. */
+/** Which commit, which world, which match. A fake map hash: this is a unit test
+ *  of the state machine, and it never has to load a map to run one. */
 const MAP_HASH = 'a1b2c3d4'
-const IDENTITY = { build: BUILD, mapHash: MAP_HASH }
+const ROOM = 'H7K2Q9'
+const IDENTITY = { build: BUILD, mapHash: MAP_HASH, room: ROOM }
 
 function hello(over: Record<string, unknown> = {}) {
   return JSON.stringify({
@@ -39,42 +29,42 @@ function hello(over: Record<string, unknown> = {}) {
   })
 }
 
-/**
- * A session over a world of its own.
- *
- * The world is handed in rather than made by `createSession`, because a room
- * owns one world and seats peers in it (`room.ts`) — and because a module that
- * loaded a map for itself could not run in a browser, which is what the listen
- * server needs it to do.
- */
-function fresh() {
-  return createSession('s1', {
-    state: createMapState(SERVER_MAP.source, SKELETON_SEED),
-    world: SERVER_MAP.world,
-    plan: null,
+function cmdsFrame(startTick: number, count: number, cmd = NULL_CMD) {
+  return JSON.stringify({
+    t: 'cmds',
+    startTick,
+    cmds: Array.from({ length: count }, () => encodeCmd(cmd)),
   })
 }
 
-/** The one player a session's world holds. */
-function playerOf(state: GameState) {
-  const player = findPlayer(state, 0)
-  if (player === null) throw new Error('a session with no player in slot 0')
-  return player
+/**
+ * A session with a buffer of its own.
+ *
+ * The buffer is handed in rather than made by the caller of `applyFrame`,
+ * because a room owns one per peer and drains it from the other side
+ * (`room.ts`). Everything here is about the *door*: what a session admits, what
+ * it refuses, and what it counts.
+ */
+function fresh() {
+  return createSession('s1', 0, createInputQueue())
 }
 
 function greeted() {
-  return applyFrame(fresh(), hello(), IDENTITY).session
+  return applyFrame(fresh(), hello(), IDENTITY, 0).session
 }
 
 describe('session handshake', () => {
-  it('welcomes a client on the same protocol', () => {
-    const step = applyFrame(
-      fresh(),
-      hello(),
-      IDENTITY,
-    )
+  it('welcomes a client on the same protocol, and names the room', () => {
+    const step = applyFrame(fresh(), hello(), IDENTITY, 0)
     expect(step.replies).toEqual([
-      { t: 'welcome', protocol: PROTOCOL_VERSION, build: BUILD, session: 's1', mapHash: MAP_HASH },
+      {
+        t: 'welcome',
+        protocol: PROTOCOL_VERSION,
+        build: BUILD,
+        session: 's1',
+        mapHash: MAP_HASH,
+        room: ROOM,
+      },
     ])
     expect(step.close).toBeUndefined()
     expect(step.session.greeted).toBe(true)
@@ -83,11 +73,7 @@ describe('session handshake', () => {
   it('tells a client on the wrong protocol which build to expect, then closes', () => {
     // The failure mode this replaces is a socket that closes with no frame at
     // all, which is indistinguishable from the server being down.
-    const step = applyFrame(
-      fresh(),
-      hello({ protocol: PROTOCOL_VERSION + 1, build: 'stale' }),
-      IDENTITY,
-    )
+    const step = applyFrame(fresh(), hello({ protocol: PROTOCOL_VERSION + 1, build: 'stale' }), IDENTITY, 0)
     expect(step.replies).toEqual([
       {
         t: 'version_mismatch',
@@ -103,7 +89,7 @@ describe('session handshake', () => {
     // The scenario: Vercel has deployed and Fly has not (or the reverse). The
     // protocol matches, the build string does not have to, and the two would
     // simulate different worlds from identical inputs.
-    const step = applyFrame(fresh(), hello({ mapHash: 'deadbeef' }), IDENTITY)
+    const step = applyFrame(fresh(), hello({ mapHash: 'deadbeef' }), IDENTITY, 0)
     expect(step.replies).toEqual([
       { t: 'map_mismatch', serverMapHash: MAP_HASH, clientMapHash: 'deadbeef' },
     ])
@@ -115,12 +101,8 @@ describe('session handshake', () => {
   it('does not adopt the map the client claims', () => {
     // A server that played whichever arena it was told about is a server that
     // can be told where the walls are.
-    const step = applyFrame(fresh(), hello({ mapHash: 'deadbeef' }), IDENTITY)
-    const after = applyFrame(
-      step.session,
-      JSON.stringify({ t: 'cmds', startTick: 1, cmds: [encodeCmd(NULL_CMD)] }),
-      IDENTITY,
-    )
+    const step = applyFrame(fresh(), hello({ mapHash: 'deadbeef' }), IDENTITY, 0)
+    const after = applyFrame(step.session, cmdsFrame(1, 1), IDENTITY, 0)
     expect(after.close?.code).toBe(CLOSE_NO_HELLO)
   })
 
@@ -129,101 +111,99 @@ describe('session handshake', () => {
       fresh(),
       JSON.stringify({ t: 'hello', protocol: PROTOCOL_VERSION, build: 'client' }),
       IDENTITY,
+      0,
     )
     expect(step.close?.code).toBe(CLOSE_BAD_FRAME)
   })
 
   it('refuses commands before a hello', () => {
-    const step = applyFrame(
-      fresh(),
-      JSON.stringify({ t: 'cmds', startTick: 1, cmds: [encodeCmd(NULL_CMD)] }),
-      IDENTITY,
-    )
+    const step = applyFrame(fresh(), cmdsFrame(1, 1), IDENTITY, 0)
     expect(step.close?.code).toBe(CLOSE_NO_HELLO)
   })
 
   it('closes on a frame it cannot parse, rather than guessing', () => {
     for (const junk of ['', 'not json', '{"t":"nope"}', '[]']) {
-      const step = applyFrame(greeted(), junk, IDENTITY)
+      const step = applyFrame(greeted(), junk, IDENTITY, 0)
       expect(step.close?.code).toBe(CLOSE_BAD_FRAME)
       expect(step.replies[0]).toMatchObject({ t: 'fault', code: 'bad-frame' })
     }
   })
 })
 
-describe('session simulation', () => {
-  it('replies with the hash at the last tick of the batch', () => {
-    const cmds = [encodeCmd({ ...NULL_CMD, forwardMove: 1 }), encodeCmd(NULL_CMD)]
-    const step = applyFrame(greeted(), JSON.stringify({ t: 'cmds', startTick: 1, cmds }), IDENTITY)
+describe('commands are admitted, not executed', () => {
+  it('answers a batch with nothing at all', () => {
+    // The acknowledgement a client needs is a statement about the world at the
+    // tick the *scheduler* reached, so it goes out once per host frame from
+    // `room.ts`. A reply per batch would be a second, faster clock in the same
+    // conversation.
+    const step = applyFrame(greeted(), cmdsFrame(1, 2), IDENTITY, 0)
+    expect(step.replies).toEqual([])
+    expect(step.close).toBeUndefined()
+  })
 
-    const expected = createMapState(SERVER_MAP.source, SKELETON_SEED)
-    simTick(expected, [{ ...NULL_CMD, forwardMove: 1 }], SERVER_MAP.world)
-    simTick(expected, [NULL_CMD], SERVER_MAP.world)
-    // The hash, and then the world it is the hash of. The order matters: the
-    // hash answers "did the client predict this", which is a question that
-    // stops having an answer once the snapshot behind it has been adopted.
-    expect(step.replies[0]).toEqual({ t: 'hash', tick: 2, hash: hashState(expected) })
-    const snap = step.replies[1]
-    if (snap?.t !== 'snap') throw new Error('the session sent no snapshot')
-    // The ack is the *client's* label for the last command in the batch, not
-    // the world's tick. They agree here because a batch advances the world by
-    // exactly its own commands; they will not once a scheduler drains a jitter
-    // buffer (GLAD-FHKBN8), which is why they are two fields.
-    expect(snap.ack).toBe(2)
-    const rebuilt = createMapState(SERVER_MAP.source, SKELETON_SEED)
-    expect(applyWireState(rebuilt, snap.state)).toBe(true)
-    expect(hashState(rebuilt)).toBe(hashState(expected))
+  it('puts every command in the batch into the buffer, in tick order', () => {
+    const session = greeted()
+    const step = applyFrame(session, cmdsFrame(1, 3), IDENTITY, 0)
 
-    expect(step.session.tick).toBe(2)
+    expect(step.session.commands).toBe(3)
+    expect(step.session.accepted).toBe(3)
+    expect(step.session.refused).toBe(0)
+    expect(step.session.lastOfferedTick).toBe(3)
+    expect(session.queue.depth).toBe(3)
+    expect(session.queue.take().cmd).toEqual(NULL_CMD)
+  })
 
-    // And the state really did advance, rather than the hash being of nothing.
-    // Measured from the map's spawn rather than from the origin: the session
-    // starts where `testbed` says a player starts, not at (0, 0, 0).
-    const spawn = createMapState(SERVER_MAP.source, SKELETON_SEED)
-    expect(playerOf(step.session.sim.state).origin[0]).toBeGreaterThan(playerOf(spawn).origin[0])
+  it('counts what the buffer turned away without closing the session', () => {
+    // A client that runs away is a client to slow down, not one to disconnect:
+    // the buffer refuses the excess at the door and the player moves at exactly
+    // the speed everyone else does. `inputQueue.ts`.
+    const session = greeted()
+    const flood = MAX_BUFFERED_COMMANDS + COMMAND_BURST + 8
+    const step = applyFrame(session, cmdsFrame(1, flood), IDENTITY, 0)
+
+    expect(step.close).toBeUndefined()
+    expect(step.session.commands).toBe(flood)
+    expect(step.session.accepted).toBe(MAX_BUFFERED_COMMANDS)
+    expect(step.session.refused).toBe(flood - MAX_BUFFERED_COMMANDS)
   })
 
   it('counts a gap instead of silently renumbering it', () => {
-    // Renumbering here would paper over exactly the disagreement this ticket
-    // exists to expose.
-    const first = applyFrame(
-      greeted(),
-      JSON.stringify({ t: 'cmds', startTick: 1, cmds: [encodeCmd(NULL_CMD)] }),
-      IDENTITY,
-    )
-    const second = applyFrame(
-      first.session,
-      JSON.stringify({ t: 'cmds', startTick: 99, cmds: [encodeCmd(NULL_CMD)] }),
-      IDENTITY,
-    )
+    // Renumbering here would paper over exactly the disagreement this exists to
+    // expose. What an individual command out of order costs is the buffer's
+    // business and is answered there.
+    const first = applyFrame(greeted(), cmdsFrame(1, 1), IDENTITY, 0)
+    const second = applyFrame(first.session, cmdsFrame(99, 1), IDENTITY, 0)
     expect(second.session.gaps).toBe(1)
-    expect(second.session.tick).toBe(2)
+    expect(second.session.lastOfferedTick).toBe(99)
   })
 
-  it('sanitises a hostile command instead of poisoning the hash', () => {
-    const step = applyFrame(
-      greeted(),
-      JSON.stringify({ t: 'cmds', startTick: 1, cmds: [[1e308, 'x', null, {}, -5]] }),
-      IDENTITY,
-    )
-    const hash = step.replies[0]
-    expect(hash).toMatchObject({ t: 'hash', tick: 1 })
-    const player = playerOf(step.session.sim.state)
-    for (const value of [...player.origin, ...player.velocity]) {
+  it('does not count a batch that follows on as a gap', () => {
+    const first = applyFrame(greeted(), cmdsFrame(1, 4), IDENTITY, 0)
+    const second = applyFrame(first.session, cmdsFrame(5, 4), IDENTITY, 0)
+    expect(second.session.gaps).toBe(0)
+    expect(second.session.accepted).toBe(8)
+  })
+
+  it('sanitises a hostile command instead of buffering a NaN', () => {
+    // A tick is a total function, so the door is the only place a bad value can
+    // be turned away.
+    const session = greeted()
+    applyFrame(session, JSON.stringify({ t: 'cmds', startTick: 1, cmds: [[1e308, 'x', null, {}, -5]] }), IDENTITY, 0)
+    const taken = session.queue.take().cmd
+    if (taken === null) throw new Error('the buffer took nothing')
+    for (const value of [taken.forwardMove, taken.sideMove, taken.yaw, taken.pitch, taken.buttons]) {
       expect(Number.isFinite(value)).toBe(true)
     }
   })
 
-  it('is deterministic: the same batch twice gives the same hash', () => {
-    const frame = JSON.stringify({
-      t: 'cmds',
-      startTick: 1,
-      cmds: Array.from({ length: 50 }, (_, i) =>
-        encodeCmd({ ...NULL_CMD, forwardMove: 1, yaw: i * 91, buttons: i % 7 === 0 ? 1 : 0 }),
-      ),
-    })
-    const a = applyFrame(greeted(), frame, IDENTITY)
-    const b = applyFrame(greeted(), frame, IDENTITY)
-    expect(a.replies).toEqual(b.replies)
+  it('charges the rate limit against the clock it is handed', () => {
+    // The limit is commands per *wall-clock second* on the server's clock —
+    // the only unit in which "too fast" means anything. A session with no clock
+    // of its own is what makes that testable without waiting a second.
+    const early = applyFrame(greeted(), cmdsFrame(1, COMMAND_BURST + 8), IDENTITY, 0)
+    expect(early.session.refused).toBeGreaterThan(0)
+
+    const relaxed = applyFrame(greeted(), cmdsFrame(1, COMMAND_BURST), IDENTITY, 0)
+    expect(relaxed.session.refused).toBe(0)
   })
 })

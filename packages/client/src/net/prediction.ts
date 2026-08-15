@@ -109,8 +109,20 @@ export type Predictor = {
   /**
    * Advance one tick with `cmd` and remember it. Returns the state hash, which
    * is what the hash echo compares against (`net/client.ts`).
+   *
+   * `label` is the tick number this command goes out on the wire under, and it
+   * defaults to the predicted world's own tick. **The two are not the same
+   * number and the difference is load-bearing** (GLAD-FHKBN8). The predicted
+   * world's tick is the *server's*, because a snapshot overwrites it sixty
+   * times a second and the hash echo compares against the server's numbering.
+   * A command's label is the client's, it is free-running, and the frame loop
+   * runs it a few percent fast or slow to hold the lead the host's jitter
+   * buffer is expecting (`net/clockSync.ts`).
+   *
+   * Passing no label is the right thing for a caller with no clock estimate —
+   * a test, a replay — and it is exactly the old behaviour.
    */
-  predict(cmd: UserCmd): number
+  predict(cmd: UserCmd, label?: number): number
   /**
    * Adopt an authoritative snapshot and replay what it has not seen.
    *
@@ -184,7 +196,7 @@ export function createPredictor(options: PredictorOptions): Predictor {
       return { ...stats }
     },
 
-    predict(cmd: UserCmd): number {
+    predict(cmd: UserCmd, label?: number): number {
       const before = originOf(state, slot)
       if (before !== null) {
         previousOrigin[0] = before[0]
@@ -199,7 +211,7 @@ export function createPredictor(options: PredictorOptions): Predictor {
         pending.shift()
         stats.overflowed += 1
       }
-      pending.push({ tick: state.tick, cmd })
+      pending.push({ tick: label ?? state.tick, cmd })
 
       return hashState(state)
     },

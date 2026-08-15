@@ -38,6 +38,8 @@
 import { hashInit, hashString, hashUint32, hashFloat64, formatHash } from '../hash.ts'
 import { createCollisionWorld } from '../collide.ts'
 import type { CollisionWorld } from '../collide.ts'
+import { DEFAULT_MATCH_RULES } from '../match/match.ts'
+import type { MatchRules } from '../match/match.ts'
 import { DUEL_SLOTS, buildSpawnPlan, selectSpawnPair, spawnPlayer } from '../match/spawn.ts'
 import { createGameState } from '../state.ts'
 import type { GameState } from '../state.ts'
@@ -375,12 +377,22 @@ export function loadMap(value: unknown): LoadedMap {
  * Builds a `CollisionWorld` of its own, because a `MapSource` is all it is
  * given. That is one world build at boot, next to the one `loadMap` already
  * did, and nothing at all per tick.
+ *
+ * `rules` is taken here rather than assigned to `state.match` afterwards
+ * because the rules are *hashed* (`match/match.ts`): a world that spent even
+ * one tick under the defaults before being switched to the real ones would
+ * disagree with a peer that was handed them at construction, and the two would
+ * report it as a desync.
  */
-export function createMapState(map: MapSource, seed: number): GameState {
+export function createMapState(
+  map: MapSource,
+  seed: number,
+  rules: MatchRules = DEFAULT_MATCH_RULES,
+): GameState {
   if (map.spawns.length === 0) {
     fail(`map "${map.name}"`, 'it has no spawn points, so there is nowhere to put a player.')
   }
-  const state = createGameState(seed)
+  const state = createGameState(seed, rules)
   const plan = buildSpawnPlan(map)
   const [point] = selectSpawnPair(plan, state)
   spawnPlayer(state, plan, point, DUEL_SLOTS[0])

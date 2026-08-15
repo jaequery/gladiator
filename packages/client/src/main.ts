@@ -58,8 +58,9 @@ import { dummyMode, dummyOpponent } from './dummyOpponent.ts'
 import { createHud } from './hud.ts'
 import { createInputController } from './input/controller.ts'
 import { advance, alphaOf } from './loop.ts'
+import { shouldSnap, slewMs } from './net/clockSync.ts'
 import { CLIENT_MAP, CLIENT_MAP_HASH } from './map.ts'
-import { createNetClient, isFatal, mustHoldStill, resolveServerUrl } from './net/client.ts'
+import { createNetClient, isFatal, joinUrl, mustHoldStill, resolveServerUrl } from './net/client.ts'
 import { createEntityBuffer, createInterpolationClock } from './net/interpolate.ts'
 import { createListenServer } from './net/listenServer.ts'
 import { createPredictor } from './net/prediction.ts'
@@ -256,7 +257,13 @@ function shotMode(search: string): boolean {
   return new URLSearchParams(search).get('shot') !== null
 }
 
-/** The one player this client simulates. Two players is GLAD-FHKBN8. */
+/**
+ * The slot this client steers.
+ *
+ * One player predicted, because prediction needs input this tab knows the
+ * future of. A room seats two and the other one is drawn from real data, 80 ms
+ * in the past (`net/interpolate.ts`).
+ */
 const LOCAL_SLOT = 0
 
 /** `[0, 0, 0]` if the player has somehow gone missing, rather than throwing in a frame. */
@@ -298,8 +305,9 @@ const DUMMY_CENTRE: Vec3 = [0, 0, 0]
  * Deliberately the same path a real snapshot pair takes: two `EntityState`s a
  * tick apart, through `playerNetState` and `interpolateNetState`. Real
  * snapshots arrive now and `net/interpolate.ts` draws them; this is only
- * reached when the buffer has nobody in it, which is a room that has seated one
- * peer (GLAD-FHKBN8).
+ * reached when the buffer has nobody in it, which is a room whose second seat
+ * is still empty — a match nobody has joined yet, or single-player before there
+ * is a bot to put in it.
  */
 function dummyAt(tick: number, alpha: number): PlayerNetState {
   return interpolateNetState(
@@ -521,8 +529,13 @@ async function boot(): Promise<void> {
     transport = listen.transport
     endpoint = 'the host in this tab'
   } else if (!shot && serverUrl !== null) {
-    transport = websocketTransport(serverUrl)
-    endpoint = serverUrl
+    // `?room=ABC123` joins the match that code names; no code at all asks the
+    // host for a new one, and the code it mints comes back in the welcome. The
+    // menu that puts a link in front of a player rather than a query string is
+    // GLAD-NPCTU8; this is the wire underneath it.
+    const url = joinUrl(serverUrl, window.location.search)
+    transport = websocketTransport(url)
+    endpoint = url
   }
 
   const net = createNetClient({
@@ -586,6 +599,15 @@ async function boot(): Promise<void> {
   // have carried anyway and the whole discontinuity is the render offset's.
   let clientHash = hashState(state)
   let accumulatorMs = 0
+  /**
+   * The tick label the next command goes out under.
+   *
+   * Free-running and slewed, and deliberately *not* `state.tick`: a snapshot
+   * overwrites the predicted world's tick sixty times a second, so a counter
+   * that lived there could not also be the thing the lead is steered on. See
+   * the frame loop.
+   */
+  let commandTick = 0
   let lastFrameMs = performance.now()
 
   // The sim has no `console`, so the §2.6 safety rail reports through a seam.
@@ -723,9 +745,10 @@ async function boot(): Promise<void> {
     }
 
     // A host in this tab has no timer of its own — no `Room` anywhere does —
-    // so the animation frame is its beat, which is what keeps the clock-sync
-    // conversation running over a loopback exactly as it runs over a socket.
-    // Nothing here advances the world: a room's world advances by commands.
+    // so the animation frame is its beat: it folds the wall-clock since the
+    // last frame into whole 8 ms sub-steps, runs them, and does the
+    // housekeeping the clock-sync conversation rides on. On Fly the same two
+    // calls are made by `scheduler.ts`; here they are made by the display.
     listen?.beat(nowMs)
 
     // Input is sampled once per frame, not once per tick: a browser only
@@ -756,12 +779,35 @@ async function boot(): Promise<void> {
         accumulatorMs = 0
         snapped = false
       }
-      const step = advance(accumulatorMs, elapsedMs)
+      // The lead. The host drains one command per player per sub-step on its
+      // own clock (`@gladiator/server/inputQueue.ts`), so a client running in
+      // phase with it has every command arrive one one-way trip after the
+      // sub-step that wanted it — and the host spends the match on the
+      // missing-command fallback. Running the *command* clock a few percent
+      // fast closes that, and `net/clockSync.ts` argues why it is a rate change
+      // rather than a jump.
+      //
+      // What is steered is `commandTick` and not `state.tick`. The predicted
+      // world's tick is the *server's* — a snapshot overwrites it sixty times a
+      // second, which is what makes the hash echo comparable — so steering on
+      // it would be steering on a number the host keeps resetting, and the two
+      // controllers would fight until every command went out under a label the
+      // host had already executed.
+      const errorTicks = net.clock.errorTicks(commandTick, nowMs)
+      if (shouldSnap(errorTicks)) {
+        // Past a quarter of a second of error there is no smooth path: a tab
+        // that was in the background, or a session that reconnected. Jumping a
+        // *label* costs nothing — the host admits any increasing tick — where
+        // jumping a simulated clock would be a lurch the player sees.
+        commandTick = net.clock.targetTick(nowMs) ?? commandTick
+      }
+      const step = advance(accumulatorMs, elapsedMs + slewMs(errorTicks, elapsedMs))
       accumulatorMs = step.accumulatorMs
       for (let i = 0; i < step.ticks; i += 1) {
-        clientHash = predictor.predict(cmd)
+        commandTick += 1
+        clientHash = predictor.predict(cmd, commandTick)
         net.record(state.tick, clientHash)
-        net.queue(state.tick, cmd)
+        net.queue(commandTick, cmd)
       }
       net.flush()
     }

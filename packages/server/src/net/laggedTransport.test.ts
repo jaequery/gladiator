@@ -23,7 +23,7 @@ import { describe, expect, it } from 'vitest'
 
 import { manualClock } from '../clock.ts'
 import { batchFrame, recordStream, scriptedCommand } from '../fixtures/recordedStream.ts'
-import { SERVER_MAP, SERVER_MAP_HASH } from '../map.ts'
+import { SERVER_MAP, SERVER_MAP_HASH, SERVER_PLAN } from '../map.ts'
 import { createRoom } from '../room.ts'
 import { createLoopbackPair, settleLoopback } from './loopbackTransport.ts'
 import { NO_LAG, laggedTransport, type LagProfile } from './laggedTransport.ts'
@@ -232,8 +232,29 @@ describe('a failure is a seed', () => {
  * The reliable half of the matrix: everything a WebSocket over TCP really does.
  *
  * Delayed, bunched up, spread out — but every frame arrives, exactly once, in
- * the order it was sent. Which is why the world at the end has to be the same
- * world, byte for byte.
+ * the order it was sent. That is what these profiles model and it is what the
+ * matrix below asserts.
+ *
+ * What it deliberately no longer asserts is that the *world* comes out
+ * identical on all of them. Until GLAD-FHKBN8 a room advanced by exactly the
+ * batch it was handed, so arrival timing could not reach the simulation and
+ * "same frames in, same hash out" was a tautology worth pinning. There is now a
+ * fixed-rate scheduler in the middle with a two-tick jitter buffer in front of
+ * it, and a jitter buffer's entire job is to *change the world* rather than
+ * stall: a command that misses its tick is replaced by the fallback, and a
+ * buffer that has run deep merges two commands into one (`inputQueue.ts`). A
+ * 250 ms link with 120 ms of jitter is fifteen ticks of swing against a
+ * two-tick buffer, and it would be surprising — and a bug in the policy — if
+ * that produced the same world as a LAN.
+ *
+ * So the claim splits in two, and both halves are below. The *link* delivers
+ * everything, once, in order, on every profile: that is this module's contract
+ * and it is asserted at the host's door, where duplicates and lates are
+ * counted. And the *world* is identical when the buffer is never asked to
+ * compensate, which is the case the scheduler was written to make ordinary.
+ * The end-to-end version of the second claim lives in `net/parity.test.ts`,
+ * which runs one stream through a real socket and an in-process loopback on one
+ * schedule and requires one hash trace out of both.
  */
 const MATRIX: readonly LagProfile[] = [
   { ...NO_LAG, seed: 11 },
@@ -258,21 +279,41 @@ type MatrixRun = {
   readonly hashes: readonly number[]
   /** Batches whose `startTick` did not follow on — loss and reordering both show up here. */
   readonly gaps: number
-  /** Commands the host actually simulated. */
+  /** Commands the host was offered. */
   readonly commands: number
+  /** Commands the buffer took. */
+  readonly accepted: number
+  /** Commands the buffer turned away: a duplicate, a late one, or a flood. */
+  readonly refused: number
+  /** Sub-steps in which a buffer was empty and the fallback ran. */
+  readonly starved: number
+  /** What the link itself did, which is the contract these profiles model. */
+  readonly link: { readonly dropped: number; readonly duplicated: number; readonly reordered: number }
 }
 
-/** Push the recorded stream through a lagged link into a room, and collect the hashes. */
+/**
+ * Push the recorded stream through a lagged link into a room, and collect the
+ * hashes.
+ *
+ * The drive is the same one `net/parity.test.ts` uses, because the two tests
+ * are asking about the same host: wall-clock advances by exactly the simulated
+ * time in the batch about to be sent, the link is pumped, and then the room is
+ * advanced by exactly that many sub-steps. So the *host* is running at a steady
+ * 125 Hz on its own clock, which is the thing under test, and the only variable
+ * between profiles is when the link chose to hand each frame over.
+ */
 async function runMatrix(profile: LagProfile, ticks: number): Promise<MatrixRun> {
   const pair = createLoopbackPair()
   const link = laggedTransport(pair.client, profile)
+  const clock = manualClock()
   const room = createRoom({
     map: SERVER_MAP,
-    clock: manualClock(),
+    plan: SERVER_PLAN,
+    clock,
     build: 'matrix',
     peerId: (index) => `peer-${index}`,
   })
-  room.join(pair.server)
+  const peer = room.join(pair.server)
 
   const hashes: number[] = []
   link.setHandlers({
@@ -284,7 +325,6 @@ async function runMatrix(profile: LagProfile, ticks: number): Promise<MatrixRun>
   })
 
   const stream = recordStream(ticks)
-  let nowMs = 0
   link.send(
     JSON.stringify({
       t: 'hello',
@@ -294,59 +334,88 @@ async function runMatrix(profile: LagProfile, ticks: number): Promise<MatrixRun>
     }),
   )
   for (const batch of stream.batches) {
-    link.send(batchFrame(batch))
     // Wall-clock advances by exactly the simulated time in the batch, so a
-    // 150 ms link really is nineteen ticks behind rather than nominally so.
-    nowMs += batch.cmds.length * 8
-    link.pump(nowMs)
+    // 150 ms link really is nineteen ticks behind rather than nominally so —
+    // and the rate limit in front of the buffer is charged the same way an
+    // honest client would charge it.
+    clock.advance(batch.cmds.length * 8)
+    link.send(batchFrame(batch))
+    link.pump(clock.nowMs())
+    await settleLoopback(pair)
+    room.advance(batch.cmds.length)
     await settleLoopback(pair)
   }
 
   // Drain: keep beating until nothing is held anywhere. Bounded, because a
   // harness that could spin forever is a harness that will.
   for (let beat = 0; beat < 10_000 && (link.inFlight > 0 || !pair.idle); beat += 1) {
-    nowMs += 8
-    link.pump(nowMs)
+    link.pump(clock.advance(8))
     await settleLoopback(pair)
   }
 
   const seen = room.snapshot()
+  const session = peer.session
+  const stats = link.stats
   pair.close()
-  return { hashes, gaps: seen.gaps, commands: seen.commands }
+  return {
+    hashes,
+    gaps: seen.gaps,
+    commands: session.commands,
+    accepted: session.accepted,
+    refused: session.refused,
+    starved: seen.starved,
+    link: { dropped: stats.dropped, duplicated: stats.duplicated, reordered: stats.reordered },
+  }
 }
 
 describe('the latency matrix', () => {
   const TICKS = 600
 
-  it('agrees with the reference at every profile', { timeout: 60_000 }, async () => {
-    // Latency and jitter are *reliable* impairments: every frame arrives,
-    // exactly once, in order. So the world must come out identical — the link
-    // changed when the host heard, never what it heard. A failure here is a
-    // host that has started depending on arrival timing, which is the bug that
-    // makes a game feel fine on a LAN and fall apart on a train.
-    const expected = referenceHashes(TICKS)
-    const batches = recordStream(TICKS).batches.length
-
+  it('delivers every command exactly once and in order, however bad the link', { timeout: 60_000 }, async () => {
+    // The link's contract, asserted where a violation would actually be
+    // visible: at the host's door. Every command was offered, and every batch
+    // followed on from the one before it, which together say that nothing was
+    // lost, nothing was duplicated and nothing overtook anything.
+    //
+    // What is deliberately *not* asserted is that the buffer took all of them.
+    // A 250 ms link against a client with no lead delivers a quarter of a
+    // second of backlog in one burst, and the buffer's hard ceiling
+    // (`MAX_BUFFERED_COMMANDS`) refuses the tail of it on purpose — that
+    // ceiling is what stops a peer making the host hold an unbounded array, and
+    // a client that ran a real lead would never build the backlog in the first
+    // place.
     for (const profile of MATRIX) {
       const run = await runMatrix(profile, TICKS)
       const label = `profile ${profile.latencyMs}±${profile.jitterMs}ms`
-      // One hash per batch, and the last one is the world the reference ends in.
-      expect(run.hashes, label).toHaveLength(batches)
-      expect(run.hashes[run.hashes.length - 1], label).toBe(expected[TICKS - 1])
-      expect(run.gaps, label).toBe(0)
       expect(run.commands, label).toBe(TICKS)
+      expect(run.gaps, label).toBe(0)
+      expect(run.link.dropped, label).toBe(0)
+      expect(run.link.duplicated, label).toBe(0)
+      expect(run.link.reordered, label).toBe(0)
     }
+  })
+
+  it('produces the reference world when the buffer never has to compensate', async () => {
+    // The world claim, on the one profile where the jitter buffer is not being
+    // asked to do anything: every command is in the buffer before the sub-step
+    // that wants it, so the host executes exactly the recorded stream and the
+    // hash trace is the one a bare `tick()` loop produces. A failure here is a
+    // host that has started depending on arrival timing even when there is none.
+    const expected = referenceHashes(TICKS)
+    const batches = recordStream(TICKS).batches.length
+    const run = await runMatrix({ ...NO_LAG, seed: 11 }, TICKS)
+
+    expect(run.starved).toBe(0)
+    expect(run.hashes).toHaveLength(batches)
+    expect(run.hashes[run.hashes.length - 1]).toBe(expected[TICKS - 1])
   })
 
   it('breaks the world when frames actually go missing', { timeout: 60_000 }, async () => {
     // The other half of the claim: with a *gap* — loss on a link that does not
-    // retransmit, which is a datagram and not what this game runs on — the
-    // world is not the same, and the harness is not quietly repairing anything
-    // behind the test's back. Reconciliation does not rescue this either: the
-    // commands the host never received renumber every tick after them, which is
-    // exactly the desync `session.ts` refuses to hide. What TCP actually does
-    // is `retransmitMs`, and that case is measured in
-    // `client/src/net/netcode.test.ts`.
+    // retransmit, which is a datagram and not what this game runs on — commands
+    // never reach the host at all, and it notices rather than renumbering the
+    // gap away. What TCP actually does is `retransmitMs`, and that case is
+    // measured in `client/src/net/netcode.test.ts`.
     const expected = referenceHashes(TICKS)
     // Seed 67 rather than any seed: the first frame through the link is the
     // hello, and a run that loses *that* proves nothing about commands — it is
@@ -354,7 +423,6 @@ describe('the latency matrix', () => {
     const run = await runMatrix({ ...NO_LAG, latencyMs: 20, lossChance: 0.3, seed: 67 }, TICKS)
 
     expect(run.hashes.length, 'the handshake survived').toBeGreaterThan(0)
-    expect(run.hashes.length).toBeLessThan(recordStream(TICKS).batches.length)
     expect(run.commands).toBeLessThan(TICKS)
     expect(run.hashes[run.hashes.length - 1]).not.toBe(expected[TICKS - 1])
     // And the host noticed rather than renumbering the gap away.
@@ -365,14 +433,17 @@ describe('the latency matrix', () => {
     // Reordering is a deliberate violation of the transport contract, offered
     // so the cost of moving to unreliable datagrams can be measured rather than
     // guessed at — `sim/src/transport.ts` lists what would break. Every command
-    // still arrives; applying them in the wrong order is enough on its own.
+    // still arrives; applying them in the wrong order is enough on its own, and
+    // the buffer turns some of them away as late rather than rewinding the
+    // world for input.
     const expected = referenceHashes(TICKS)
     const run = await runMatrix(
       { ...NO_LAG, latencyMs: 40, reorderChance: 0.15, reorderMs: 60, seed: 77 },
       TICKS,
     )
 
-    expect(run.hashes).toHaveLength(recordStream(TICKS).batches.length)
+    expect(run.commands).toBe(TICKS)
+    expect(run.refused).toBeGreaterThan(0)
     expect(run.hashes[run.hashes.length - 1]).not.toBe(expected[TICKS - 1])
     expect(run.gaps).toBeGreaterThan(0)
   })

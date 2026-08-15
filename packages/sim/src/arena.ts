@@ -97,9 +97,10 @@ export const SKELETON_ARENA: CollisionWorld = createCollisionWorld(SKELETON_BRUS
  * The seed the walking skeleton's world runs on.
  *
  * Fixed, and shared by the client and the server, because they hash the *whole*
- * state at every tick and the PRNG stream is part of it. A real match derives
- * its seed from the room code (`hashString`), which is something both peers
- * already know — GLAD-FHKBN8.
+ * state at every tick and the PRNG stream is part of it. A real match does not
+ * use it: a room seeds its world from its own code (`server/src/rooms.ts`),
+ * which is the one thing both peers know before a socket is open. This is what
+ * the skeleton, the golden replay and every physics test run on.
  */
 export const SKELETON_SEED = 0x6c6164
 

@@ -3,9 +3,9 @@
  *
  * Split from `index.ts` so the tests can start a real one on an ephemeral port
  * and talk to it over a real socket. Everything this ticket claims about the
- * deployed system — that the shared simulation agrees, that a version mismatch
- * is readable, that a disallowed origin is refused — is asserted against *this*,
- * not against a mock.
+ * deployed system — that two strangers reach one room by sharing a code, that
+ * an unknown code is a sentence rather than a hang, that the world advances on
+ * a measured clock — is asserted against *this*, not against a mock.
  *
  * What this file is *not* is the host. A connection is turned into a
  * `Transport` by `net/wsTransport.ts` and handed to a `Room` (`room.ts`), and
@@ -14,16 +14,36 @@
  * `ws`, the origin policy, `randomUUID` — lives on this side of that line and
  * nothing on the other side of it may reach back over.
  *
- * The tick scheduler and the room registry are GLAD-FHKBN8; the connection
- * lifecycle is GLAD-DVDV6P. Here one connection gets one single-seat room,
- * created on connect and forgotten on close.
+ * ## The three timers, and why they are three
+ *
+ * They answer questions at rates three orders of magnitude apart, so one loop
+ * running at the fastest of them would be two thirds waste.
+ *
+ * - **The tick scheduler** (`scheduler.ts`), ~62.5 Hz: how far has wall-clock
+ *   moved, and therefore how many 8 ms sub-steps does every room owe. This is
+ *   also where each room's housekeeping beat is spent — clock-sync pings are
+ *   due five times a second and the sweep is idempotent, so there is nothing to
+ *   gain from a second loop for them.
+ * - **The socket heartbeat**, every 20 s: is this pipe still there. A question
+ *   about TCP rather than about the game, and it costs a WebSocket ping to ask.
+ * - **The jitter probe** (`jitter.ts`), at the tick interval: how late does this
+ *   machine wake anything up. An instrument, kept separate from the scheduler
+ *   on purpose so the scheduler can be rewritten without losing the baseline it
+ *   was measured against.
+ *
+ * ## Joining
+ *
+ * `wss://host/` opens a new room and the code comes back in the welcome.
+ * `wss://host/?room=ABC123` joins an existing one. A code that names no room is
+ * answered with a `fault` frame naming it and a 4006 close — a socket that
+ * opened and then went quiet is the one failure mode a player cannot diagnose.
  */
 import { createServer, type IncomingMessage, type Server } from 'node:http'
 import { randomUUID } from 'node:crypto'
 import { Socket } from 'node:net'
 import type { Duplex } from 'node:stream'
 
-import { PROTOCOL_VERSION } from '@gladiator/sim'
+import { CloseReason, PROTOCOL_VERSION, type MatchRules } from '@gladiator/sim'
 import { WebSocketServer, type WebSocket } from 'ws'
 
 import { systemClock, type Clock } from './clock.ts'
@@ -31,27 +51,19 @@ import type { ServerConfig } from './config.ts'
 import { createJitterProbe, type JitterProbe } from './jitter.ts'
 import { startHostLoop, systemScheduler, type Scheduler } from './loop.ts'
 import { createOriginPolicy } from './origin.ts'
-import { SERVER_MAP, SERVER_MAP_HASH } from './map.ts'
+import { SERVER_MAP, SERVER_MAP_HASH, SERVER_PLAN } from './map.ts'
 import { wsTransport } from './net/wsTransport.ts'
 import { createRoom, type Room } from './room.ts'
+import { normalizeRoomCode } from './roomCode.ts'
+import { createRoomRegistry, seedForRoom, type RoomRegistry } from './rooms.ts'
+import { createTickScheduler, type Timer, type TickScheduler } from './scheduler.ts'
+import { CLOSE_NO_SUCH_ROOM } from './session.ts'
 
 /** How often to ping an idle socket, to notice a peer that has gone away. */
 const HEARTBEAT_MS = 20_000
 
-/**
- * How often a room is given a beat, in milliseconds.
- *
- * A `Room` holds no timer of its own (`loop.ts`), so `sweep` is where its
- * housekeeping happens — and since GLAD-5995PA that includes minting clock-sync
- * pings, which are due five times a second. Twenty hertz, rather than exactly
- * the ping interval, so a beat that arrives a millisecond late does not push the
- * next ping a whole interval out and leave the cadence alternating.
- *
- * Beating a room and *ticking* it are different things, and this is only the
- * first: the 125 Hz scheduler that advances a room's world is GLAD-FHKBN8, and
- * it replaces this loop rather than joining it.
- */
-const ROOM_BEAT_MS = 50
+/** The query parameter a client puts a room code in. */
+export const ROOM_QUERY_PARAM = 'room'
 
 export type GladiatorServer = {
   readonly http: Server
@@ -59,12 +71,10 @@ export type GladiatorServer = {
   /** The port actually bound, which is not `config.port` when that is 0. */
   readonly port: number
   readonly sessions: number
+  /** The rooms this machine is holding. */
+  readonly rooms: RoomRegistry
+  readonly scheduler: TickScheduler
   close(): Promise<void>
-}
-
-type Connection = {
-  room: Room
-  alive: boolean
 }
 
 export type StartOptions = {
@@ -75,7 +85,36 @@ export type StartOptions = {
   readonly clock?: Clock
   /** Injected, because nothing that holds a world may hold a timer. `loop.ts`. */
   readonly scheduler?: Scheduler
+  /** The tick scheduler's one-shot timer. `scheduler.ts`. */
+  readonly timer?: Timer
+  /** Injected so a test can pin the codes it is about to type back in. */
+  readonly random?: () => number
+  /**
+   * The match every room on this machine plays. The Rocket Arena best-of-five
+   * unless something says otherwise.
+   *
+   * A property of the *server* rather than of a room, because v1 has one map
+   * and one format and the room registry has nothing to choose between. Which
+   * rules a room gets to pick — rounds to win, the self-damage mode — is a
+   * settings question and belongs to GLAD-NPCTU8; this is the seam it grows
+   * out of.
+   */
+  readonly rules?: MatchRules
   readonly log?: (line: string) => void
+}
+
+/**
+ * The room code a request is asking for, or `null` for "open me a new one".
+ *
+ * Read off the query string rather than the path, because the path is what a
+ * proxy rewrites and the query is what it forwards. The base is a throwaway:
+ * `request.url` on a server is origin-form, and `URL` needs *some* origin to
+ * parse against.
+ */
+export function roomCodeOf(url: string | undefined): string | null {
+  if (url === undefined) return null
+  const query = new URL(url, 'http://gladiator.invalid').searchParams.get(ROOM_QUERY_PARAM)
+  return query === null || query === '' ? null : query
 }
 
 export function startServer(options: StartOptions): Promise<GladiatorServer> {
@@ -83,11 +122,48 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
   const log = options.log ?? ((line: string) => console.log(line))
   const jitter = options.jitter ?? createJitterProbe()
   const clock = options.clock ?? systemClock()
-  const scheduler = options.scheduler ?? systemScheduler()
+  const beats = options.scheduler ?? systemScheduler()
   const isOriginAllowed = createOriginPolicy(config)
   const startedAtMs = Date.now()
 
-  const connections = new Map<WebSocket, Connection>()
+  const connections = new Map<WebSocket, { alive: boolean }>()
+
+  const rooms: RoomRegistry = createRoomRegistry({
+    clock,
+    log,
+    ...(options.random === undefined ? {} : { random: options.random }),
+    create: (code: string): Room =>
+      createRoom({
+        map: SERVER_MAP,
+        // Shared, because it is a function of the map and every room on this
+        // machine plays the same one. `map.ts`.
+        plan: SERVER_PLAN,
+        clock,
+        build: config.build,
+        id: code,
+        // The room's own code, hashed. Every match therefore flips its own
+        // coins — which pair of spawns a round starts on, and which end each
+        // player gets — rather than every room on the machine replaying the
+        // same sequence. `rooms.ts`.
+        seed: seedForRoom(code),
+        ...(options.rules === undefined ? {} : { rules: options.rules }),
+        peerId: () => randomUUID(),
+        log,
+      }),
+  })
+
+  // One timer for every world on the machine. It measures how much wall-clock
+  // actually went past, folds that into whole 8 ms sub-steps, and hands the
+  // count to every room — see `scheduler.ts` for why it aims at boundaries
+  // rather than sleeping an interval, and what it does after a stall.
+  const ticks = createTickScheduler({
+    clock,
+    ...(options.timer === undefined ? {} : { timer: options.timer }),
+    onFrame: (frame) => {
+      rooms.advance(frame.steps)
+      rooms.sweep(frame.nowMs)
+    },
+  })
 
   const http = createServer((request, response) => {
     if (request.url === '/healthz') {
@@ -100,8 +176,12 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
         map: { name: SERVER_MAP.source.name, hash: SERVER_MAP_HASH },
         uptimeSeconds: Math.round((Date.now() - startedAtMs) / 1000),
         sessions: connections.size,
-        // Served, not just logged: the p99 on the machine that is actually
-        // running is the only one worth quoting, and it changes under load.
+        rooms: rooms.stats(),
+        // Served, not just logged. The p99 on the machine that is actually
+        // running is the only one worth quoting, it changes under load, and
+        // `scheduler.withinBudget` is the deploy's own verdict on whether this
+        // machine class can hold a tick rate. `docs/deploy.md`.
+        scheduler: ticks.stats(),
         jitter: jitter.snapshot(),
       })
       response.writeHead(200, { 'content-type': 'application/json' })
@@ -150,25 +230,28 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
     })
   })
 
-  wss.on('connection', (socket: WebSocket) => {
-    // One connection, one single-seat room. Which commit and which world are
-    // fixed for the life of the process: the map is bundled, so a server
-    // cannot start holding one map and finish holding another. Rooms that
-    // outlive a connection and seat two players are GLAD-FHKBN8.
-    const room = createRoom({
-      map: SERVER_MAP,
-      clock,
-      build: config.build,
-      peerId: () => randomUUID(),
-      log,
-    })
-    const connection: Connection = { room, alive: true }
-    connections.set(socket, connection)
+  /**
+   * Tell a socket why it is not getting a room, and close it.
+   *
+   * A frame and then a close code, in that order and always both. The frame is
+   * what the player reads (`client/net/client.ts` prints a fault verbatim); the
+   * code is what a reconnect policy will branch on (GLAD-DVDV6P). A socket that
+   * simply went quiet is the one outcome nobody can diagnose, which is the whole
+   * of this ticket's "not a hang".
+   */
+  const refuse = (socket: WebSocket, code: string, detail: string, closeCode: number): void => {
+    socket.send(JSON.stringify({ t: 'fault', code, detail }))
+    socket.close(closeCode, code)
+  }
+
+  wss.on('connection', (socket: WebSocket, request: IncomingMessage) => {
+    connections.set(socket, { alive: true })
 
     // `pong` is the one socket event the room has no opinion about: it is the
     // liveness of the *pipe*, which is exactly what a transport abstracts away.
     socket.on('pong', () => {
-      connection.alive = true
+      const connection = connections.get(socket)
+      if (connection !== undefined) connection.alive = true
     })
     socket.on('close', () => {
       connections.delete(socket)
@@ -178,17 +261,46 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
       socket.terminate()
     })
 
-    room.join(wsTransport(socket))
+    const asked = roomCodeOf(request.url)
+    if (asked === null) {
+      const opened = rooms.create()
+      if (opened === null) {
+        refuse(
+          socket,
+          'server-full',
+          'this server is holding as many matches as it can; try again in a minute',
+          CloseReason.TryAgainLater,
+        )
+        return
+      }
+      opened.room.join(wsTransport(socket))
+      return
+    }
+
+    const found = rooms.get(asked)
+    if (found === null) {
+      // Both "that is not a code" and "that code names no room" land here, and
+      // they are deliberately one sentence. Telling a guesser which of the two
+      // they hit is telling them their character set is right.
+      const shown = normalizeRoomCode(asked) ?? asked.slice(0, 16)
+      log(`join refused: no room ${shown}`)
+      refuse(
+        socket,
+        'no-such-room',
+        `there is no match with the code ${shown} — check it, or ask for a new link`,
+        CLOSE_NO_SUCH_ROOM,
+      )
+      return
+    }
+
+    found.room.join(wsTransport(socket))
   })
 
-  // The timers. `Room` never holds one — see `loop.ts` — so both beats are
-  // handed to it, and the same room runs in a browser tab with no timer at all.
-  //
-  // Two of them, because they answer different questions at very different
-  // rates. This one asks "is this socket still there", which is a question
-  // about the pipe and costs a WebSocket ping to ask.
+  // The socket heartbeat: is this pipe still there. A question about TCP, at a
+  // rate that has nothing to do with the game's, which is why it is not folded
+  // into the tick scheduler's frame.
   const heartbeat = startHostLoop({
-    scheduler,
+    scheduler: beats,
     clock,
     intervalMs: HEARTBEAT_MS,
     beat: () => {
@@ -204,24 +316,7 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
     },
   })
 
-  // And this one is the room's own housekeeping: peers that have gone quiet,
-  // and the clock-sync pings, which are due five times a second. A room is
-  // swept at most once per beat however many peers it is holding — `sweep` is
-  // idempotent, but doing it twice would mint two pings for one interval.
-  const rooms = startHostLoop({
-    scheduler,
-    clock,
-    intervalMs: ROOM_BEAT_MS,
-    beat: (nowMs) => {
-      const swept = new Set<Room>()
-      for (const connection of connections.values()) {
-        if (swept.has(connection.room)) continue
-        swept.add(connection.room)
-        connection.room.sweep(nowMs)
-      }
-    },
-  })
-
+  ticks.start()
   jitter.start()
 
   return new Promise((resolve, reject) => {
@@ -233,18 +328,25 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
         http,
         wss,
         port,
+        rooms,
+        scheduler: ticks,
         get sessions() {
           return connections.size
         },
         close: () =>
           new Promise<void>((done) => {
             heartbeat.stop()
-            rooms.stop()
+            ticks.stop()
             jitter.stop()
-            // 1001 "going away" is what a browser is told when a server is
-            // shutting down cleanly, and it is what lets a client tell a deploy
-            // apart from a crash.
-            for (const socket of connections.keys()) socket.close(1001, 'server shutting down')
+            // "Going away" is what a browser is told when a server is shutting
+            // down cleanly, and it is what lets a client tell a deploy apart
+            // from a crash. Said twice on purpose: once to every room's peers
+            // through their transports, and once to any socket that never got
+            // as far as a room.
+            rooms.closeAll(CloseReason.GoingAway, 'server shutting down')
+            for (const socket of connections.keys()) {
+              socket.close(CloseReason.GoingAway, 'server shutting down')
+            }
             wss.close(() => http.close(() => done()))
           }),
       })

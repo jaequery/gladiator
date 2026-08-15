@@ -127,9 +127,23 @@ describe('parseServerMessage', () => {
   it('parses every server frame', () => {
     expect(
       parseServerMessage(
-        JSON.stringify({ t: 'welcome', protocol: 1, build: 'b', session: 's', mapHash: '0000beef' }),
+        JSON.stringify({
+          t: 'welcome',
+          protocol: 1,
+          build: 'b',
+          session: 's',
+          mapHash: '0000beef',
+          room: 'H7K2Q9',
+        }),
       ),
-    ).toEqual({ t: 'welcome', protocol: 1, build: 'b', session: 's', mapHash: '0000beef' })
+    ).toEqual({
+      t: 'welcome',
+      protocol: 1,
+      build: 'b',
+      session: 's',
+      mapHash: '0000beef',
+      room: 'H7K2Q9',
+    })
     expect(
       parseServerMessage(
         JSON.stringify({

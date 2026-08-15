@@ -487,8 +487,29 @@ which is how Quake, Source and most engines have always done
 single-player-on-multiplayer-code.
 
 The value is that there is no second implementation of the rules, because the
-second one is always the one with the bug. The cost is four constraints, and all
-four are enforced rather than asked for.
+second one is always the one with the bug. The cost is a handful of constraints,
+and every one of them is enforced rather than asked for.
+
+### Two seats, one command per seat per sub-step
+
+A room seats two peers and each has a jitter buffer (`inputQueue.ts`); every
+sub-step drains exactly one command from each. That is the answer to the
+question a single-seat room could dodge — whose command does a shared tick carry
+when only one of them has sent anything — and the answer is *both*, with a
+documented fallback for the one that is silent. A tick never stalls waiting for
+a peer, because a stall on one peer's socket is a hitch in the other peer's game.
+
+The match starts when the room fills: `startWhenFull` is the one edge out of
+warmup, taken between sub-steps, because the simulation is not the layer that
+knows both players have arrived. And a room with nobody in it does not tick at
+all — two hundred rooms that players have created and not yet joined would
+otherwise be 25,000 sub-steps a second over worlds nobody is in.
+
+**A tick label is the peer's, not the world's.** A client counts its own
+predicted ticks from one and a room counts sub-steps from one, and the two are
+equal only by coincidence — a player joining a room that has been running for a
+minute would otherwise have every command they ever send refused as late. That
+is exactly why `ServerSnapshot.ack` is a separate field from `state[0]`.
 
 ### `Room` is isomorphic, and a test proves it
 
@@ -509,18 +530,92 @@ may reach back over.
 
 ### The clock never reaches the simulation
 
-A host reads its `Clock` to notice a peer that has gone quiet. It never reads
-one to decide how far to advance the world: **a command batch advances the world
-by exactly its own commands**. That is what makes one recorded input stream
-produce the same state hash in-process and over a real socket, which is what
-`net/parity.test.ts` asserts — and the moment wall-clock decided how many ticks a
-batch was worth, the two would agree only by luck.
+A host reads its `Clock` to notice a peer that has gone quiet, and to charge the
+rate limit in front of the input buffer. It never reads one to decide how far to
+advance the world: **`Room.advance(steps)` runs exactly the sub-steps it is
+handed**, and the wall-clock that decided that number was measured a layer up.
 
-It is also why a test can run a whole match in the microseconds it takes rather
-than the minute a timer would charge. The tick scheduler that will drive rooms
-at a steady 125 Hz is GLAD-FHKBN8; the input-buffer policy in front of it is
-**The input buffer policy** below. Both hang off this shape rather than
-replacing it.
+That split is what makes a recorded input stream reproducible. A test can run
+ten thousand sub-steps at a single instant of a manual clock and get the hashes
+a real server produces over a real minute, which is what `net/parity.test.ts`
+asserts by pushing one stream through a loopback and a real socket on one
+schedule and requiring one trace out of both.
+
+### The tick scheduler
+
+`packages/server/src/scheduler.ts`. GLAD-FHKBN8. One timer for every world on
+the machine: it wakes about 62.5 times a second, folds the wall-clock that
+actually elapsed into a whole number of exact 8.000 ms sub-steps, and hands the
+count to every room in the registry.
+
+**It aims at the next boundary; it does not sleep an interval.** `setInterval`
+fires *no sooner* than its period after the last dispatch, so every millisecond
+of lateness is added to the next one and kept forever — twenty milliseconds of
+slip a second is a server whose tick counter runs 2% slow, which is every
+client's clock estimate walking away from it. Frame *n* is therefore aimed at
+`start + n × frameMs` and the sleep is `deadline − now`, so a wakeup 3 ms late
+sleeps 13 ms and the boundary does not move.
+
+**Two things could turn a hitch into a hang and both are refused.** The measured
+delta is clamped to `MAX_HOST_FRAME_MS`, so a 3-second stall buys 250 ms of
+simulation once and the rest is thrown away and counted — throwing simulated
+time away is *policy*, which is why `kernel.ts` deliberately does not do it. And
+when the aim point has fallen a whole frame behind, the scheduler **re-aims** at
+`now + frameMs` rather than marching through the boundaries it missed, because
+those frames measure no elapsed time, run no sub-steps, and are pure CPU burnt
+at the worst possible moment.
+
+**`HOST_FRAME_MS` is 16, not 16.667.** Node's timers have millisecond
+granularity, so 16.667 is a number this scheduler cannot ask for. And 16 is
+exactly two ticks: a frame that arrives on time runs two sub-steps and carries a
+remainder of exactly zero, forever, because both numbers are powers of two.
+
+**The budget is a p99 wakeup lateness of one tick**, `WAKEUP_BUDGET_MS`. A
+wakeup late by less than a sub-step lands in the same 8 ms the world was going
+to be advanced through anyway; past that, one wakeup in a hundred is a whole
+tick behind and every snapshot it produces is stale for every player on the
+machine. It is measured on the machine class that serves players — `measure-jitter.ts`
+drives the real scheduler over real rooms — logged at boot, and served live from
+`/healthz` with the deploy's own verdict beside it. The numbers, and what to do
+when they are over, are `docs/deploy.md`.
+
+A tab does not need the timer half of this and uses the accumulator:
+`listenServer.ts`'s `beat` calls the same `stepsFor`, because
+`requestAnimationFrame` already schedules itself against the display and a
+second timer chasing 62.5 Hz inside a 60 Hz frame would be two clocks arguing.
+
+### The room registry
+
+`packages/server/src/rooms.ts` and `roomCode.ts`. A `Map` from six characters of
+Crockford base32 to a live `Room`, and that is the whole lobby: one player opens
+a match, is told the code in the welcome, and sends it to somebody.
+
+**An in-memory `Map` on one machine is not a shortcut.** Two players in one room
+have to reach the same *process*, because a room is a `GameState` being advanced
+125 times a second and there is no version of that which shards; a registry in
+Redis would tell a second machine which code belonged to which room and have
+nothing useful to do with the answer. So v1 pins to one machine and the registry
+is definitionally consistent because there is only one of it. Scaling out is
+GLAD-G41FQ9.
+
+**The alphabet is `0123456789ABCDEFGHJKMNPQRSTVWXYZ`** — no `I`, `L` or `O`,
+because a person reading a code off a screen cannot tell them from `1` and `0`,
+and no `U`, so that no draw can spell an obscenity. Reading is lenient and
+writing is strict: lower case folds up, `O`/`I`/`L` fold to their digits,
+hyphens and spaces are dropped, and a `U` is **refused rather than folded** —
+it is ambiguous with nothing, so a `U` is a typo or a guess, and mapping it to
+something would turn a wrong code into a *different room*.
+
+**An unknown code is a sentence, never a hang.** The socket opens, gets a
+`fault` frame naming the code and a 4006 close, and the client prints it. A
+socket that opened and then went quiet is the one failure a player cannot
+diagnose, and a mistyped six-character code is the commonest thing that can go
+wrong in this whole product. "That is not a code" and "no such room" are
+deliberately the same sentence: telling a guesser which one they hit is telling
+them their character set is right.
+
+Thirty bits, the guess rate at the concurrency this deploy admits, and the
+empty-room reaper that stops codes leaking are `docs/deploy.md`.
 
 ### Nothing but bytes crosses the loopback
 
@@ -709,10 +804,11 @@ noise.
 
 **A snapshot carries two tick numbers and they answer different questions.**
 `state[0]` is how far the world has been advanced; `ServerSnapshot.ack` is how
-much of *this peer's* input is in it. They are equal only while a host advances
-the world by exactly the batch it was handed, which is what it does today;
-GLAD-FHKBN8's scheduler will come apart from that, and a client that had
-inferred one from the other would replay the wrong commands.
+much of *this peer's* input is in it. They came apart the moment a fixed-rate
+scheduler started draining a jitter buffer: the world advances on the host's
+clock and the ack advances on whatever that peer sent, and a client that
+inferred one from the other would replay the wrong commands. Two peers in one
+room have one `state[0]` between them and an `ack` each.
 
 ### The correction bands
 
@@ -764,38 +860,84 @@ opponent's position is a guess. `laggedTransport.ts` models it that way:
 *datagram*, which is a deliberate violation of the transport contract kept for
 the same reason `reorderChance` is.
 
+### The lead, and the two clocks it takes to hold it
+
+The client runs **ahead** of the host, by half the measured round trip plus the
+jitter buffer's target depth, so its command for sub-step *T* is in the host's
+buffer before the host gets there. Without that the two run at the same rate in
+the same phase, every command arrives one one-way trip after the tick that
+wanted it, and the host spends the match on the missing-command fallback. The
+lead is closed by *slewing* — the frame accumulator is handed a few percent more
+or fewer milliseconds — rather than by jumping, for the reasons `clockSync.ts`
+argues at length.
+
+**What is slewed is `commandTick`, and it is not `predictor.tick`.** A client
+carries two tick numbers and conflating them is the trap:
+
+| Number | Whose | Written by |
+| ------ | ----- | ---------- |
+| `predictor.tick` | the *server's* — a snapshot overwrites it sixty times a second | reconciliation |
+| `commandTick` | the *client's* — free-running, and what a command goes out labelled | the frame loop |
+
+Steering the first would be steering on a number the host keeps resetting: the
+slew pushes forward, adoption pulls back to whatever the host has actually
+executed, and the two fight until every command goes out under a label the host
+has already run — which is exactly what happens, measurably, if you try it. The
+second is nobody else's, so the lead it builds stays built. `predict(cmd, label)`
+is where they part company, and the default is the first for a caller with no
+clock estimate.
+
 ### What is measured, and where
 
 `packages/client/src/net/netcode.test.ts` plays a minute at 60 frames a second
 over LAN, 40, 80 and 180 ms links, all four with jitter and retransmitted loss,
-against a real `Room` in virtual time. It asserts no hard snaps, no desync, and
-corrections over a unit on under 5% of ticks — and then that the client's
-predicted hash matches a bare `tick()` loop on **every one of 7500 ticks**,
-while its world is being overwritten and rebuilt sixty times a second.
+against a real `Room` driven by the real scheduler in virtual time. It asserts
+no hard snaps, no dropped commands, corrections over a unit inside each link's
+budget, and — the containment mechanism — that after the network goes quiet the
+client's world differs from the host's by **exactly the input the host has not
+seen yet** and nothing else, having been overwritten and rebuilt sixty times a
+second for a minute in between.
 
-That last assertion is the project's physics-engine containment mechanism. Lint
-catches the imports somebody anticipated; a hash that has to match on every tick
-of a minute catches the category — an engine collision routine, a camera read
+Lint catches the imports somebody anticipated; two worlds that have to end in
+the same place catch the category — an engine collision routine, a camera read
 back into the simulation, a stray `Math.random`, a field the wire codec forgot.
+The exact codec claim, over a real socket, is `server/src/integration.test.ts`,
+which decodes every snapshot and requires it to hash to what the host announced.
+
+### What the numbers actually are, and the one that is not good enough
+
+Measured over a minute per profile, with the fixed-rate scheduler and a two-tick
+jitter buffer:
+
+| Link | Host sub-steps on the fallback | Corrections over 1 qu |
+| ---- | ------------------------------ | --------------------- |
+| LAN | 0.05% | 0.13% |
+| 40 ms | 1.1% | 1.4% |
+| 80 ms | 4.5% | 4.9% |
+| 180 ms | 26% | 30% |
+
+The first three are inside the 5% the acceptance check names. **The fourth is
+not**, and it is a property of the design rather than a bug in it: 180 ms round
+trip with ±25 ms of jitter is ±3 sub-steps against a buffer that holds two on
+purpose, and `inputQueue.ts` argues that depth at length — every buffered
+command is latency the player paid for and cannot get back. Raising
+`JITTER_BUFFER_TICKS` to five halves the 180 ms number and costs *every* player
+24 ms of input latency on every link, which is the trade this game refuses.
+
+The real answer is a buffer that adapts to the jitter the server already
+measures, rather than a constant. That is a ticket of its own, and until it
+exists the 180 ms budget in `netcode.test.ts` is a recorded number and a
+regression gate rather than a target anybody is happy with.
 
 ### What is deliberately not here
 
-**The clock-sync slew is not wired into the frame loop yet**, and that is a
-decision rather than an omission. A `Room` today advances its world by exactly
-the batch it was handed, so the server's tick counter is a count of the client's
-own commands rather than a clock. Steering the client's tick rate against it
-would close a loop through itself: run 12.5% fast, the server ticks 12.5% faster,
-the estimate follows, and the correction never converges. The consumer of
-`ClientClockSync.errorTicks` therefore arrives with the fixed-rate scheduler that
-makes the server's tick a clock (GLAD-FHKBN8). What *is* consumed today is the
-part with no feedback in it — the round trip, for the readout — and the
-interpolation clock, which tracks the snapshot stream and not the server's.
-
-For the same reason the harness seats **one** peer: two peers in one room would
-each advance the world by their own commands, so it would run at twice the rate
-with each player moving on half the ticks. Entity interpolation is therefore
-measured against a real simulated trajectory on a jittery delivery schedule
-(`interpolate.test.ts`) rather than through a second socket.
+**Two peers are still not measured through one harness.** `netcodeHarness.ts`
+seats one, because what it exists to measure is *this* client's prediction
+against an authoritative world, and a second peer would add a second
+uncontrolled input stream to a comparison that is about one. Two peers in one
+room over two real sockets, with a match played to a decision, is
+`server/src/duel.test.ts`; entity interpolation is `interpolate.test.ts` against
+a real simulated trajectory on a jittery delivery schedule.
 
 ---
 

@@ -12,7 +12,7 @@ import {
 import { JITTER_BUFFER_TICKS } from '@gladiator/server/inputQueue'
 import { describe, expect, it } from 'vitest'
 
-import { createNetClient, mustHoldStill, resolveServerUrl } from './client.ts'
+import { createNetClient, joinUrl, mustHoldStill, resolveServerUrl } from './client.ts'
 
 /**
  * A stand-in for the pipe, enough of one for this module: it records what was
@@ -73,6 +73,9 @@ class FakeTransport implements Transport {
 /** The map hash this fake client claims to hold. */
 const MAP_HASH = 'a1b2c3d4'
 
+/** The room the host seated this session in. Six Crockford characters. */
+const ROOM = 'H7K2Q9'
+
 function connected(protocolOverride?: number) {
   const transport = new FakeTransport()
   const client = createNetClient({
@@ -87,6 +90,32 @@ function connected(protocolOverride?: number) {
   transport.open()
   return { transport, client }
 }
+
+describe('joinUrl', () => {
+  it('asks for a new room when the page names none', () => {
+    // The host mints the code and puts it in the welcome, so a player who
+    // opened the page with nothing in the query string has a link to send.
+    expect(joinUrl('wss://gladiator.fly.dev', '')).toBe('wss://gladiator.fly.dev')
+    expect(joinUrl('wss://gladiator.fly.dev', '?local=1')).toBe('wss://gladiator.fly.dev')
+    expect(joinUrl('wss://gladiator.fly.dev', '?room=')).toBe('wss://gladiator.fly.dev')
+  })
+
+  it('carries the code through verbatim, whatever the player typed', () => {
+    // Not folded here. The host is the only thing that knows which codes exist
+    // and it does the folding (`@gladiator/server/roomCode.ts`); a client with
+    // its own opinion of the alphabet would be a second copy to keep in step.
+    expect(joinUrl('wss://gladiator.fly.dev', '?room=H7K2Q9')).toBe(
+      'wss://gladiator.fly.dev/?room=H7K2Q9',
+    )
+    expect(joinUrl('wss://gladiator.fly.dev', '?room=h7k-2q9')).toContain('room=h7k-2q9')
+  })
+
+  it('keeps whatever else the socket URL already carried', () => {
+    expect(joinUrl('ws://localhost:8787/?x=1', '?room=H7K2Q9')).toBe(
+      'ws://localhost:8787/?x=1&room=H7K2Q9',
+    )
+  })
+})
 
 describe('resolveServerUrl', () => {
   it('prefers the configured URL', () => {
@@ -173,6 +202,7 @@ describe('net client', () => {
       build: 'srv',
       session: 's1',
       mapHash: MAP_HASH,
+      room: ROOM,
     })
     expect(client.snapshot().serverMapHash).toBe(MAP_HASH)
     expect(mustHoldStill(client.snapshot().status)).toBe(false)
@@ -180,7 +210,7 @@ describe('net client', () => {
 
   it('reports agreement when the hashes match', () => {
     const { transport, client } = connected()
-    transport.deliver({ t: 'welcome', protocol: PROTOCOL_VERSION, build: 'srv', session: 's1', mapHash: MAP_HASH })
+    transport.deliver({ t: 'welcome', protocol: PROTOCOL_VERSION, build: 'srv', session: 's1', mapHash: MAP_HASH, room: ROOM })
     client.record(10, 0xdeadbeef)
     transport.deliver({ t: 'hash', tick: 10, hash: 0xdeadbeef })
 
@@ -301,7 +331,7 @@ describe('net client', () => {
 
   it('says so on the HUD when a live session starts dropping commands', () => {
     const { transport, client } = connected()
-    transport.deliver({ t: 'welcome', protocol: PROTOCOL_VERSION, build: 'srv', session: 's1', mapHash: MAP_HASH })
+    transport.deliver({ t: 'welcome', protocol: PROTOCOL_VERSION, build: 'srv', session: 's1', mapHash: MAP_HASH, room: ROOM })
     expect(client.snapshot().status).toBe('live')
 
     transport.stall()
@@ -317,7 +347,7 @@ describe('net client', () => {
     // "disconnected (code 1006)" is the more useful sentence of the two: it
     // says what happened rather than what it broke.
     const { transport, client } = connected()
-    transport.deliver({ t: 'welcome', protocol: PROTOCOL_VERSION, build: 'srv', session: 's1', mapHash: MAP_HASH })
+    transport.deliver({ t: 'welcome', protocol: PROTOCOL_VERSION, build: 'srv', session: 's1', mapHash: MAP_HASH, room: ROOM })
     transport.close(CloseReason.Abnormal, 'gone')
     client.queue(1, NULL_CMD)
     client.flush()
@@ -367,6 +397,7 @@ describe('clock sync over the wire', () => {
       build: 'srv',
       session: 's1',
       mapHash: MAP_HASH,
+      room: ROOM,
     })
     return {
       transport,

@@ -140,9 +140,9 @@ export function createKernel(
  * clamp would make that contract a lie in exactly the situation — a long
  * hitch — where someone is trying to work out why the two peers disagree.
  *
- * Deciding to *throw time away* is policy, and policy belongs to the
- * scheduler (GLAD-FHKBN8), which is also the only layer that can tell the
- * other peer it just did so.
+ * Deciding to *throw time away* is policy, and policy belongs to the scheduler
+ * (`server/src/scheduler.ts`), which is also the only layer that can tell the
+ * other peer it just did so — and the only one that counts how much it dropped.
  */
 export function clampHostDelta(dtMs: number): number {
   if (!Number.isFinite(dtMs) || dtMs < 0) return 0

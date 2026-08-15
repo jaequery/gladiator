@@ -27,9 +27,11 @@ import type { GameState } from './state.ts'
  * The frame for a state, acknowledging a peer's commands up to `ackTick`.
  *
  * `ackTick` is the tick label of the last command *that peer* sent which this
- * world has executed — not the world's own tick. The two are the same number
- * while a host advances by exactly the batch it was handed, and come apart the
- * moment a scheduler drains a jitter buffer at a fixed rate (GLAD-FHKBN8).
+ * world has executed — not the world's own tick, and not in the same numbering.
+ * A client counts its own predicted ticks and a host counts sub-steps on its own
+ * clock; the two came apart the moment a fixed-rate scheduler started draining a
+ * jitter buffer (`server/src/scheduler.ts`), and two peers in one room have one
+ * world tick between them and an `ack` each.
  *
  * The state is *copied* into a flat array here. `tick()` mutates the world in
  * place, so a frame holding references would silently become a frame about the

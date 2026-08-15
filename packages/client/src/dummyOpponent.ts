@@ -1,11 +1,12 @@
 /**
  * A scripted opponent, for looking at.
  *
- * Snapshots do arrive now, and `net/interpolate.ts` draws whatever is in them
- * (GLAD-6RT64L) — but a room still seats one peer, so there is nobody in them
- * to draw until the scheduler can seat two (GLAD-FHKBN8). `?dummy=1` fills the
- * gap, and `main.ts` only reaches for it when the interpolation buffer has
- * nothing of its own to show. A second player who runs a circle,
+ * Snapshots do arrive now, `net/interpolate.ts` draws whatever is in them
+ * (GLAD-6RT64L), and a room seats two — so a real duel has a real opponent in
+ * them. There is nobody to draw while the second seat is empty: a match nobody
+ * has joined yet, or single-player before there is a bot to put in it
+ * (GLAD-V7CMHR). `?dummy=1` fills that gap, and `main.ts` only reaches for it
+ * when the interpolation buffer has nothing of its own to show. A second player who runs a circle,
  * jumps, fires, switches weapons, stands still and dies — every animation state
  * in one twenty-second loop, watchable in a real browser rather than only
  * asserted in a test.
