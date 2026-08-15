@@ -103,6 +103,11 @@ const OWN_RECORDS: readonly string[] = [
   // What the bot believes about the opponent, and about a rocket it can see.
   'contact',
   'threat',
+  // What the bot's *hands* are following, which is a belief of its own and not the
+  // same thing as the contact: `aim/error.ts` dead-reckons and blends it so that a
+  // target changing direction costs a reaction time. It holds an origin and a
+  // velocity, and neither is any body's.
+  'track',
   // The perception layer's own previous-tick copies.
   'perception',
   // The follower's bookkeeping, and the controller input it fills in each sub-step.

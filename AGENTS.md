@@ -1534,6 +1534,161 @@ them.
 
 ---
 
+## The bot's aim, and its combat
+
+`packages/bot/src/aim/` and `combat/`. GLAD-HK3ATM. The arguments live in
+`aim/error.ts` (why it misses) and `combat/rocketAim.ts` (why it aims at the
+floor); this is the shape of it and the five things that are decisions rather
+than implementation.
+
+### A bang-bang servo, explicitly not Quake 3's integrator
+
+`aim/controller.ts` carries an angle *and an angular rate*, and drives the rate
+at the acceleration limit in whichever direction the switching curve says. That
+one choice produces the shape a human aim has: a hard flick that runs out to the
+turn rate, a brake that starts before the target, and a settle with no bounce.
+Three limits — acceleration (`AIM_ACCEL_TICKS`, 80 ms to full rate), rate
+(`MAX_TURN_UNITS`), and one angle unit of quantisation — and a short correction
+is governed entirely by the first while a 180 spends most of its time on the
+second, out of the same two lines.
+
+Q3's `BotChangeViewAngles` is *not* transcribed, unlike every Quake physics
+number in this repo: its `speed += (speed - desired)` has the wrong sign, which
+is where the characteristic Q3 crosshair shiver comes from. It is a bug, not a
+design.
+
+**The braking distance is `v^2/2a - v/2`, not `v^2/2a`.** The sub-step order is
+decelerate-then-move, so the discrete distance is half a sub-step's travel less
+than the continuous formula — and using the continuous one made the servo
+overshoot by a fifth of its travel and then hunt back across the target, which is
+the Q3 artefact arrived at from the other direction. `stopDistance` is the closed
+form; `aim/controller.test.ts` asserts no overshoot at five distances.
+
+### Three error sources, and each answers a different question
+
+| Source | What it models | Where |
+| ------ | -------------- | ----- |
+| **the track** | how long it takes to notice a change of direction | `AimTrack` |
+| **displacement error** | how much harder aiming at empty space is | `errorRadius` |
+| **motor error** | hands | `AimNoise.motor` |
+
+**The reaction is an interpolation, not a delay.** Freeze-then-snap makes a bot
+*perfect* the instant the timer expires; what a person does is keep tracking
+their stale prediction and blend onto the fresh one. `AimTrack` is a
+constant-velocity belief, dead-reckoned every sub-step and pulled towards the
+perceived one by `1 / reaction` of the difference — so a straight-line runner is
+tracked with **no lag at all** and somebody who cuts costs a full reaction time.
+Both halves are asserted, because either alone would pass for the wrong model.
+
+**Error is proportional to displacement from the reference point**, and the
+reference is the believed body centre — what the bot can actually see. A rail at
+a visible body is exact; a splash at the feet is 24 units off and so 6 units
+wrong; a 200-unit lead is 50 units wrong. "Aim is harder when you are guessing"
+therefore needs no skill table and no per-weapon accuracy, and a bot that stops
+leading stops paying for it.
+
+The reaction is *also* a hard gate on the trigger, armed by acquisition:
+becoming visible after more than `SIGHT_HOLD_TICKS` out of sight draws a fresh
+one. Under that window it does not re-arm, or a target flickering behind a
+railing would be worth more than cover is.
+
+**Every draw is gated on the model.** The error is aged on every sub-step the bot
+is alive and on no other condition, so the number of draws taken cannot depend on
+anything unperceived — the same argument `perception/perceive.ts` makes about the
+sound channel, and the thing `perception/fairness.test.ts` would catch.
+
+### Splash-at-the-feet is the primary rocket mode, and it is a comparison
+
+`combat/rocketAim.ts` evaluates two candidate aim points every decision — the
+body, and a floor or wall point beside it — and takes the better one under
+`combat/damage.ts`'s expected damage. That is deliberately not a rule: against
+somebody standing still at point-blank range the direct shot genuinely is better,
+and the same two lines say so.
+
+The objective function is a closed form over one number, the **miss radius**: the
+aim error above, plus how far the target could get to that the reckoning did not
+predict (their speed times the flight time times how unpredictable they have
+been). Expected damage is then the linear falloff integrated over a uniform disc
+of that radius, and a direct hit is the share of the disc the 30x56 silhouette
+covers. As the radius grows the direct expectation collapses *quadratically* and
+the splash decays *linearly*, and that gap is the whole argument.
+
+Leading is the intercept quadratic with two corrections and a refusal. The lag
+term is **negative and derived** — `MISSILE_PRESTEP_MS` is 50 ms of head start
+and the command costs one sub-step, so a rocket arrives 42 ms sooner than
+`distance / speed` says. It is clamped to half a second, past which linear
+extrapolation of a duellist is fantasy. And **a jittering target is not led at
+all**: net displacement over path length under 0.45 means strafing in place
+rather than travelling, and their velocity says nothing about where they will be.
+
+### The self-damage guard is two-sided
+
+A bot that refused every rocket which could splash it backs away from close
+range and plays visibly timid, so `combat/selfDamage.ts` is an **allowance**
+(25 points at full health) that shrinks with health until it is a veto. The
+prediction is where the rocket will actually *burst* — the world and the one body
+the bot believes in, whichever the trace reaches first — not where the crosshair
+points, which is the difference between a rocket at somebody's feet across a room
+and the same aim with a pillar 40 units in front of the muzzle.
+
+The bound is taken against `SelfDamage.Full` with no armour, the harshest mode,
+because the `WorldModel` does not carry which mode the match is running and is
+not going to: that would be a field added for the bot's convenience rather than
+because a channel would have told a player. Under the default `armor_only` the
+bot is conservative by exactly what its armour would have absorbed.
+
+The rocket-jump exemption is a **parameter** rather than a flag on a state, so
+both answers are visible at the call site. Nothing asks for one in v1 — the nav
+graph has no `rocketjump` kind — and `selfDamage.test.ts` exercises both branches
+so the seam is not a comment.
+
+### A rail is a resource; a dodge is a perception problem
+
+**Rails wait for the aim to settle** (`combat/railDiscipline.ts`): 1500 ms of
+refire is most of an exchange, and a bot that only takes settled rails reads as
+disciplined where one that only takes snap rails reads as lucky. "Settled" is two
+numbers — the crosshair is on them, *and* it has stopped moving — and the second
+produces a range behaviour nobody wrote down: a target strafing at run speed
+subtends 27 angle units per sub-step at 1000 units and 67 at 400, so the bot
+rails across the arena and switches to rockets in a close fight, out of one
+threshold rather than a range table.
+
+**A dodge reads `worldModel.threats` and can read nothing else.** `.entities` is
+banned in `combat/` by `GROUND_TRUTH_BANS`, so a rocket fired outside the bot's
+field of view is simply not in the list — the guarantee is structural rather than
+a check somebody remembered. The threat is charged the same reaction the trigger
+is, the test is a *closest approach* against a splash radius plus a margin
+(a rocket aimed at the wall beside you is the one that kills you), and every
+candidate direction is swept with the real player box first, because a rocket
+landing on the wall you just backed into does more damage than one landing where
+you were. Perpendicular first, then the other side, then two diagonals that lean
+away; nothing runs back down the rocket's axis.
+
+**A dodge arrives at the movement layer as a goal**, not as a stick position —
+`BotDecision.evade` becomes a point `DODGE_PROBE` units away, so routing, the
+ledge guard and the arrival test all apply to it unchanged. The only thing it
+suppresses is the circle jump, because air acceleration is a tenth of the ground
+figure and a hop commits the bot to a heading for a quarter of a second.
+
+### What is measured, and where
+
+`packages/bot/src/combat/reaction.test.ts` is the acceptance check itself: a
+thousand acquisitions through the real perception layer, clock starting on the
+sub-step sight first reports the opponent and stopping on the sub-step
+`BUTTON_ATTACK` first appears. `maps/arena1.combat.test.ts` re-derives the
+self-damage prediction and the settle predicate from every command two bots
+actually sent over four minutes of duelling — from the `UserCmd`, not from the
+bot's own bookkeeping, for the reason `tools/bot-arena.ts` gives about the stall
+clock.
+
+Since this ticket the bots kill each other, so rounds end on a death rather than
+on the clock. Two things in the movement harness follow from that and are not
+tuning: a spawn's yaw is adopted rather than turned to, so a yaw delta across a
+round boundary is not a turn and is not measured; and a circle jump that took a
+rocket mid-flight is not a measurement of the circle jump.
+
+---
+
 ## The HUD
 
 `packages/client/src/ui/`. Four modules and one rule, and the rule is the

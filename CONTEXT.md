@@ -720,6 +720,73 @@ never a position write; four seconds emits `NAV_STUCK` with the position in it.
 movement's acceptance checks measured from the world rather than from the bot's
 own bookkeeping. `tools/bot-arena.ts`.
 
+**Aim controller** — the bot's view, as an angle *and an angular rate*, driven
+at an acceleration limit by a **bang-bang** switching curve: push while you
+could still stop in time, brake once you could not. Flick, brake, settle, with
+no overshoot. `packages/bot/src/aim/controller.ts` (GLAD-HK3ATM). Deliberately
+not Quake 3's integrator, whose sign error is the origin of the crosshair
+shiver its bots are known for.
+
+**Track** — what the bot's *hands* are following, which is not the same as what
+it believes: a constant-velocity model dead-reckoned every sub-step and pulled
+towards the perceived belief by `1 / reaction` of the difference. It is how a
+reaction time is modelled — a straight-line runner costs nothing to track and
+somebody who changes direction costs a full reaction — and it is why the
+reaction is an interpolation rather than a freeze.
+
+**Reaction** — 140 ms plus a uniform draw up to 140 more, rounded up into whole
+sub-steps, so the floor is a floor. Drawn on *acquisition* — a contact becoming
+visible after more than 200 ms out of sight — and it gates the trigger, sets the
+track's blend, and is the period the aim error is re-rolled on.
+
+**Aim error** — how far off the bot points, **proportional to the displacement
+of its aim point from the reference point** (the believed body centre). Aiming
+at a visible body is exact, splashing at the feet is 24 units of displacement,
+leading is however far ahead the lead is. That is the whole "aim is harder when
+you are guessing" model, with no skill table in it.
+
+**Motor error** — a multiplicative term on the *applied angular acceleration*
+and on nothing else, re-rolled once per reaction period. The rate limit is the
+arm and does not wobble; how hard the wrist pushes does.
+
+**Miss radius** — the one number the shot selection compares two aim points
+under: the aim error plus how far the target could get to that the reckoning did
+not predict. `combat/damage.ts` turns it into an expected damage for each.
+
+**Splash aiming** — putting a rocket at the floor or wall beside somebody rather
+than into them. The **primary** rocket mode, not a fallback: as the miss radius
+grows a direct hit collapses quadratically and a splash decays linearly, so on
+anything that is moving the splash is worth more. It is a comparison every
+decision, so a stationary target at point-blank range still gets a direct rocket.
+
+**Lead** — the intercept quadratic, with a *negative* lag term derived from
+`MISSILE_PRESTEP_MS` and the command's own sub-step, clamped to half a second.
+Not taken at all against a target whose net displacement over the last half
+second divided by its path length is under 0.45 — that is strafing in place, not
+travelling, and their velocity says nothing about where they will be.
+
+**Self-splash allowance** — how much of its own rocket the bot will accept, in
+points: 25 at full health, shrinking until it is a refusal. Two-sided on purpose
+— a bot that refused every rocket which could touch it plays visibly timid at
+close range. Bounded against `SelfDamage.Full` with no armour, the harshest mode,
+because the `WorldModel` does not carry which mode is in force.
+
+**Settled** — a rail's precondition: the crosshair is on them *and* it has
+stopped moving. 1500 ms of refire makes each rail a resource, and a bot that
+only takes settled rails reads as disciplined where one that only takes snap
+rails reads as lucky. `combat/railDiscipline.ts`.
+
+**Threat** — a rocket in the `WorldModel`. The bot's own are known without being
+looked at; anybody else's pass the same cone, range and line-of-sight tests a
+body does, which is what makes "never dodges a rocket fired from behind" a
+structural property rather than a check.
+
+**Dodge** — moving out of a perceived rocket's closest approach. Perpendicular
+first, never back down its axis, and never into a wall — a rocket landing on the
+wall you backed into does more damage than one landing where you were. It
+reaches the movement layer as a *goal*, so the ledge guard and routing apply to
+it unchanged.
+
 ---
 
 ## The build

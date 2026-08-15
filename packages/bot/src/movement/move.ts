@@ -47,12 +47,23 @@
  * nav graph is a function of it. What it never sees is a `GameState`, which
  * `eslint.config.js`'s `GROUND_TRUTH_BANS` enforces by refusing the name in this
  * directory at all.
+ *
+ * ## A dodge arrives as a goal, not as a stick position
+ *
+ * `combat/dodge.ts` (GLAD-HK3ATM) decides *which way* to get out of the way of a
+ * rocket, and hands it over on {@link BotDecision.evade}. This layer turns it
+ * into a goal {@link EVADE_REACH} units away and lets the rest of the file
+ * happen: routing answers "walk straight at it" because the point is inside the
+ * node the bot is standing in, the ledge guard still refuses a dodge off a
+ * walkway, and the arrival test still applies. The only thing a dodge suppresses
+ * is the circle jump, and the reason is in the code beside it.
  */
 
 import { MatchPhase, vec3 } from '@gladiator/sim'
 import type { CollisionWorld, MutVec3, RngHolder, Vec3 } from '@gladiator/sim'
 
 import type { BotDecision } from '../brain.ts'
+import { DODGE_PROBE } from '../combat/dodge.ts'
 import type { LoadedNav } from '../nav/load.ts'
 import { hopKind, nextHop, nodeNear, nodeOrigin } from '../nav/query.ts'
 import { NO_NODE } from '../nav/schema.ts'
@@ -90,6 +101,17 @@ export type BotTerrain = {
   readonly world: CollisionWorld
   readonly nav: LoadedNav | null
 }
+
+/**
+ * How far ahead a dodge places its goal, in Quake units.
+ *
+ * {@link DODGE_PROBE}, imported rather than restated: that is the distance
+ * `combat/dodge.ts` swept the real player box over before it was willing to
+ * offer the direction at all, so it is exactly how far the escape is *known* to
+ * be clear. A goal beyond it would be a claim nothing checked, and one short of
+ * it would have the follower arrive and stop in the middle of a dodge.
+ */
+export const EVADE_REACH = DODGE_PROBE
 
 /** Everything the follower remembers between sub-steps. */
 export type MoveState = {
@@ -311,8 +333,14 @@ export function moveBot(
     speed === 0
       ? 0
       : (self.velocity[0] * intent.wish[0] + self.velocity[1] * intent.wish[1]) / speed
+  // A hop during a dodge is the one thing a dodge cannot afford: air
+  // acceleration is a tenth of the ground figure (`pmove/accelerate.ts`), so the
+  // bot would commit to the direction it left the ground in for the whole of the
+  // flight — which is a quarter of a second of not being able to change its mind
+  // about a rocket that is still in the air.
   const hopping =
     !recovering &&
+    !decision.hasEvade &&
     move.hop === 'walk' &&
     move.run.lean !== 0 &&
     wantsCircleJump(self.onGround, speed, align, move.run.length, move.runHopped)
@@ -361,11 +389,18 @@ export function moveBot(
 /**
  * Fill in {@link goal} and return whether there is one.
  *
- * Two sources, and the second is why a bot is never idle:
+ * Three sources, and the last is why a bot is never idle:
  *
- * 1. **The decision's goal.** Something the brain wants: the opponent's believed
+ * 1. **An evade.** A rocket the combat layer has decided to be somewhere else
+ *    about (`combat/dodge.ts`), expressed as a point {@link EVADE_REACH} away in
+ *    the direction it chose. It is a *goal* rather than a wish override, and that
+ *    is what makes it cost nothing: the ledge guard, the arrival test and the
+ *    quantisation all apply to it unchanged, and 96 units is close enough that
+ *    the nearest node is almost always the one the bot is standing at — so
+ *    routing answers "walk straight at it", which is what a dodge is.
+ * 2. **The decision's goal.** Something the brain wants: the opponent's believed
  *    position, today (`brain.ts`).
- * 2. **A roam target.** `movement/roam.ts` argues why search behaviour lives down
+ * 3. **A roam target.** `movement/roam.ts` argues why search behaviour lives down
  *    here — `brain.ts` points at it by name.
  *
  * There is deliberately no third case in which the bot stands still. `decide` stops
@@ -387,6 +422,15 @@ function chooseGoal(
   nav: LoadedNav | null,
   near: number,
 ): boolean {
+  if (decision.hasEvade) {
+    move.roamNode = NO_NODE
+    const self = model.self
+    goal[0] = self.origin[0] + decision.evade[0] * EVADE_REACH
+    goal[1] = self.origin[1] + decision.evade[1] * EVADE_REACH
+    goal[2] = self.origin[2]
+    return true
+  }
+
   if (decision.hasGoal) {
     move.roamNode = NO_NODE
     goal[0] = decision.goal[0]
