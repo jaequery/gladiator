@@ -194,6 +194,7 @@ export {
   NEW_MATCH_SCORE,
   advanceMatch,
   damageReserve,
+  forfeitMatch,
   isPlayableScore,
   roundOutcome,
   startMatch,
@@ -288,6 +289,7 @@ export {
 export type { WireState } from './netstate.ts'
 
 export {
+  LifecycleEvent,
   MAX_CMDS_PER_BATCH,
   MAX_RESUME_TICKET_CHARS,
   PROTOCOL_VERSION,
@@ -308,6 +310,7 @@ export type {
   ServerDrain,
   ServerFault,
   ServerHash,
+  ServerLifecycle,
   ServerMapMismatch,
   ServerMessage,
   ServerPing,

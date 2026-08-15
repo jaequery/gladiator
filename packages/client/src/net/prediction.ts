@@ -147,6 +147,21 @@ export type Predictor = {
    * could not read.
    */
   accept(snapshot: ServerSnapshot): Correction | null
+  /**
+   * Throw away every unacknowledged command. Returns how many there were.
+   *
+   * For a reconnect, and only for a reconnect (GLAD-DVDV6P). The pending queue
+   * is "what the host has not seen yet", which is true right up until the host
+   * stops being the same socket: after a gap, those commands are labelled in a
+   * tick space the session has slewed away from, and the world they were
+   * predicted on top of has had seconds of somebody else's match happen to it.
+   * Replaying them across the gap produces a journey nobody made, and the next
+   * snapshot then corrects it — a correction the size of the whole gap.
+   *
+   * The honest thing is to admit the client knows nothing and take the first
+   * snapshot whole, which is what an empty pending queue makes `accept` do.
+   */
+  discard(): number
 }
 
 export type PredictorOptions = {
@@ -247,6 +262,12 @@ export function createPredictor(options: PredictorOptions): Predictor {
       pending.push({ tick: label ?? state.tick, cmd })
 
       return hashState(state)
+    },
+
+    discard(): number {
+      const held = pending.length
+      pending.length = 0
+      return held
     },
 
     accept(snapshot: ServerSnapshot): Correction | null {

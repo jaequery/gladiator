@@ -82,6 +82,10 @@ const MAP_HASH = 'a1b2c3d4'
 /** The room the host seated this session in. Six Crockford characters. */
 const ROOM = 'H7K2Q9'
 
+/** The key to this session's seat, which a reconnect has to present back.
+ *  `@gladiator/server/lifecycle.ts`. */
+const TOKEN = 'deadbeefdeadbeefdeadbeefdeadbeef'
+
 function connected(protocolOverride?: number) {
   const transport = new FakeTransport()
   const client = createNetClient({
@@ -230,6 +234,7 @@ describe('net client', () => {
       session: 's1',
       mapHash: MAP_HASH,
       room: ROOM,
+      token: TOKEN,
     })
     expect(client.snapshot().serverMapHash).toBe(MAP_HASH)
     expect(mustHoldStill(client.snapshot().status)).toBe(false)
@@ -248,13 +253,22 @@ describe('net client', () => {
       session: 's1',
       mapHash: MAP_HASH,
       room: ROOM,
+      token: TOKEN,
     })
     expect(client.snapshot().room).toBe(ROOM)
   })
 
   it('reports agreement when the hashes match', () => {
     const { transport, client } = connected()
-    transport.deliver({ t: 'welcome', protocol: PROTOCOL_VERSION, build: 'srv', session: 's1', mapHash: MAP_HASH, room: ROOM })
+    transport.deliver({
+      t: 'welcome',
+      protocol: PROTOCOL_VERSION,
+      build: 'srv',
+      session: 's1',
+      mapHash: MAP_HASH,
+      room: ROOM,
+      token: TOKEN,
+    })
     client.record(10, 0xdeadbeef)
     transport.deliver({ t: 'hash', tick: 10, hash: 0xdeadbeef })
 
@@ -408,7 +422,15 @@ describe('net client', () => {
 
   it('says so on the HUD when a live session starts dropping commands', () => {
     const { transport, client } = connected()
-    transport.deliver({ t: 'welcome', protocol: PROTOCOL_VERSION, build: 'srv', session: 's1', mapHash: MAP_HASH, room: ROOM })
+    transport.deliver({
+      t: 'welcome',
+      protocol: PROTOCOL_VERSION,
+      build: 'srv',
+      session: 's1',
+      mapHash: MAP_HASH,
+      room: ROOM,
+      token: TOKEN,
+    })
     expect(client.snapshot().status).toBe('live')
 
     transport.stall()
@@ -424,7 +446,15 @@ describe('net client', () => {
     // "disconnected (code 1006)" is the more useful sentence of the two: it
     // says what happened rather than what it broke.
     const { transport, client } = connected()
-    transport.deliver({ t: 'welcome', protocol: PROTOCOL_VERSION, build: 'srv', session: 's1', mapHash: MAP_HASH, room: ROOM })
+    transport.deliver({
+      t: 'welcome',
+      protocol: PROTOCOL_VERSION,
+      build: 'srv',
+      session: 's1',
+      mapHash: MAP_HASH,
+      room: ROOM,
+      token: TOKEN,
+    })
     transport.close(CloseReason.Abnormal, 'gone')
     client.queue(1, NULL_CMD)
     client.flush()
@@ -475,6 +505,7 @@ describe('clock sync over the wire', () => {
       session: 's1',
       mapHash: MAP_HASH,
       room: ROOM,
+      token: TOKEN,
     })
     return {
       transport,
@@ -566,6 +597,7 @@ describe('the quick-match line', () => {
       session: 's1',
       mapHash: MAP_HASH,
       room: ROOM,
+      token: TOKEN,
     })
     expect(client.snapshot().queue).toBeNull()
   })

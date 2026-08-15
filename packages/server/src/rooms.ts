@@ -24,11 +24,16 @@
  * the same leak with two causes: a `Map` entry holding a `GameState` that
  * nobody will ever tick again. {@link RoomRegistryOptions.emptyTtlMs} is the one
  * rule that covers both — a room with no peers for a minute is closed and
- * forgotten. It is deliberately blunt: *when* a peer counts as gone, whether a
- * disconnected player may come back to the same room, and what a forfeit does to
- * the score are the connection lifecycle's questions (GLAD-DVDV6P), and that
- * ticket will want a longer grace period than this. Lengthening one number is
- * the seam it inherits.
+ * forgotten.
+ *
+ * It is deliberately blunt, and it is now *downstream* of a policy rather than
+ * standing in for one. Whether a disconnected player may come back, and what a
+ * timeout does to the score, are `lifecycle.ts`'s questions (GLAD-DVDV6P). What
+ * this file owes that answer is one inequality: the TTL is at least
+ * `RECONNECT_GRACE_MS`, or a room whose only peer dropped would be reaped out
+ * from under a reconnect that was still inside its window. `lifecycle.test.ts`
+ * asserts it, because it is exactly the kind of relationship that survives right
+ * up until somebody tunes one of the two numbers.
  */
 import { CloseReason, NEW_MATCH_SCORE, hashString, type MatchScore } from '@gladiator/sim'
 
@@ -53,8 +58,13 @@ export const MAX_ROOMS = 200
  *
  * A minute. Long enough that a host can create a match, paste the link into a
  * chat window and wait for somebody to read it; short enough that a bot opening
- * connections cannot fill {@link MAX_ROOMS} and keep it full. See the header for
- * why this is not the room GC.
+ * connections cannot fill {@link MAX_ROOMS} and keep it full.
+ *
+ * And at least twice `RECONNECT_GRACE_MS`, which is the constraint that is not
+ * about hospitality: a match both of whose players dropped is a room with no
+ * peers in it, and reaping that before their windows had closed would turn a
+ * reconnect into "no such room" — the sentence a player reads as "the server
+ * lost my match".
  */
 export const EMPTY_ROOM_TTL_MS = 60_000
 

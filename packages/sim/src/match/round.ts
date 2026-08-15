@@ -11,6 +11,10 @@
  *                              \--score reached, or the round cap--------------> Over
  * ```
  *
+ * Plus one edge that comes from outside the world: {@link forfeitMatch} takes
+ * either playing phase straight to `Over`, because a seat that has been empty
+ * for thirty seconds is a match that cannot be finished (GLAD-DVDV6P).
+ *
  * {@link advanceMatch} is a kernel phase and runs at the end of every sub-step,
  * after damage has been dealt and rockets have been removed. That position is
  * the contract: a death is visible to the round rules on the tick it happened,
@@ -304,6 +308,50 @@ export function startMatch(
   match.lastRoundWinner = NO_WINNER
   match.winner = NO_WINNER
   beginRound(state, plan)
+}
+
+/**
+ * End a match nobody can finish, because a seat is not coming back.
+ *
+ * The other external edge, and the mirror of {@link startMatch}: the simulation
+ * is not the layer that knows a socket has been gone for thirty seconds, so the
+ * connection lifecycle tells it (`server/lifecycle.ts`, GLAD-DVDV6P). Returns
+ * whether there was a match to end — `false` in warmup, where nobody has played
+ * a round yet, and in {@link MatchPhase.Over}, where the question is already
+ * settled.
+ *
+ * **The round in progress is awarded, and then the match is.** Awarding only the
+ * round would start the next one against an empty seat and award that too, three
+ * seconds later, and so on until the score ran out — a match played out in
+ * intermissions, which is a worse way of saying the same thing.
+ *
+ * `winner` is the player still connected, or {@link NO_WINNER} when both are
+ * gone and there is nobody to award anything to. It is set **directly** rather
+ * than derived from the score, and that is the one place this differs from
+ * {@link endMatch}: a player who quits while ahead 2–1 leaves a score that says
+ * they were winning and a match their opponent won. Those two facts disagree
+ * because a forfeit is exactly the situation in which they should — the score is
+ * a record of the rounds that were played, and the winner is the player who was
+ * still there.
+ */
+export function forfeitMatch(state: GameState, winner: number): boolean {
+  const match = state.match
+  if (match.phase !== MatchPhase.Live && match.phase !== MatchPhase.Intermission) return false
+
+  clearProjectiles(state)
+
+  // Only a *live* round is awarded. An intermission's round has already been
+  // scored, and scoring it twice would hand the leaver's opponent a round they
+  // had already been given.
+  if (match.phase === MatchPhase.Live && winner !== NO_WINNER) {
+    match.lastRoundWinner = winner
+    if (winner === DUEL_SLOTS[0]) match.wins[0] += 1
+    else if (winner === DUEL_SLOTS[1]) match.wins[1] += 1
+  }
+
+  match.winner = winner
+  enterPhase(state, MatchPhase.Over, NO_DEADLINE)
+  return true
 }
 
 /**

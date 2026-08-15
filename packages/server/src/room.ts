@@ -62,15 +62,19 @@
 import {
   CloseReason,
   DUEL_SLOTS,
+  LifecycleEvent,
   MatchPhase,
   NEW_MATCH_SCORE,
   NO_SLOT,
+  NO_WINNER,
   SKELETON_SEED,
   TransportState,
   UNKNOWN_RTT,
   buildSpawnPlan,
   createMapState,
+  forfeitMatch,
   hashState,
+  isMatchRunning,
   parseClientMessage,
   snapshotFrame,
   startMatch,
@@ -96,7 +100,17 @@ import { createInputQueue, type InputQueue } from './inputQueue.ts'
 import { createLagCompensation, type LagCompStats } from './lagcomp.ts'
 import { NO_LOG, scopeToRoom, type Log } from './log.ts'
 import {
+  Admission,
+  SeatPhase,
+  createLifecycle,
+  type Lifecycle,
+  type Seat,
+} from './lifecycle.ts'
+import type { Uint32Source } from './roomCode.ts'
+import {
   CLOSE_BAD_FRAME,
+  CLOSE_MATCH_ENDED,
+  CLOSE_REPLACED,
   CLOSE_ROOM_FULL,
   applyMessage,
   createSession,
@@ -105,8 +119,23 @@ import {
   type SessionState,
 } from './session.ts'
 
-/** How long a peer may say nothing before the room lets go of it. */
-export const DEFAULT_IDLE_TIMEOUT_MS = 60_000
+/**
+ * How long a peer may say nothing before the room decides the wire is gone.
+ *
+ * Ten seconds, and it is short on purpose. A live client sends commands sixty
+ * times a second and answers a clock-sync ping five times a second, so ten
+ * seconds of total silence is not a slow network — it is a socket that died
+ * without anybody telling us, which is what a half-open TCP connection is.
+ *
+ * The number matters because it is *in front of* the grace window rather than
+ * beside it. A socket that closes properly — a tab shut, a browser navigating, a
+ * cable pulled with an RST behind it — vacates its seat immediately and the
+ * thirty-second window starts then. A socket that simply stops answering costs
+ * this timeout first, so the worst case from "the wire broke" to "the match is
+ * forfeit" is forty seconds rather than ninety. `lifecycle.ts` has the rest of
+ * the arithmetic.
+ */
+export const DEFAULT_IDLE_TIMEOUT_MS = 10_000
 
 /**
  * Seats. Two, because the game is a duel.
@@ -159,6 +188,10 @@ export type RoomOptions = {
    */
   readonly plan?: SpawnPlan
   readonly idleTimeoutMs?: number
+  /** How long a seat is held for a peer that has gone. `lifecycle.ts`. */
+  readonly graceMs?: number
+  /** Seat tokens, injected, so a test can name the one it sends back. */
+  readonly seatRandom?: Uint32Source
   /**
    * Peer ids, injected.
    *
@@ -231,6 +264,10 @@ export type RoomSnapshot = {
   readonly gaps: number
   /** Sub-steps in which some peer's buffer was empty and the fallback ran. */
   readonly starved: number
+  /** Seats being held for a peer that might come back. `lifecycle.ts`. */
+  readonly held: number
+  /** Whether this match is decided and cannot be rejoined. */
+  readonly ended: boolean
   /** What lag compensation has done in this room. `lagcomp.ts`. */
   readonly lagcomp: LagCompStats
 }
@@ -243,6 +280,17 @@ export type Room = {
   readonly tick: number
   readonly peers: readonly RoomPeer[]
   readonly capacity: number
+  /** The two sides of the duel and what each is doing. `lifecycle.ts`. */
+  readonly seats: readonly Seat[]
+  /**
+   * Whether this match is decided and cannot be rejoined.
+   *
+   * The same boolean {@link RoomSnapshot.ended} carries, reachable without
+   * building a snapshot — that one hashes the whole world, which is a strange
+   * price for a caller that only wants to know whether it may send somebody
+   * here. `queue.ts` is that caller.
+   */
+  readonly ended: boolean
   /**
    * Seat a peer.
    *
@@ -251,13 +299,13 @@ export type Room = {
    * A room with no seat left replies with a fault and closes, rather than
    * dropping the connection with no explanation.
    *
-   * `prefer` asks for a particular seat and is honoured when that seat is free.
-   * It exists for a resumed match (`resume.ts`): the score is indexed by slot,
-   * so two players who came back in the other order would find the scoreline
-   * had swapped with them. Everywhere else there is nothing to prefer — the
-   * seats are symmetric — and the first free one is taken.
+   * `request.token` is a seat token from a previous welcome, which is what turns
+   * an arrival into a *reconnect*: the same slot, the same score, the same body
+   * standing where it was left. `request.prefer` is the weaker form of the same
+   * wish — a slot a resumed match would like back (`resume.ts`) rather than one
+   * its holder can prove. Everything either can mean is `lifecycle.ts`.
    */
-  join(transport: Transport, prefer?: number): RoomPeer
+  join(transport: Transport, request?: JoinRequest): RoomPeer
   /**
    * Advance the world by exactly `steps` sub-steps, then tell every peer where
    * it got to. Returns the steps run.
@@ -291,9 +339,23 @@ export type Room = {
   close(code?: number, reason?: string): void
 }
 
+export type JoinRequest = {
+  /** The seat token from a previous welcome, for a peer that is coming back. */
+  readonly token?: string | null
+  /**
+   * The slot a resumed match would like back, honoured when it is free.
+   *
+   * A wish, where {@link JoinRequest.token} is a claim: a token names the seat
+   * its holder already had, so when both are present the token decides.
+   */
+  readonly prefer?: number | null
+}
+
 type PeerRecord = {
   readonly id: string
   readonly slot: number
+  /** The seat token this peer holds. Never sent to anybody else. */
+  readonly token: string
   readonly transport: Transport
   /** Per peer, because a round trip is a property of one link, not of a room. */
   readonly clockSync: ServerClockSync
@@ -339,6 +401,15 @@ export function createRoom(options: RoomOptions): Room {
   const plan: SpawnPlan = options.plan ?? buildSpawnPlan(options.map.source, options.map.world)
   const world = options.map.world
 
+  // Who holds which side of the duel, and for how much longer if they have
+  // gone. Every join, leave, reconnect and forfeit decision is in there; this
+  // module's share is the sockets and the world. `lifecycle.ts`.
+  const lifecycle: Lifecycle = createLifecycle({
+    capacity,
+    ...(options.graceMs === undefined ? {} : { graceMs: options.graceMs }),
+    ...(options.seatRandom === undefined ? {} : { random: options.seatRandom }),
+  })
+
   // Scoped once, here, rather than at each call site: every line this room
   // writes carries its code and the tick the world is on at the moment of
   // writing. Those two are the coordinates a bug report arrives in.
@@ -347,6 +418,8 @@ export function createRoom(options: RoomOptions): Room {
   const peers: PeerRecord[] = []
   let joined = 0
   let starved = 0
+  /** Set while the room is tearing down, so a close is not read as a departure. */
+  let closing = false
 
   /**
    * A second of the world's recent past, and the rewind a hitscan shot is judged
@@ -381,16 +454,10 @@ export function createRoom(options: RoomOptions): Room {
    */
   const inputs: (UserCmd | null)[] = [null, null]
 
-  const freeSlot = (prefer?: number): number => {
-    if (prefer !== undefined && DUEL_SLOTS.includes(prefer)) {
-      if (!peers.some((peer) => peer.slot === prefer)) return prefer
-    }
-    for (const slot of DUEL_SLOTS) {
-      if (!peers.some((peer) => peer.slot === slot)) return slot
-    }
-    return NO_SLOT
-  }
-
+  // `freeSlot` used to live here, and does not any more: `lifecycle.arrive`
+  // decides which seat an arrival gets, and a room that also had an opinion
+  // would be two answers to one question — the second of which knows nothing
+  // about a seat being *held* for somebody who is still coming back.
   const viewOf = (record: PeerRecord): RoomPeer => ({
     id: record.id,
     slot: record.slot,
@@ -417,12 +484,6 @@ export function createRoom(options: RoomOptions): Room {
     },
   })
 
-  const forget = (record: PeerRecord): void => {
-    record.open = false
-    const at = peers.indexOf(record)
-    if (at >= 0) peers.splice(at, 1)
-  }
-
   const send = (record: PeerRecord, message: ServerMessage): void => {
     record.transport.send(frameOf(message))
   }
@@ -430,6 +491,101 @@ export function createRoom(options: RoomOptions): Room {
   /** Peers whose commands count: seated, still open, and past the handshake. */
   const playing = (record: PeerRecord): boolean =>
     record.open && record.session.greeted && !record.session.rejected
+
+  /** Tell everybody except `exceptId` what just happened to a connection. */
+  const announce = (message: ServerMessage, exceptId: string | null = null): void => {
+    for (const record of peers) {
+      if (record.id === exceptId) continue
+      if (!playing(record)) continue
+      send(record, message)
+    }
+  }
+
+  /**
+   * A peer's socket has gone, whoever noticed first.
+   *
+   * Idempotent, because both ends notice: the transport's `onClose` fires, and
+   * the sweep sees a closed transport a frame later. Doing the lifecycle
+   * bookkeeping twice would vacate a seat the replacement is already sitting in.
+   */
+  const forget = (record: PeerRecord): void => {
+    if (!record.open) return
+    record.open = false
+    const at = peers.indexOf(record)
+    if (at >= 0) peers.splice(at, 1)
+    if (closing) return
+
+    // Whether the seat is *held* or simply reopened is a question about the
+    // match, and the simulation is the only thing that knows the answer. In
+    // warmup there is no score to protect and holding the seat would refuse the
+    // next player who could have started the match; once a round has been
+    // played, that seat is somebody's half of a duel.
+    const nowMs = clock.nowMs()
+    const departure = lifecycle.depart(record.id, nowMs, isMatchRunning(state.match))
+    if (departure.slot === NO_SLOT) return
+
+    const graceMs = lifecycle.graceLeftMs(departure.slot, nowMs)
+    log('room.peer_left', {
+      peer: record.id,
+      slot: departure.slot,
+      // Held or reopened, and for how long. "Which rooms had a seat held in the
+      // last hour, and how many of those came back" is the query this event
+      // exists to answer, and it needs both fields to answer it.
+      seat: departure.phase,
+      graceMs,
+    })
+    announce({
+      t: 'life',
+      event: LifecycleEvent.OpponentLeft,
+      graceMs,
+      detail:
+        graceMs > 0
+          ? `your opponent's connection dropped — their body is still in the arena, and they forfeit in ${Math.ceil(graceMs / 1000)}s`
+          : 'your opponent left',
+    })
+  }
+
+  /**
+   * A seat's window has closed. Award the match and say so.
+   *
+   * The winner is whoever still holds the other seat — connected, or themselves
+   * inside a window that has not run out yet. Both gone is a match awarded to
+   * nobody, which is the only honest answer when the two people who could have
+   * finished it have both stopped answering.
+   */
+  const settleForfeit = (gone: readonly number[]): void => {
+    const standing = lifecycle.seats.filter(
+      (seat) => seat.phase !== SeatPhase.Forfeit && seat.phase !== SeatPhase.Open,
+    )
+    const winner = standing.length === 1 ? (standing[0]?.slot ?? NO_WINNER) : NO_WINNER
+
+    const decided = forfeitMatch(state, winner)
+    // Refuses every *new* arrival from here. A peer holding one of these seats'
+    // tokens is still let back in to see the result — `lifecycle.ts` argues the
+    // ordering that makes that true.
+    lifecycle.end()
+
+    log('room.forfeit', {
+      level: 'warn',
+      seats: gone.join(','),
+      graceMs: lifecycle.graceMs,
+      // `-1` rather than a name, because it is `NO_WINNER` and a query that had
+      // to know the word "nobody" is a query that has to be told about it.
+      winner,
+      decided,
+    })
+
+    if (!decided) return
+    announce({
+      t: 'life',
+      event: LifecycleEvent.Forfeit,
+      graceMs: 0,
+      detail:
+        winner === NO_WINNER
+          ? 'both connections are gone — this match is abandoned'
+          : 'your opponent did not come back — you take the match by forfeit',
+    })
+  }
 
   const receive = (record: PeerRecord, message: TransportMessage): void => {
     // Read once, and used for the idle sweep, the round trip and the rate
@@ -538,36 +694,76 @@ export function createRoom(options: RoomOptions): Room {
 
     capacity,
 
-    join(transport: Transport, prefer?: number): RoomPeer {
-      const slot = peers.length >= capacity ? NO_SLOT : freeSlot(prefer)
+    join(transport: Transport, request: JoinRequest = {}): RoomPeer {
       joined += 1
       const peerId = options.peerId?.(joined) ?? `${id}-${joined}`
+      const nowMs = clock.nowMs()
+      const arrival = lifecycle.arrive(peerId, request.token ?? null, nowMs, request.prefer)
 
-      if (slot === NO_SLOT) {
+      if (arrival.verdict === Admission.Full || arrival.verdict === Admission.Ended) {
+        const full = arrival.verdict === Admission.Full
         log('room.join_refused', {
           level: 'warn',
           peer: peerId,
+          // Which of the two refusals, because they are different questions to
+          // ask a log about: a full room is a third player arriving at a duel,
+          // and an ended one is a reconnect that came back too late.
+          why: full ? 'room-full' : 'match-ended',
           seated: peers.length,
           capacity,
         })
         transport.send(
-          frameOf({
-            t: 'fault',
-            code: 'room-full',
-            detail: `this room seats ${capacity}`,
-          }),
+          frameOf(
+            full
+              ? { t: 'fault', code: 'room-full', detail: `this room seats ${capacity}` }
+              : {
+                  t: 'fault',
+                  code: 'match-ended',
+                  // Said in full, because this is the frame a player reads after
+                  // watching a spinner: a reconnect that arrives too late has to
+                  // explain that the match is over rather than that something
+                  // went wrong.
+                  detail:
+                    'this match has ended — the reconnect window closed, so the round was awarded and the room is finished',
+                },
+          ),
         )
-        transport.close(CLOSE_ROOM_FULL, 'room full')
+        transport.close(
+          full ? CLOSE_ROOM_FULL : CLOSE_MATCH_ENDED,
+          full ? 'room full' : 'match ended',
+        )
         return {
           id: peerId,
           slot: NO_SLOT,
           session: createSession(peerId, NO_SLOT),
-          lastHeardMs: clock.nowMs(),
+          lastHeardMs: nowMs,
           rttMs: UNKNOWN_RTT,
           queued: 0,
           open: false,
           send: (message: ServerMessage) => transport.send(frameOf(message)),
           close: (code = CloseReason.Normal, reason = '') => transport.close(code, reason),
+        }
+      }
+
+      const slot = arrival.slot
+      const token = arrival.token ?? ''
+
+      // A newer socket holding this seat's token displaces the old one. Closed
+      // *before* the newcomer is pushed onto `peers`, so the two never both
+      // steer slot `slot` for even one sub-step.
+      if (arrival.evicted !== null) {
+        const stale = peers.find((record) => record.id === arrival.evicted)
+        if (stale !== undefined) {
+          log('room.seat_replaced', { level: 'warn', peer: peerId, slot, displaced: stale.id })
+          send(stale, {
+            t: 'fault',
+            code: 'replaced',
+            detail: 'this seat was taken by another connection holding the same token',
+          })
+          stale.open = false
+          const at = peers.indexOf(stale)
+          if (at >= 0) peers.splice(at, 1)
+          stale.transport.close(CLOSE_REPLACED, 'replaced')
         }
       }
 
@@ -579,19 +775,41 @@ export function createRoom(options: RoomOptions): Room {
       // otherwise have every command they ever send refused as late. `ack` is
       // in this space too, which is exactly why it is a separate field from
       // `state[0]` in a snapshot (`sim/src/protocol.ts`).
+      //
+      // A resumed seat gets a *fresh* queue rather than the one it left behind,
+      // and that is the server half of "discard the pending input and hard-snap"
+      // (`client/net/reconnect.ts`). The old buffer holds commands labelled in a
+      // tick space the returning client has since slewed away from, and every
+      // one of them is intent from before a gap that may have lasted half a
+      // minute. Executing them would move a body through a stretch of the match
+      // that has already happened.
       const queue = createInputQueue()
       const record: PeerRecord = {
         id: peerId,
         slot,
+        token,
         transport,
         clockSync: createClockSync(),
         queue,
-        session: createSession(peerId, slot, queue),
+        session: createSession(peerId, slot, queue, token),
         lastHeardMs: clock.nowMs(),
         open: true,
       }
       peers.push(record)
-      log('room.join', { peer: peerId, slot, seated: peers.length, capacity })
+      // One event for both ways in, with a field that says which. A *resumed*
+      // seat is the interesting half — "how many of the seats this machine held
+      // were actually claimed again" is the question the grace window is
+      // justified by, and it is a filter on this line rather than a second
+      // event to correlate with the first.
+      const resumed = arrival.verdict === Admission.Resumed
+      log('room.join', {
+        peer: peerId,
+        slot,
+        resumed,
+        seated: peers.length,
+        live: lifecycle.live,
+        capacity,
+      })
 
       transport.setHandlers({
         onOpen: () => {
@@ -603,6 +821,19 @@ export function createRoom(options: RoomOptions): Room {
           log('room.peer_error', { level: 'error', peer: peerId, slot, error: error.message })
         },
       })
+
+      // The other player is told, and told *which* of the two things happened:
+      // somebody new arriving means the match is about to start, and somebody
+      // coming back means the countdown they have been watching is over.
+      announce(
+        {
+          t: 'life',
+          event: resumed ? LifecycleEvent.OpponentBack : LifecycleEvent.OpponentJoined,
+          graceMs: 0,
+          detail: resumed ? 'your opponent reconnected' : 'your opponent is here',
+        },
+        peerId,
+      )
 
       return viewOf(record)
     },
@@ -617,6 +848,15 @@ export function createRoom(options: RoomOptions): Room {
       // A peer that is seated but has not finished the handshake still counts:
       // it is a player arriving, and the handful of ticks that takes is a
       // rounding error next to a room sitting empty for a minute.
+      //
+      // It is also what a match with *both* peers disconnected does: the world
+      // stands still until one of them comes back, because there is nobody left
+      // to watch a round clock run out. The grace windows keep running — they
+      // are wall-clock and the registry sweeps regardless — so a forfeit still
+      // lands on time. One peer gone is the other case entirely: the room ticks
+      // on, and the vacated seat is handed no command at all, which `kernel.ts`
+      // moves as `NULL_CMD`. The body stands there and stays killable, which is
+      // the whole of the disconnect policy (`lifecycle.ts`).
       if (peers.length === 0) return 0
 
       startWhenFull()
@@ -682,9 +922,24 @@ export function createRoom(options: RoomOptions): Room {
         if (!record.clockSync.due(nowMs)) continue
         send(record, record.clockSync.ping(nowMs, state.tick, record.queue.depth))
       }
+
+      // After the peer loop, because that loop is what turns a dead socket into
+      // a vacated seat: a transport that closed between frames has to start its
+      // window before the window can run out, or the first sweep to notice a
+      // disconnect would also be the one to forfeit it.
+      const gone = lifecycle.expire(nowMs)
+      if (gone.length > 0) settleForfeit(gone)
     },
 
     hash: () => hashState(state),
+
+    get seats() {
+      return lifecycle.seats
+    },
+
+    get ended() {
+      return lifecycle.ended
+    },
 
     snapshot: () => ({
       id,
@@ -697,16 +952,23 @@ export function createRoom(options: RoomOptions): Room {
       commands: peers.reduce((total, peer) => total + peer.session.commands, 0),
       gaps: peers.reduce((total, peer) => total + peer.session.gaps, 0),
       starved,
+      held: lifecycle.held,
+      ended: lifecycle.ended,
       lagcomp: lagcomp.stats,
     }),
 
     demo: () => recorder?.finish(state) ?? null,
 
     close(code = CloseReason.Normal, reason = '') {
+      // Nothing here is a *departure*: the room itself is going away, so seats
+      // are not vacated, no window is started, and nobody is told their opponent
+      // left — the frame that would say so is going down the same socket.
+      closing = true
       for (const record of [...peers]) {
         record.transport.close(code, reason)
-        forget(record)
+        record.open = false
       }
+      peers.length = 0
     },
   }
 }

@@ -44,12 +44,18 @@ and what a deploy does to a match in progress.
 | `pnpm run ci`        | all eight, in that order — the whole gate in one command |
 | `pnpm run e2e`       | the browser smoke test — needs Chromium, own CI job    |
 | `pnpm demo`          | record a match to a file, and replay one — `record`, `replay <file>`, `check` |
+| `pnpm bot:soak`      | two bots, 200 matches of 2 minutes, and the movement's acceptance checks |
 | `pnpm run raw-input` | measures `unadjustedMovement` per browser; `--write` updates `docs/browser-support.md`, `--check` fails on drift |
 
 Two more exist and are not part of `ci`, because both write files that are then
 reviewed: `pnpm run assets:vendor` re-fetches the KTX2 transcoders on a Babylon
 upgrade, and `pnpm run assets:placeholders` regenerates the stand-in art.
 [`docs/assets.md`](./docs/assets.md).
+
+`pnpm bot:soak` is not in `ci` either, for a different reason: it is 45 seconds of
+wall-clock, and `maps/arena1.bot.test.ts` already runs the identical claims — the
+same `soakFailures` — over four matches inside `pnpm run test`. Run the soak when
+you change the movement.
 
 > `pnpm run ci`, not `pnpm ci`. pnpm reserves the bare `ci` verb
 > (`ERR_PNPM_CI_NOT_IMPLEMENTED`) and will not fall through to a package
@@ -663,6 +669,17 @@ socket can die on. The sweep rides the tick scheduler's frame beside the
 registry's own, so the number served on `/healthz` is never more than a host
 frame stale.
 
+**That re-check counts seats, not sockets** — a distinction that did not exist
+when the queue was written, and one the connection lifecycle below introduced. A
+seat now outlives its socket by thirty seconds, so a room with one live player
+and one seat *held* for somebody mid-reconnect reads as one-of-two occupied and
+is nothing of the sort: an arrival put in it is refused by `lifecycle.arrive`
+after this module has already logged the pairing and told both sides it
+happened. A decided match reads the same way and rejects anybody who sits down
+in it. So `liveEntry` asks `room.seats` and `room.ended` — the questions the
+room actually answers — and keeps the socket count only for "is anybody still
+here at all", which seats genuinely cannot tell you.
+
 **The timeout is an outcome, not a hang-up.** A minute of nobody arriving ends
 the *matching* and nothing else: the socket, the room and the code all survive,
 and the player is told "nobody is waiting — send this code to a friend", which
@@ -671,6 +688,96 @@ server hanging up on a player who has done nothing wrong, and an indefinite
 spinner would be the failure this whole frame exists to prevent. It fires once,
 not once per sweep.
 
+### The connection lifecycle
+
+`packages/server/src/lifecycle.ts`, and `packages/client/src/net/reconnect.ts`
+on the other end of the wire. GLAD-DVDV6P. Every transition is a named verdict
+with a test, because this is the layer two-player room servers actually break
+in: a socket closes, a peer is spliced out of an array, and what that means for
+the match is whatever the rest of the code happens to do next.
+
+**A seat is not a connection.** A *seat* is a side of the duel — a slot in the
+world, a score, a body standing in the arena. A *connection* is a socket, and a
+socket dies for reasons that have nothing to do with the match: a tunnel
+changing, a laptop lid, a phone moving between cells. So a seat outlives its
+connection by `RECONNECT_GRACE_MS` (thirty seconds), and the only thing that
+proves ownership of one is the token the host mints when it is first taken and
+puts in the welcome. A room code says which match; a token says which *side* of
+it. On the wire that is `?room=ABC123&token=…`, which is the same URL a join
+uses with proof on it.
+
+**A vacated seat keeps its body, and the body is killable.** The room stops
+feeding that slot commands, `kernel.ts` moves it as `NULL_CMD`, and the player
+stands there. Removing the body instead would make pulling your network cable
+the cheapest way to deny an opponent a frag they had already earned, and would
+make a rocket already in the air detonate against nothing.
+
+**Three timeouts, in the order they fire, and each one bounds the next.** The
+missing-command fallback repeats the last command for ~500 ms
+(`MAX_REPEAT_TICKS`) so a body comes to rest instead of running off the map; a
+socket that stops answering without closing is given `DEFAULT_IDLE_TIMEOUT_MS`
+(ten seconds) before the room decides the wire is gone; the seat is then held for
+thirty. Worst case from "the wire broke" to "the match is forfeit" is forty
+seconds, and `EMPTY_ROOM_TTL_MS` is longer than the grace window so that a room
+whose *only* peer dropped is not reaped out from under their reconnect.
+`lifecycle.test.ts` asserts all three inequalities, because they are exactly the
+kind of relationship that survives until somebody tunes one of the numbers.
+
+**A timeout ends the match, not just the round.** Awarding only the round would
+start the next one against an empty seat and award that too, three seconds
+later, until the score ran out — the same result over half a minute of watching
+nothing happen. `forfeitMatch` (`sim/src/match/round.ts`) awards the round in
+progress *and* the match, and sets the winner directly rather than deriving it
+from the score: a player who quits while ahead leaves a score that says they were
+winning and a match their opponent won, and a forfeit is exactly the situation in
+which those two should disagree.
+
+**A newer socket holding a seat's token displaces the older one.** The
+alternative locks a player out of their own seat behind a connection that is dead
+in every sense except that the kernel has not noticed — which is what a half-open
+TCP connection is. The displaced socket is told (`replaced`, 4008) rather than
+dropped, because from its side those two look identical and only one of them
+means "you are now playing in another tab".
+
+**On the way back in, the client throws away everything it predicted across the
+gap.** The outbox, the pending commands (`predictor.discard()`), the render
+offset and the opponent's history, and then it takes the first snapshot whole.
+Replaying input across a multi-second gap draws a journey nobody made, and then
+corrects it by the size of the gap. The server does the same on its side: a
+resumed seat gets a *fresh* input queue rather than the one it left behind.
+
+**Which closes are worth retrying is decided by the close code, not by the fault
+frame beside it** — a socket that dies mid-write delivers 1006 and nothing else.
+Anything in the application range (4000–4999) is a refusal the host wrote on
+purpose and would still be true a second later, so it stops; 1001, 1006, 1011 and
+1012 are moments rather than verdicts, so they back off. The backoff is
+`BASE + random() * (window − BASE)` with the window doubling to a ceiling, so
+every delay lands inside 250 ms–4 s by construction and a host that restarts gets
+its clients back as a smear rather than a spike. It gives up on a *deadline*
+(`RECONNECT_WINDOW_MS`, 45 s) rather than an attempt count, because what decides
+whether coming back is worth anything is the seat's thirty seconds and a count is
+a bad proxy for it under jitter.
+
+**Draining a deploy properly is not here.** A 1001 close is what makes a client
+say "reconnecting" instead of "the connection dropped", and that half is this
+ticket's; stopping the machine accepting connections, handing every peer
+something that survives a machine swap, and waiting for the sockets is
+GLAD-G41FQ9's `shutdown.ts`, described in the section below.
+
+**Where the two meet, and it is three lines.** A `drain` frame that arrived
+before the close changes what the redial does with all three of its fields: the
+ticket goes on the URL beside the seat token, `retryAfterMs` becomes a floor
+under the backoff (dialling a machine every 250 ms while it is being replaced is
+load applied exactly when there is nothing to answer it), and the frame's own
+message is left standing rather than overwritten with `disconnected (code
+1001)`. The ticket is dropped the moment a welcome arrives, because everything
+downstream reads a non-null drain as "a deploy is happening *now*".
+
+And the other direction: **closing a room for a deploy is not a departure.** It
+vacates no seat, starts no grace window and tells nobody their opponent left —
+`Room.close` sets a `closing` flag that says so, and a test asserts the silence.
+Without it a rolling deploy would forfeit every match it touched, which is the
+one way to make a graceful drain worse than a hard kill.
 ### A deploy hands the score to the players, because there is nowhere else
 
 `packages/server/src/shutdown.ts` and `resume.ts` (GLAD-G41FQ9). The registry
@@ -1191,7 +1298,7 @@ happens to admit.
 
 **Links are directed and there are four kinds** — `walk`, `jump`, `drop`,
 `teleport` — each mapping to exactly one traversal controller in the bot's
-movement (GLAD-TSED8V). `rocketjump` is a v2 kind. Until it exists the
+movement (`packages/bot/src/travel/`). `rocketjump` is a v2 kind. Until it exists the
 positions only a rocket reaches are tagged `perch` rather than `ground`, and
 nothing routes to them. That is the data telling the truth; linking them with a
 jump the movement cannot make would make the routing guarantee pass and the bot
@@ -1300,9 +1407,130 @@ bit-identical with the server — which is exactly why it lives in `packages/bot
 and may use `Math.atan2`, banned inside `packages/sim`. It is *seeded* rather
 than ambient so a headless bot match replays.
 
-`BotDecision` is the seam the rest of the bot is built on: path following fills
-in `goal` (GLAD-TSED8V), and aim, weapon choice and firing fill in `aim`,
-`weapon` and `buttons` (GLAD-HK3ATM). Neither reaches past it.
+`BotDecision` is the seam the rest of the bot is built on: `decide` fills in `aim`
+and `goal`, the movement layer below turns `goal` into a route and a stick position
+(GLAD-TSED8V), and aim, weapon choice and firing fill in `weapon` and `buttons`
+(GLAD-HK3ATM). Neither reaches past it.
+
+---
+
+## The bot's movement
+
+`packages/bot/src/movement/`, `travel/` and `stuck.ts`. GLAD-TSED8V. The argument
+lives in `movement/move.ts`; this is the shape of it.
+
+**The bot emits exactly the struct a human emits.** Buttons, yaw, pitch, two move
+axes on `-1/0/+1`, once per sub-step, through the door the network uses. There is no
+"move to point P" available anywhere in this package, which is what makes movement a
+*controller*: the question is which of nine stick positions, given the yaw the aim
+controller chose, produces velocity towards P under the friction and acceleration
+model. `tools/bot-writes.test.ts` is the static half of that claim — no bot module
+may call `pmove`, `tick` or anything else that writes a body, and none may assign a
+position, a velocity or a vital to a record it does not own.
+
+It costs real work and it is worth it three times over: players detect impossible
+motion long before they detect good aim; bot-versus-bot matches exercise the real
+movement, so a bug in air acceleration shows up as bots failing to clear a gap
+rather than as a mystery; and a bot match records as a command stream that replays
+exactly.
+
+### One controller per link kind, and the set is closed by the type
+
+`travel/` — `walk`, `jump`, `drop`, `teleport`, dispatched through a table that
+`satisfies Record<NavLinkKind, Traveller>`. A fifth kind (`rocketjump` is the one
+coming) fails to compile until it has a controller, which is the difference between
+a closed set and one nobody has added to yet. A controller answers two questions —
+which direction, and whether to press jump — and reports whether the hop is done. It
+does not choose the link and it does not touch the ledge guard.
+
+### The three runtime guards
+
+1. **Ledge guard** (`movement/ledge.ts`). Before committing forward movement, trace
+   a *point* down at the projected position; if there is no floor within a step, try
+   the direction rotated 45 and then 90 degrees either way, and brake against the
+   velocity if every one of them is a hole. The lookahead is a **stopping distance**
+   rather than a constant, because releasing the stick does not stop a body at 380
+   ups. It is switched on by the follower and off for exactly `drop` and `jump` —
+   the two kinds that mean "there is supposed to be nothing under you".
+2. **Link ownership.** The bot is on **exactly one** link and keeps it until the
+   controller says it arrived, the bot is displaced off it, the hop runs out of
+   `navLinkBudget`, or the goal moves while it is on the ground on a `walk`. It
+   deliberately does *not* re-ask the graph every sub-step: `nodeNear` flips to the
+   far node halfway along a link, so a follower that re-derived every tick would cut
+   corners — and a cut corner is a straight line across geometry nothing validated.
+   Falling while the link is a `walk` is a **bug and a test assertion**, not
+   something fixed up at run time.
+3. **Airborne recovery.** The axes are latched at take-off and held. Air
+   acceleration is a tenth of the ground figure, so a stick oscillating mid-air buys
+   nothing and reads as a machine; the only two things that change a latched heading
+   are the circle jump's bounded offset window and a single permitted correction when
+   the flight is carrying the bot away from where it was going.
+
+**No two consecutive commands carry `BUTTON_JUMP`.** `PMF_JUMP_HELD` is cleared
+only by a sub-step with the button up (`pmove/index.ts`), so a bot that held jump
+would jump once and never again. Quake has a second reason and this game does not:
+`pmove/cmdscale.ts` excludes the jump axis on purpose, so there is no 320-to-226
+wishspeed tax to avoid.
+
+### v1 does not strafe-jump
+
+Continuous strafe-jumping needs the yaw coupled to the current speed, and the yaw
+belongs to the aim controller — a bot that strafe-jumps cannot aim while it
+accelerates. So v1 takes **one circle jump at the start of a straight run**:
+`movement/circleJump.ts` holds the wish 45 degrees off the direction of travel for
+24 sub-steps, which measured 369 ups and 29 units of drift down `arena1`'s south
+lane, and leans into whichever way the route bends next so the drift pre-turns a
+corner the route was taking anyway. Four hops in five land over run speed; the
+remaining one clips geometry mid-flight, which is why the test asserts the
+distribution rather than the slowest landing.
+
+Three preconditions, and each is a reason not to hop: the run has to be 320 units
+of straight *route* (not of link — `arena1`'s links are 140 to 210, and hopping per
+link is a bot bouncing), the bot has to already be at 280 ups, and its velocity has
+to be within 37 degrees of where it is going. That last one was missing at first and
+it mattered: the trigger fires on the sub-step after a corner, where the bot has 320
+ups pointing the way it came, and the hop launched it backwards into the wall.
+
+### Being stuck
+
+`stuck.ts`. One anchor and one clock: 32 units of progress resets them, three
+seconds without it starts a bounded recovery (back off, then go around with one jump
+in it, alternating sides between episodes), and four seconds emits `NAV_STUCK` with
+the position in it — a seam a host fills in, like `onSpeedClamp`, because this
+package has no `console`. The clock only runs while there is something to walk
+towards, which is what stops it firing at a bot holding an angle, a dead one, or an
+intermission.
+
+**It never writes a position.** Nudging the body out of the wall is four lines and
+works every time and is a teleport, which is the one thing no human can do.
+
+### Search behaviour, and why the bot is never idle
+
+`movement/roam.ts`. `decide` stops setting a goal once a contact is inside
+`ENGAGE_RANGE`, and that means *stop closing* rather than *stop moving* — so the
+absence of a goal is answered with a `ground` node drawn from the bot's seeded
+stream. Uniform rather than biased towards the opponent, because a search that
+leaned towards where they *are* would be reading ground truth through the choice of
+where to look. Standing still needs a flag on `BotDecision`, so that it is always a
+decision somebody took rather than a gap in the ladder; nothing wants one today.
+
+### What is measured, and where
+
+`tools/bot-arena.ts` runs two bots through the real `tick()` and measures the world
+rather than the bot's own bookkeeping — the stall clock in particular is the
+harness's own, because asking the detector whether it thinks it is working is not a
+test. `pnpm bot:soak` is 200 matches of 2 minutes (3,000,000 sub-steps, 45 s of
+wall-clock) and `maps/arena1.bot.test.ts` is four of twenty seconds through the same
+`soakFailures`. Over the full soak: nothing outside the map AABB, nothing landing
+below a walk link, the worst stall 414 of 563 permitted sub-steps, and the view
+never turning faster than `MAX_TURN_UNITS`.
+
+One trap in that harness is worth knowing before writing another one: a bot's
+`MoveState` is computed from the body's position **before** the sub-step, so reading
+the two after `tick()` compares a decision against a position it never saw. On a
+ramp that reads as a 30-unit fall and looks exactly like the bug the soak is looking
+for. `actBotArena` and `advanceBotArena` are split so a watcher can sit between
+them.
 
 ---
 
@@ -1362,6 +1590,13 @@ for single-player, the host in this tab — and every mode is one of three calls
 into it. Before there is one, `mustHoldStill` is true and the world does not
 advance, which is the same rule that already covered a socket that has not
 opened yet.
+
+That is also where the redial now lives ("The connection lifecycle" above): a
+session over a socket is opened with one, built from the join URL it dialled, so
+a reconnect asks for the room the player asked for even if the welcome never
+arrived. A single-player session is opened without one, because a closed
+loopback means the tab is going away and there is nothing on the far side of it
+to come back to.
 
 **The room code lives in the query string and nowhere else.** `?room=H7K2Q9` is
 the whole lobby: it is what a host sends, what a reload rejoins on, and what the

@@ -72,7 +72,9 @@ import {
   joinUrl,
   mustHoldStill,
   quickMatchRequested,
+  rejoinUrl,
   resolveServerUrl,
+  type RedialContext,
 } from './net/client.ts'
 import { createEntityBuffer, createInterpolationClock } from './net/interpolate.ts'
 import { type ListenServer, createListenServer } from './net/listenServer.ts'
@@ -667,7 +669,17 @@ async function boot(): Promise<void> {
   }
   let session: Session | null = null
 
-  const openSession = (transport: Transport | null, endpoint: string): NetClient =>
+  /**
+   * @param redial How to get a *new* pipe to the same seat, or `null` when there
+   * is no wire to break. A listen server deliberately passes `null`: the host is
+   * an object in this tab, so a closed loopback means the tab is going away and
+   * there is nothing on the other side to reconnect to.
+   */
+  const openSession = (
+    transport: Transport | null,
+    endpoint: string,
+    redial: ((context: RedialContext) => Transport | null) | null = null,
+  ): NetClient =>
     createNetClient({
       transport,
       endpoint,
@@ -705,6 +717,21 @@ async function boot(): Promise<void> {
           )
         }
       },
+      ...(redial === null ? {} : { redial }),
+      // A reconnect lands in a match that carried on without this tab: the body
+      // was standing still, rockets were fired at it, rounds may have been
+      // decided. So everything this client believed on its own is dropped — the
+      // unacknowledged commands, the correction it was smoothing, and the
+      // opponent's history it was drawing from — and the next snapshot is taken
+      // whole. Replaying input across a gap that long draws a journey nobody made.
+      onResume: () => {
+        const thrown = predictor.discard()
+        renderOffset.clear()
+        opponentHistory.clear()
+        opponentClock.reset()
+        snapped = true
+        console.warn(`gladiator: reconnected, dropped ${thrown} unacknowledged commands`)
+      },
       ...(override === undefined ? {} : { protocolOverride: override }),
       ...(mapOverride === undefined ? {} : { mapHashOverride: mapOverride }),
     })
@@ -726,6 +753,8 @@ async function boot(): Promise<void> {
     const listen = createListenServer({ map: CLIENT_MAP, build: BUILD, record: dev })
     session = {
       listen,
+      // No redial: a closed loopback means the tab is going away, and there is
+      // nothing on the other side of it to reconnect to.
       net: openSession(listen.transport, 'the host in this tab'),
       // A tab's room has no registry behind it and no socket in front of it, so
       // its code names nothing anybody else can reach.
@@ -753,7 +782,18 @@ async function boot(): Promise<void> {
       return
     }
     const url = joinUrl(serverUrl, code, queue)
-    session = { listen: null, net: openSession(websocketTransport(url), url), shareable: true }
+    // The same URL with the seat's token on it, which is what turns a redial
+    // into a *reconnect* rather than a stranger arriving at a full room
+    // (GLAD-DVDV6P). Built from the URL this session actually dialled — which is
+    // what carries the code, or the queue, through a socket that died before the
+    // welcome ever arrived. `rejoinUrl` argues both halves.
+    const redial = (context: RedialContext): Transport | null =>
+      websocketTransport(rejoinUrl(url, context))
+    session = {
+      listen: null,
+      net: openSession(websocketTransport(url), url, redial),
+      shareable: true,
+    }
     session.net.connect()
   }
 
@@ -1153,6 +1193,12 @@ async function boot(): Promise<void> {
     // `mustHoldStill` wants to hear: a page sitting on the menu has no host to
     // agree with, so its world does not advance. See `NO_SESSION`.
     const net = session?.net ?? null
+    // Whether a dropped connection's backoff has run out. Outside the branch
+    // below on purpose: while a reconnect is pending the world is held still, so
+    // nothing in there runs — including the flush that would otherwise have been
+    // the natural place for this (`net/client.ts`). A page with no session yet
+    // has no backoff to run out, which is the same reason it has no world.
+    net?.poll()
     const status = net?.snapshot().status ?? NO_SESSION.status
 
     if (net === null || mustHoldStill(status)) {
