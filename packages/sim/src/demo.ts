@@ -55,7 +55,8 @@ import { createMapState } from './map/load.ts'
 import { DEFAULT_MATCH_RULES } from './match/match.ts'
 import type { MatchRules } from './match/match.ts'
 import { isSelfDamageMode } from './match/selfDamage.ts'
-import { startMatch } from './match/round.ts'
+import { NEW_MATCH_SCORE, startMatch } from './match/round.ts'
+import type { MatchScore } from './match/round.ts'
 import { buildSpawnPlan } from './match/spawn.ts'
 import type { SpawnPlan } from './match/spawn.ts'
 import { firstDivergence, sampleTickAt } from './replay.ts'
@@ -91,6 +92,18 @@ export type DemoHeader = {
   readonly map: { readonly name: string; readonly hash: string }
   readonly seed: number
   readonly rules: MatchRules
+  /**
+   * The scoreline the match began at, when it was not nil-nil.
+   *
+   * A room plays one match, so where that match *started* is a property of the
+   * recording rather than an event in it. It is absent for every ordinary demo
+   * and present for one recorded on a room rebuilt after a deploy, where the
+   * two clients brought a signed score back with them (`server/resume.ts`).
+   * A replay that ignored it would take the `startMatch` edge at the right tick
+   * into the wrong scoreline, and diverge from its own trace on the first
+   * sample — which is the one thing a demo exists to rule out.
+   */
+  readonly score?: MatchScore
 }
 
 export type Demo = {
@@ -114,6 +127,8 @@ export type DemoRecorderOptions = {
   readonly map: { readonly name: string; readonly hash: string }
   readonly seed: number
   readonly rules?: MatchRules
+  /** The score this room's match starts from. Omitted unless it is a resume. */
+  readonly score?: MatchScore
   readonly protocol: number
   /**
    * How many sub-steps to keep, at most.
@@ -222,6 +237,7 @@ export function createDemoRecorder(options: DemoRecorderOptions): DemoRecorder {
           map: { name: options.map.name, hash: options.map.hash },
           seed: options.seed,
           rules,
+          ...(options.score === undefined ? {} : { score: options.score }),
         },
         frames: [...frames],
         matchStarts: [...matchStarts],
@@ -311,7 +327,7 @@ export function replayDemo(demo: Demo, options: ReplayDemoOptions): DemoPlayback
 
   for (let frame = 0; frame < limit; frame += 1) {
     // Between sub-steps, exactly where the host took the edge.
-    if (starts.has(state.tick)) startMatch(state, plan)
+    if (starts.has(state.tick)) startMatch(state, plan, demo.header.score ?? NEW_MATCH_SCORE)
     sample()
 
     const recorded = demo.frames[frame] ?? []
@@ -400,6 +416,16 @@ function decodeRules(value: unknown): MatchRules {
   }
 }
 
+function decodeScore(value: unknown): MatchScore {
+  const raw = asObject(value, 'header.score')
+  const wins = raw['wins']
+  if (!Array.isArray(wins) || wins.length !== 2) fail('header.score.wins is not a pair')
+  return {
+    wins: [asInteger(wins[0], 'header.score.wins[0]'), asInteger(wins[1], 'header.score.wins[1]')],
+    roundsPlayed: asInteger(raw['roundsPlayed'], 'header.score.roundsPlayed'),
+  }
+}
+
 /**
  * Parse a demo, refusing anything that is not one.
  *
@@ -450,6 +476,9 @@ export function decodeDemo(text: string): Demo {
       },
       seed: asInteger(header['seed'], 'header.seed'),
       rules: decodeRules(header['rules']),
+      // Absent for every demo of a match that started nil-nil, which is almost
+      // all of them — so its absence is the default rather than an error.
+      ...(header['score'] === undefined ? {} : { score: decodeScore(header['score']) }),
     },
     frames,
     matchStarts: (rawStarts as unknown[]).map((tick, i) => asInteger(tick, `matchStarts[${i}]`)),
