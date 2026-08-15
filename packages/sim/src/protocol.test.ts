@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   MAX_CMDS_PER_BATCH,
   PROTOCOL_VERSION,
+  UNKNOWN_RTT,
   decodeCmd,
   describeMapMismatch,
   describeVersionMismatch,
@@ -95,6 +96,23 @@ describe('parseClientMessage', () => {
       .toBe(null)
   })
 
+  it('parses a pong, and it carries nothing but the id', () => {
+    expect(parseClientMessage(JSON.stringify({ t: 'pong', id: 12 }))).toEqual({ t: 'pong', id: 12 })
+    // A timestamp the client filled in would be a round trip the client could
+    // choose. Anything extra is dropped rather than carried through.
+    expect(parseClientMessage(JSON.stringify({ t: 'pong', id: 12, receivedAtMs: 5 }))).toEqual({
+      t: 'pong',
+      id: 12,
+    })
+  })
+
+  it('refuses a pong with an id no ping could have carried', () => {
+    for (const id of [undefined, -1, 1.5, 'x', null]) {
+      const raw = JSON.stringify({ t: 'pong', ...(id === undefined ? {} : { id }) })
+      expect(parseClientMessage(raw), `accepted ${String(id)}`).toBe(null)
+    }
+  })
+
   it('refuses anything that is not a frame', () => {
     for (const raw of ['', 'not json', '[]', 'null', '4', '{"t":"unknown"}', '{"t":"hello"}']) {
       expect(parseClientMessage(raw)).toBe(null)
@@ -143,6 +161,34 @@ describe('parseServerMessage', () => {
       code: 'x',
       detail: 'y',
     })
+  })
+
+  it('parses a ping, including the one before any round trip has completed', () => {
+    expect(
+      parseServerMessage(JSON.stringify({ t: 'ping', id: 3, tick: 900, rttMs: 42, queued: 2 })),
+    ).toEqual({ t: 'ping', id: 3, tick: 900, rttMs: 42, queued: 2 })
+    expect(
+      parseServerMessage(
+        JSON.stringify({ t: 'ping', id: 0, tick: 0, rttMs: UNKNOWN_RTT, queued: 0 }),
+      ),
+    ).toEqual({ t: 'ping', id: 0, tick: 0, rttMs: UNKNOWN_RTT, queued: 0 })
+  })
+
+  it('refuses a ping whose numbers could not have come from a clock', () => {
+    // A round trip below `UNKNOWN_RTT` is a clock that ran backwards, and a
+    // client that folded one into its estimate would place the server in its
+    // own future.
+    for (const patch of [
+      { rttMs: -2 },
+      { rttMs: 1.5 },
+      { tick: -1 },
+      { queued: -1 },
+      { id: -1 },
+      { id: 'x' },
+    ]) {
+      const raw = JSON.stringify({ t: 'ping', id: 1, tick: 5, rttMs: 20, queued: 1, ...patch })
+      expect(parseServerMessage(raw), `accepted ${JSON.stringify(patch)}`).toBe(null)
+    }
   })
 
   it('refuses junk', () => {

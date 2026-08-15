@@ -662,6 +662,12 @@ async function boot(): Promise<void> {
       return
     }
 
+    // A host in this tab has no timer of its own — no `Room` anywhere does —
+    // so the animation frame is its beat, which is what keeps the clock-sync
+    // conversation running over a loopback exactly as it runs over a socket.
+    // Nothing here advances the world: a room's world advances by commands.
+    listen?.beat(nowMs)
+
     // Input is sampled once per frame, not once per tick: a browser only
     // delivers mouse and key events between frames, so a per-tick sample would
     // be the same value read several times with extra steps.

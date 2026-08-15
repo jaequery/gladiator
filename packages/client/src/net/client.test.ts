@@ -3,11 +3,13 @@ import {
   NULL_CMD,
   PROTOCOL_VERSION,
   TransportState,
+  UNKNOWN_RTT,
   Weapon,
   type Transport,
   type TransportHandlers,
   type TransportMessage,
 } from '@gladiator/sim'
+import { JITTER_BUFFER_TICKS } from '@gladiator/server/inputQueue'
 import { describe, expect, it } from 'vitest'
 
 import { createNetClient, mustHoldStill, resolveServerUrl } from './client.ts'
@@ -342,5 +344,82 @@ describe('net client', () => {
     client.queue(1, NULL_CMD)
     client.flush()
     expect(client.snapshot().dropped).toBe(0)
+  })
+})
+
+describe('clock sync over the wire', () => {
+  /** A connected client whose `performance.now()` a test owns. */
+  function ticking() {
+    const transport = new FakeTransport()
+    let nowMs = 0
+    const client = createNetClient({
+      transport,
+      endpoint: 'ws://test',
+      build: 'test-build',
+      mapHash: MAP_HASH,
+      now: () => nowMs,
+    })
+    client.connect()
+    transport.open()
+    transport.deliver({
+      t: 'welcome',
+      protocol: PROTOCOL_VERSION,
+      build: 'srv',
+      session: 's1',
+      mapHash: MAP_HASH,
+    })
+    return {
+      transport,
+      client,
+      at(ms: number) {
+        nowMs = ms
+      },
+    }
+  }
+
+  it('answers a ping with a pong carrying nothing but the id', () => {
+    const { transport, client } = ticking()
+    transport.sent.length = 0
+    transport.deliver({ t: 'ping', id: 7, tick: 1000, rttMs: 60, queued: 2 })
+
+    // Nothing in the reply the client chose. A timestamp here would be a round
+    // trip the client could shrink, and lag compensation rewinds by that number.
+    expect(JSON.parse(transport.sent[0] ?? '{}')).toEqual({ t: 'pong', id: 7 })
+    expect(client.snapshot().pings).toBe(1)
+  })
+
+  it('reports the round trip the server measured, and never one of its own', () => {
+    const { transport, client } = ticking()
+    expect(client.snapshot().rttMs).toBe(null)
+
+    transport.deliver({ t: 'ping', id: 0, tick: 10, rttMs: UNKNOWN_RTT, queued: 0 })
+    expect(client.snapshot().rttMs).toBe(null)
+
+    transport.deliver({ t: 'ping', id: 1, tick: 30, rttMs: 64, queued: 2 })
+    expect(client.snapshot().rttMs).toBe(64)
+    expect(client.snapshot().queuedAtServer).toBe(2)
+    // Half of 64 ms is four ticks, plus the two the server wants buffered.
+    expect(client.snapshot().leadTicks).toBe(4 + JITTER_BUFFER_TICKS)
+  })
+
+  it('estimates the server tick from the ping, and moves it on with the clock', () => {
+    const { transport, client, at } = ticking()
+    at(1_000)
+    // A 64 ms trip means the ping left four ticks ago, so tick 500 was current
+    // at 968 ms and the server is on 504 by the time we see it.
+    transport.deliver({ t: 'ping', id: 1, tick: 500, rttMs: 64, queued: 2 })
+    expect(client.snapshot().serverTickEstimate).toBe(504)
+
+    // A hundred milliseconds later it has moved on by twelve and a half ticks,
+    // with no further pings needed to know it.
+    at(1_100)
+    expect(client.snapshot().serverTickEstimate).toBe(516)
+    expect(client.clock.targetTick(1_100)).toBe(516 + 4 + JITTER_BUFFER_TICKS)
+  })
+
+  it('has no estimate before the first ping, and does not invent one', () => {
+    const { client } = ticking()
+    expect(client.snapshot().serverTickEstimate).toBe(null)
+    expect(client.snapshot().pings).toBe(0)
   })
 })

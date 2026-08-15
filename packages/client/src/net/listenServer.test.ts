@@ -122,6 +122,29 @@ describe('the listen server', () => {
     listen.stop()
   })
 
+  it('runs clock sync over the loopback, on the frame loop as its beat', async () => {
+    // A `Room` holds no timer, in a tab least of all. Without a beat the whole
+    // clock-sync conversation would be dead code in single-player — and it is
+    // exactly the code path a duel on Fly runs, so dead here means untested
+    // there too.
+    const { listen, net } = hosted()
+    await settleLoopback(listen.pair)
+    expect(net.snapshot().pings).toBe(0)
+
+    listen.beat(performance.now())
+    await settleLoopback(listen.pair)
+
+    expect(net.snapshot().pings).toBe(1)
+    // The client answered with a pong, and the host measured the trip against
+    // its own clock — which over a loopback is a fraction of a millisecond.
+    const rttMs = listen.room.peers[0]?.rttMs ?? -1
+    expect(rttMs).toBeGreaterThanOrEqual(0)
+    expect(rttMs).toBeLessThan(50)
+    // And nothing about it advanced the world.
+    expect(listen.room.tick).toBe(0)
+    listen.stop()
+  })
+
   it('seats exactly one peer, and says so when a second arrives', () => {
     const listen = createListenServer({ map: CLIENT_MAP, build: 'local-test' })
     expect(listen.room.capacity).toBe(1)

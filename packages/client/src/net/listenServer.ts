@@ -56,6 +56,18 @@ export type ListenServer = {
    * is still in flight. A test needs the second to know when to assert.
    */
   readonly pair: LoopbackPair
+  /**
+   * The host's housekeeping beat: peers that have gone quiet, and the
+   * clock-sync pings.
+   *
+   * A `Room` never holds a timer (`@gladiator/server/loop.ts`), so somebody has
+   * to give it one — on Fly that is a `setInterval`, and in a tab it is the
+   * animation frame that is already running. The frame loop calling this is
+   * what makes the tab a *host* rather than a room nobody winds up, and it is
+   * why the clock estimate reads the same ~0 ms here as it would read 40 ms
+   * over a socket, through exactly the same code.
+   */
+  beat(nowMs: number): void
   stop(): void
 }
 
@@ -80,6 +92,7 @@ export function createListenServer(options: ListenServerOptions): ListenServer {
     transport: pair.client,
     room,
     pair,
+    beat: (nowMs: number) => room.sweep(nowMs),
     stop: () => pair.close(),
   }
 }
