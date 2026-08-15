@@ -362,6 +362,18 @@ characters of Crockford base32 — the digits and the letters minus I, L, O and 
 `packages/server/src/roomCode.ts`; the guess rate at this deploy's concurrency
 is `docs/deploy.md`.
 
+**Quick match** — the other way into a duel: `?queue=1` instead of a code, for a
+player with nobody to send one to. `packages/server/src/queue.ts` (GLAD-ZHRFBK).
+
+**Match queue** — the line quick match forms, and it is a line of *rooms*: a
+player who asks to be matched is put in a real room with a real code straight
+away, and the code goes in the queue. The next arrival takes the free seat in
+it. A `waiting` frame says the wait has started, a `matched` frame says it is
+over, and a `timeout` frame — a minute in — says nobody came and hands back the
+code to send a friend. An entry is re-checked against the registry every time it
+is about to be used, so a player who queues and closes the tab is never paired
+with anybody.
+
 **Drain** — what a machine does between SIGTERM and exiting
 (`packages/server/src/shutdown.ts`). Stops being ready, hands every seated
 player a **resume ticket**, closes the rooms with a 1001 "going away", and waits
