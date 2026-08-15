@@ -11,6 +11,7 @@
         --dim: #7d8590;
         --match: #3fb950;
         --mismatch: #f85149;
+        --pending: #d29922;
         --panel: rgba(13, 17, 23, 0.82);
 
         /* The in-match HUD. Read peripherally at speed, so the palette does
@@ -108,6 +109,13 @@
       .hud-value[data-state='version-mismatch'],
       .hud-value[data-state='unconfigured'] {
         color: var(--mismatch);
+      }
+
+      /* Reconnecting is neither of the two: the session is not working and it
+         is not over either, and colouring it red would say a match had ended
+         that has not (GLAD-DVDV6P). */
+      .hud-value[data-state='reconnecting'] {
+        color: var(--pending);
       }
 
       .hud-banner {

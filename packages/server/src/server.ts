@@ -37,6 +37,12 @@
  * `wss://host/?room=ABC123` joins an existing one. A code that names no room is
  * answered with a `fault` frame naming it and a 4006 close — a socket that
  * opened and then went quiet is the one failure mode a player cannot diagnose.
+ *
+ * `wss://host/?room=ABC123&token=…` is the same URL with proof of a *seat* in
+ * it, which is what makes it a reconnect rather than a join: the same slot, the
+ * same score, the same body standing where it was left. What a token can mean
+ * and what each answer costs is `lifecycle.ts`; this file's share is reading it
+ * off the query string and handing it to the room.
  */
 import { createServer, type IncomingMessage, type Server } from 'node:http'
 import { randomUUID } from 'node:crypto'
@@ -64,6 +70,19 @@ const HEARTBEAT_MS = 20_000
 
 /** The query parameter a client puts a room code in. */
 export const ROOM_QUERY_PARAM = 'room'
+
+/** The query parameter a returning client puts its seat token in. */
+export const TOKEN_QUERY_PARAM = 'token'
+
+/**
+ * The longest seat token this server will look at.
+ *
+ * A token is 32 hex characters (`lifecycle.ts`). The bound is here rather than
+ * only in the parser because this one arrives in a URL, and the cheapest way to
+ * make a server do pointless work is to hand it a megabyte where it expected
+ * thirty-two bytes. Anything longer is not a token, so it is not read as one.
+ */
+const MAX_TOKEN_LENGTH = 64
 
 export type GladiatorServer = {
   readonly http: Server
@@ -115,6 +134,20 @@ export function roomCodeOf(url: string | undefined): string | null {
   if (url === undefined) return null
   const query = new URL(url, 'http://gladiator.invalid').searchParams.get(ROOM_QUERY_PARAM)
   return query === null || query === '' ? null : query
+}
+
+/**
+ * The seat token a request is presenting, or `null` for somebody arriving fresh.
+ *
+ * Read but never *judged* here: whether a token names a seat, and what happens
+ * if it names one somebody else is sitting in, is `lifecycle.ts`'s decision. All
+ * this owes is that a value too long to be a token is not passed on as one.
+ */
+export function seatTokenOf(url: string | undefined): string | null {
+  if (url === undefined) return null
+  const query = new URL(url, 'http://gladiator.invalid').searchParams.get(TOKEN_QUERY_PARAM)
+  if (query === null || query === '' || query.length > MAX_TOKEN_LENGTH) return null
+  return query
 }
 
 export function startServer(options: StartOptions): Promise<GladiatorServer> {
@@ -262,6 +295,11 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
     })
 
     const asked = roomCodeOf(request.url)
+    // Read for every connection, including one opening a new room: a token that
+    // names nothing is a stale value in somebody's tab rather than an error, and
+    // `lifecycle.ts` treats its holder as the newcomer they are.
+    const token = seatTokenOf(request.url)
+
     if (asked === null) {
       const opened = rooms.create()
       if (opened === null) {
@@ -273,7 +311,7 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
         )
         return
       }
-      opened.room.join(wsTransport(socket))
+      opened.room.join(wsTransport(socket), { token })
       return
     }
 
@@ -293,7 +331,7 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
       return
     }
 
-    found.room.join(wsTransport(socket))
+    found.room.join(wsTransport(socket), { token })
   })
 
   // The socket heartbeat: is this pipe still there. A question about TCP, at a
@@ -324,6 +362,7 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
     http.listen(config.port, () => {
       const address = http.address()
       const port = typeof address === 'object' && address !== null ? address.port : config.port
+
       resolve({
         http,
         wss,
@@ -340,9 +379,14 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
             jitter.stop()
             // "Going away" is what a browser is told when a server is shutting
             // down cleanly, and it is what lets a client tell a deploy apart
-            // from a crash. Said twice on purpose: once to every room's peers
-            // through their transports, and once to any socket that never got
-            // as far as a room.
+            // from a crash — and, now, what makes it *reconnect* rather than
+            // give up (`client/net/reconnect.ts`). Said twice on purpose: once
+            // to every room's peers through their transports, and once to any
+            // socket that never got as far as a room.
+            //
+            // Draining properly — refusing new upgrades, handing every peer
+            // something to come back with, and waiting for the sockets — is
+            // GLAD-G41FQ9's `shutdown.ts`.
             rooms.closeAll(CloseReason.GoingAway, 'server shutting down')
             for (const socket of connections.keys()) {
               socket.close(CloseReason.GoingAway, 'server shutting down')

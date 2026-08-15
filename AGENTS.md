@@ -617,6 +617,82 @@ them their character set is right.
 Thirty bits, the guess rate at the concurrency this deploy admits, and the
 empty-room reaper that stops codes leaking are `docs/deploy.md`.
 
+### The connection lifecycle
+
+`packages/server/src/lifecycle.ts`, and `packages/client/src/net/reconnect.ts`
+on the other end of the wire. GLAD-DVDV6P. Every transition is a named verdict
+with a test, because this is the layer two-player room servers actually break
+in: a socket closes, a peer is spliced out of an array, and what that means for
+the match is whatever the rest of the code happens to do next.
+
+**A seat is not a connection.** A *seat* is a side of the duel — a slot in the
+world, a score, a body standing in the arena. A *connection* is a socket, and a
+socket dies for reasons that have nothing to do with the match: a tunnel
+changing, a laptop lid, a phone moving between cells. So a seat outlives its
+connection by `RECONNECT_GRACE_MS` (thirty seconds), and the only thing that
+proves ownership of one is the token the host mints when it is first taken and
+puts in the welcome. A room code says which match; a token says which *side* of
+it. On the wire that is `?room=ABC123&token=…`, which is the same URL a join
+uses with proof on it.
+
+**A vacated seat keeps its body, and the body is killable.** The room stops
+feeding that slot commands, `kernel.ts` moves it as `NULL_CMD`, and the player
+stands there. Removing the body instead would make pulling your network cable
+the cheapest way to deny an opponent a frag they had already earned, and would
+make a rocket already in the air detonate against nothing.
+
+**Three timeouts, in the order they fire, and each one bounds the next.** The
+missing-command fallback repeats the last command for ~500 ms
+(`MAX_REPEAT_TICKS`) so a body comes to rest instead of running off the map; a
+socket that stops answering without closing is given `DEFAULT_IDLE_TIMEOUT_MS`
+(ten seconds) before the room decides the wire is gone; the seat is then held for
+thirty. Worst case from "the wire broke" to "the match is forfeit" is forty
+seconds, and `EMPTY_ROOM_TTL_MS` is longer than the grace window so that a room
+whose *only* peer dropped is not reaped out from under their reconnect.
+`lifecycle.test.ts` asserts all three inequalities, because they are exactly the
+kind of relationship that survives until somebody tunes one of the numbers.
+
+**A timeout ends the match, not just the round.** Awarding only the round would
+start the next one against an empty seat and award that too, three seconds
+later, until the score ran out — the same result over half a minute of watching
+nothing happen. `forfeitMatch` (`sim/src/match/round.ts`) awards the round in
+progress *and* the match, and sets the winner directly rather than deriving it
+from the score: a player who quits while ahead leaves a score that says they were
+winning and a match their opponent won, and a forfeit is exactly the situation in
+which those two should disagree.
+
+**A newer socket holding a seat's token displaces the older one.** The
+alternative locks a player out of their own seat behind a connection that is dead
+in every sense except that the kernel has not noticed — which is what a half-open
+TCP connection is. The displaced socket is told (`replaced`, 4008) rather than
+dropped, because from its side those two look identical and only one of them
+means "you are now playing in another tab".
+
+**On the way back in, the client throws away everything it predicted across the
+gap.** The outbox, the pending commands (`predictor.discard()`), the render
+offset and the opponent's history, and then it takes the first snapshot whole.
+Replaying input across a multi-second gap draws a journey nobody made, and then
+corrects it by the size of the gap. The server does the same on its side: a
+resumed seat gets a *fresh* input queue rather than the one it left behind.
+
+**Which closes are worth retrying is decided by the close code, not by the fault
+frame beside it** — a socket that dies mid-write delivers 1006 and nothing else.
+Anything in the application range (4000–4999) is a refusal the host wrote on
+purpose and would still be true a second later, so it stops; 1001, 1006, 1011 and
+1012 are moments rather than verdicts, so they back off. The backoff is
+`BASE + random() * (window − BASE)` with the window doubling to a ceiling, so
+every delay lands inside 250 ms–4 s by construction and a host that restarts gets
+its clients back as a smear rather than a spike. It gives up on a *deadline*
+(`RECONNECT_WINDOW_MS`, 45 s) rather than an attempt count, because what decides
+whether coming back is worth anything is the seat's thirty seconds and a count is
+a bad proxy for it under jitter.
+
+**Draining a deploy properly is not here.** A 1001 close is what makes a client
+say "reconnecting" instead of "the connection dropped", and that half is this
+ticket's; stopping the machine accepting connections, handing every peer
+something that survives a machine swap, and waiting for the sockets is
+GLAD-G41FQ9's `shutdown.ts`.
+
 ### Nothing but bytes crosses the loopback
 
 `net/loopbackTransport.ts`. A string is UTF-8 encoded on send and decoded on

@@ -176,7 +176,13 @@ export {
 } from './match/match.ts'
 export type { MatchRules, MatchState } from './match/match.ts'
 
-export { advanceMatch, damageReserve, roundOutcome, startMatch } from './match/round.ts'
+export {
+  advanceMatch,
+  damageReserve,
+  forfeitMatch,
+  roundOutcome,
+  startMatch,
+} from './match/round.ts'
 
 export {
   ARMOR_PROTECTION,
@@ -266,6 +272,7 @@ export {
 export type { WireState } from './netstate.ts'
 
 export {
+  LifecycleEvent,
   MAX_CMDS_PER_BATCH,
   PROTOCOL_VERSION,
   UNKNOWN_RTT,
@@ -283,6 +290,7 @@ export type {
   ClientPong,
   ServerFault,
   ServerHash,
+  ServerLifecycle,
   ServerMapMismatch,
   ServerMessage,
   ServerPing,

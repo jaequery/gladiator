@@ -322,6 +322,33 @@ characters of Crockford base32 — the digits and the letters minus I, L, O and 
 `packages/server/src/roomCode.ts`; the guess rate at this deploy's concurrency
 is `docs/deploy.md`.
 
+**Seat** — a *side* of a duel: a slot in the world, a score, a body standing in
+the arena. Deliberately not the same thing as a connection, because a socket
+dies for reasons that have nothing to do with the match. Held by one peer at a
+time, and outliving whoever holds it by the grace window.
+`packages/server/src/lifecycle.ts`.
+
+**Seat token** — the 128-bit key the host mints when a seat is first taken and
+puts in the welcome. A room code says *which match*; a token says *which side of
+it*, which is the whole difference between reconnecting and joining. Bearer, and
+never shown to the other peer.
+
+**Grace window** — how long a seat is held for a peer that has gone:
+`RECONNECT_GRACE_MS`, thirty seconds. Their body stays in the world with no
+input at all — standing still and killable, so rage-quitting cannot deny a frag
+— and the opponent is told immediately, with a countdown.
+
+**Forfeit** — what a grace window running out does: the round in progress is
+awarded and the match with it, to whoever still holds the other seat
+(`forfeitMatch`, `sim/src/match/round.ts`). The score then records the rounds
+that were played and the winner is the player who was still there, and those two
+can disagree.
+
+**Reconnect** — coming back to a seat with its token, on the same URL plus
+`&token=…`. The client throws away everything it predicted across the gap and
+takes the first snapshot whole; which closes are worth retrying, and the
+250 ms-to-4 s backoff, are `packages/client/src/net/reconnect.ts`.
+
 **Tick scheduler** — the one timer on the machine
 (`packages/server/src/scheduler.ts`). Wakes ~62.5 times a second aiming at
 absolute boundaries rather than sleeping an interval, folds the elapsed

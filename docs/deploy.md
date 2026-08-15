@@ -280,10 +280,51 @@ room-to-machine directory and a way to route an upgrade at it, and that is
 GLAD-G41FQ9's.
 
 Rooms do not leak: one with no peers in it for a minute is closed and forgotten
-(`EMPTY_ROOM_TTL_MS`). That is deliberately blunt — *when* a peer counts as
-gone, whether a disconnected player may come back to the same room, and what a
-forfeit does to the score are the connection lifecycle's questions
-(GLAD-DVDV6P), and that ticket will want a longer grace period than this.
+(`EMPTY_ROOM_TTL_MS`). That is deliberately blunt, and it is now downstream of a
+policy rather than standing in for one — see the connection lifecycle below.
+
+## The connection lifecycle
+
+`packages/server/src/lifecycle.ts` (GLAD-DVDV6P). Four numbers, and each one is
+bounded by the next; `lifecycle.test.ts` asserts the inequalities, because they
+are exactly the kind of relationship that survives until somebody tunes one of
+them.
+
+| Number | Value | What it bounds |
+| ------ | ----- | -------------- |
+| `MAX_REPEAT_TICKS` (`inputQueue.ts`) | 62 ticks, ~500 ms | how long a silent peer's last command keeps being repeated, so the body comes to rest rather than running off the map |
+| `DEFAULT_IDLE_TIMEOUT_MS` (`room.ts`) | 10 s | how long a socket may say nothing before the room decides the wire is gone. A socket that *closes* skips this entirely |
+| `RECONNECT_GRACE_MS` (`lifecycle.ts`) | 30 s | how long the seat is then held, and the countdown the opponent is shown |
+| `EMPTY_ROOM_TTL_MS` (`rooms.ts`) | 60 s | how long a room with nobody in it survives — longer than the grace window, so a match both of whose players dropped is not reaped out from under a reconnect |
+
+Worst case from "the wire broke" to "the match is forfeit" is therefore **forty
+seconds** (idle + grace), and it is ten seconds and a bit for the common case
+where the socket closes properly. On the client the backoff is 250 ms to 4 s with
+full jitter and it gives up after 45 s — deliberately past the grace window, so
+a player stops because their *seat* expired rather than because the client ran
+out of patience (`client/src/net/reconnect.ts`).
+
+### The seat token
+
+Reconnecting means presenting the token the welcome carried:
+`wss://…/?room=ABC123&token=…`. It is 128 bits of CSPRNG as hex, minted per seat,
+reissued verbatim to whoever comes back with it, and never sent to the other
+peer.
+
+It is a **bearer credential, and it is not a security boundary either** — for
+the same reason a room code is not, and with a different exposure. Guessing one
+is not a thing anybody can do: 128 bits against a room that exists for the length
+of one duel. What it buys whoever *holds* it is the ability to take a seat in a
+match somebody is already playing — which is the same thing being in the tab
+would buy them, and the reason the token never appears in a frame the other
+player receives, in a log line, or in a URL anybody shares. The room code is
+still what gets shared; the token is what the tab keeps.
+
+A match that has ended answers a late reconnect with a `match-ended` fault and a
+4007 close, which the client does *not* retry: it is an answer rather than a
+moment. A stale token from a room that has been reaped is treated as no token at
+all — its holder is a stranger arriving at a match with a free seat, and refusing
+them would turn a leftover value in somebody's tab into a room they cannot join.
 
 ---
 

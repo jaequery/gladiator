@@ -104,7 +104,22 @@ describe('the host is isomorphic', () => {
     // purpose. `inputQueue.ts` joined it with the tick scheduler: a room drains
     // one command per peer per sub-step, and the buffer that holds them has to
     // run in a tab as well.
-    expect(names).toEqual(['clock.ts', 'clockSync.ts', 'inputQueue.ts', 'room.ts', 'session.ts'])
+    //
+    // `lifecycle.ts` joined it with the connection lifecycle, and `roomCode.ts`
+    // came with it: a seat token is drawn from the same uniform uint32 source a
+    // room code is, and `crypto.getRandomValues` is a global in Node 22 and in
+    // every browser this game supports. Writing a second draw to avoid the
+    // import would be two spellings of one number, which is the drift
+    // `AGENTS.md` exists to prevent.
+    expect(names).toEqual([
+      'clock.ts',
+      'clockSync.ts',
+      'inputQueue.ts',
+      'lifecycle.ts',
+      'room.ts',
+      'roomCode.ts',
+      'session.ts',
+    ])
   })
 
   it('names nothing that would pin it to one runtime', () => {
