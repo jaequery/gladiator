@@ -94,14 +94,24 @@ export type TraceSample = {
  * IEEE 754 (62.5 is 125/2), so the schedule is the same everywhere.
  */
 export function sampleTicks(durationTicks: number): number[] {
-  const perSample = TICK_RATE / 2
   const ticks: number[] = []
   for (let k = 0; ; k++) {
-    const at = Math.round(k * perSample)
+    const at = sampleTickAt(k)
     if (at > durationTicks) break
     ticks.push(at)
   }
   return ticks
+}
+
+/**
+ * The tick of the `index`-th sample, counting from zero.
+ *
+ * The same schedule as {@link sampleTicks}, expressed as a cursor rather than a
+ * list — because a recording does not know how long it is going to be
+ * (`demo.ts`), and building the list up front would mean guessing.
+ */
+export function sampleTickAt(index: number): number {
+  return Math.round(index * (TICK_RATE / 2))
 }
 
 /** The world a replay starts from. */

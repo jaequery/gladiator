@@ -101,6 +101,15 @@ export type ServerConfig = {
   readonly maxConnectionsPerAddress: number
   /** Where the real client address is, behind a proxy. `''` means "nowhere". */
   readonly trustedIpHeader: string
+  /**
+   * Where to write a demo of every match, or `null` for "do not record".
+   *
+   * Off by default. A recording is a growing array per room and a file per
+   * match, so it is a thing somebody turns on to chase a bug rather than
+   * something a production machine does to two hundred rooms by accident.
+   * `demoFile.ts`.
+   */
+  readonly demoDir: string | null
 }
 
 function readInteger(raw: string | undefined, fallback: number): number {
@@ -139,5 +148,12 @@ export function readConfig(env: Record<string, string | undefined>): ServerConfi
     // string is a deliberate "there is no proxy in front of me" and must not
     // fall through to the Fly default.
     trustedIpHeader: (env['TRUSTED_IP_HEADER'] ?? DEFAULT_TRUSTED_IP_HEADER).toLowerCase(),
+    demoDir: readPath(env['GLADIATOR_DEMO_DIR']),
   }
+}
+
+/** A directory, or `null` for unset and for the empty string. */
+function readPath(raw: string | undefined): string | null {
+  const trimmed = raw?.trim() ?? ''
+  return trimmed === '' ? null : trimmed
 }

@@ -65,12 +65,19 @@ import { randomUUID } from 'node:crypto'
 import { Socket } from 'node:net'
 import type { Duplex } from 'node:stream'
 
-import { CloseReason, PROTOCOL_VERSION, type MatchRules } from '@gladiator/sim'
+import {
+  CloseReason,
+  PROTOCOL_VERSION,
+  createDemoRecorder,
+  type MatchRules,
+} from '@gladiator/sim'
 import { WebSocketServer, type WebSocket } from 'ws'
 
 import { systemClock, type Clock } from './clock.ts'
 import type { ServerConfig } from './config.ts'
+import { writeDemoFile } from './demoFile.ts'
 import { createJitterProbe, type JitterProbe } from './jitter.ts'
+import { createLogger, type Log } from './log.ts'
 import { startHostLoop, systemScheduler, type Scheduler } from './loop.ts'
 import { createOriginPolicy } from './origin.ts'
 import { SERVER_MAP, SERVER_MAP_HASH, SERVER_PLAN } from './map.ts'
@@ -123,7 +130,8 @@ export type StartOptions = {
    * out of.
    */
   readonly rules?: MatchRules
-  readonly log?: (line: string) => void
+  /** Where events go. One JSON object per line; `log.ts`. */
+  readonly log?: Log
 }
 
 /**
@@ -152,7 +160,13 @@ export function roomCodeOf(url: string | undefined): string | null {
 
 export function startServer(options: StartOptions): Promise<GladiatorServer> {
   const { config } = options
-  const log = options.log ?? ((line: string) => console.log(line))
+  const log =
+    options.log ??
+    createLogger({
+      write: (line) => console.log(line),
+      time: () => Date.now(),
+      context: { build: config.build },
+    })
   const jitter = options.jitter ?? createJitterProbe()
   const clock = options.clock ?? systemClock()
   const beats = options.scheduler ?? systemScheduler()
@@ -200,9 +214,31 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
     return clientKey(request.socket.remoteAddress)
   }
 
+  /**
+   * Write a room's recording out, if this deploy is recording.
+   *
+   * Every way a room can end funnels through the registry's `onClosing`, so
+   * this is one hook rather than one per ending — and it is wrapped there, so a
+   * full disk costs a log line rather than the rest of the shutdown.
+   */
+  const keepDemo = (code: string, room: Room): void => {
+    if (config.demoDir === null) return
+    const demo = room.demo()
+    if (demo === null || demo.frames.length === 0) return
+    const path = writeDemoFile(config.demoDir, demo, Date.now())
+    log('demo.written', {
+      room: code,
+      tick: room.tick,
+      path,
+      frames: demo.frames.length,
+      samples: demo.trace.length,
+    })
+  }
+
   const rooms: RoomRegistry = createRoomRegistry({
     clock,
     log,
+    onClosing: keepDemo,
     ...(options.random === undefined ? {} : { random: options.random }),
     create: (code: string): Room =>
       createRoom({
@@ -221,6 +257,20 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
         ...(options.rules === undefined ? {} : { rules: options.rules }),
         peerId: () => randomUUID(),
         log,
+        // A recording is the command stream this room executes. Only when this
+        // deploy asked for one — `config.demoDir`, `demoFile.ts`.
+        ...(config.demoDir === null
+          ? {}
+          : {
+              recorder: createDemoRecorder({
+                build: config.build,
+                room: code,
+                map: { name: SERVER_MAP.source.name, hash: SERVER_MAP_HASH },
+                seed: seedForRoom(code),
+                protocol: PROTOCOL_VERSION,
+                ...(options.rules === undefined ? {} : { rules: options.rules }),
+              }),
+            }),
       }),
   })
 
@@ -259,6 +309,10 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
         // machine class can hold a tick rate. `docs/deploy.md`.
         scheduler: ticks.stats(),
         jitter: jitter.snapshot(),
+        // Whether this machine is recording matches, so "did the demo capture
+        // I turned on actually take" is answerable with curl rather than by
+        // waiting for a room to close. `docs/deploy.md`.
+        recording: config.demoDir !== null,
       })
       response.writeHead(200, { 'content-type': 'application/json' })
       response.end(body)
@@ -291,7 +345,7 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
     if (!verdict.allowed) {
       // Logged, because "the preview deploy cannot connect" is otherwise a
       // silent failure that looks exactly like the server being down.
-      log(`upgrade refused: ${verdict.reason}`)
+      log('upgrade.refused', { level: 'warn', reason: verdict.reason })
       rejectUpgrade(socket, 403, 'Forbidden')
       return
     }
@@ -303,12 +357,21 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
     // a WebSocket handshake per guess, which is paying for the attack.
     const address = addressOf(request)
     if (!connects.spend(address, clock.nowMs())) {
-      log(`upgrade refused: ${address} is opening connections too fast`)
+      log('upgrade.rate_limited', {
+        level: 'warn',
+        address,
+        budgetPerSecond: config.connectBudgetPerSecond,
+        burst: config.connectBurst,
+      })
       rejectUpgrade(socket, 429, 'Too Many Requests', 'Retry-After: 1\r\n')
       return
     }
     if (openFrom(address) >= config.maxConnectionsPerAddress) {
-      log(`upgrade refused: ${address} already holds ${config.maxConnectionsPerAddress} sockets`)
+      log('upgrade.too_many_open', {
+        level: 'warn',
+        address,
+        open: config.maxConnectionsPerAddress,
+      })
       rejectUpgrade(socket, 429, 'Too Many Requests', 'Retry-After: 5\r\n')
       return
     }
@@ -377,12 +440,13 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
       // they hit is telling them their character set is right.
       // `describeRoomCode` rather than the raw string: this goes into a log line
       // and into a frame the client prints, and a query parameter can contain a
-      // newline. A value an attacker chose that reaches a log verbatim is a
-      // value an attacker can use to forge a log line. It folds a real code on
-      // the way through, so a player who typed `abc-123` is still told about
-      // `ABC123` — the thing they meant.
+      // newline. A value an attacker chose that reaches a log line verbatim is a
+      // value an attacker can use to forge one — and a log line is a JSON object
+      // here, so it would forge a whole *record*. It folds a real code on the way
+      // through, so a player who typed `abc-123` is still told about `ABC123` —
+      // the thing they meant.
       const shown = describeRoomCode(asked)
-      log(`join refused: no room ${shown}`)
+      log('join.no_such_room', { level: 'warn', room: shown })
       refuse(
         socket,
         'no-such-room',

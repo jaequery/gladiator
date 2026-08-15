@@ -103,13 +103,18 @@ describe('the host is isomorphic', () => {
     // so that a new import into the host is a decision somebody makes on
     // purpose. `inputQueue.ts` joined it with the tick scheduler: a room drains
     // one command per peer per sub-step, and the buffer that holds them has to
-    // run in a tab as well. `validate.ts` and `rateLimit.ts` joined it with the
-    // security hardening, for the same reason — the frame door is a room's, so
+    // run in a tab as well.
+    // `log.ts` joined it with structured logging, and it is on this side of the
+    // line for the same reason `clock.ts` is: the sink and the wall-clock are
+    // injected, so the module itself names neither `console` nor `Date.now`.
+    // `validate.ts` and `rateLimit.ts` joined it with the security hardening,
+    // for the same reason as `inputQueue.ts` — the frame door is a room's, so
     // the listen server runs into exactly the door the deployed server does.
     expect(names).toEqual([
       'clock.ts',
       'clockSync.ts',
       'inputQueue.ts',
+      'log.ts',
       'rateLimit.ts',
       'room.ts',
       'session.ts',

@@ -124,6 +124,14 @@ describe('aiming at the next boundary', () => {
     expect(timer.delayMs).toBe(HOST_FRAME_MS)
   })
 
+  // Vitest's default 5 s, raised. Nothing in here waits for anything — the
+  // clock and the timer are both manual — but it walks 3,750 frames and asks
+  // for `stats()` at every one of them, and a percentile is a sort of the whole
+  // window. That is a few seconds of arithmetic on an unloaded machine and more
+  // than five on a machine running the rest of this suite beside it, which made
+  // it fail as a *timeout* rather than as an assertion. GLAD-2E6PUO.
+  const ARITHMETIC_TIMEOUT_MS = 60_000
+
   it('holds the tick rate over a minute of jittery wakeups', () => {
     // The number that matters: a minute of wall-clock is 7500 sub-steps,
     // whatever the timer did in between. A scheduler that kept its lateness
@@ -153,7 +161,7 @@ describe('aiming at the next boundary', () => {
     expect(stats.steps).toBe(Math.floor(clock.nowMs() / TICK_INTERVAL_MS))
     expect(stats.droppedMs).toBe(0)
     expect(stats.resyncs).toBe(0)
-  })
+  }, ARITHMETIC_TIMEOUT_MS)
 
   it('measures its own lateness and judges it against a written budget', () => {
     const { clock, timer, scheduler } = driven({ budgetMs: 4 })

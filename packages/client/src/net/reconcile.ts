@@ -167,6 +167,20 @@ export type ReconcileOptions = {
   readonly snapshot: ServerSnapshot
   /** The unacknowledged commands, oldest first, each with its tick label. */
   readonly pending: readonly PendingCommand[]
+  /**
+   * The authoritative world, the instant it is adopted and before anything is
+   * replayed on top of it.
+   *
+   * The one moment the server's answer for a tick is readable — a replay
+   * overwrites it within microseconds. `net/mispredict.ts` is what reads it,
+   * and reads nothing else: this is a hook rather than another field on
+   * {@link Correction} because what a counter wants out of a world is its own
+   * business, and threading each new field through here would make
+   * reconciliation know about instrumentation.
+   */
+  readonly onAdopt?: (state: GameState) => void
+  /** Called after every sub-step this reconciliation replays. */
+  readonly onReplayTick?: (state: GameState) => void
 }
 
 export type PendingCommand = {
@@ -192,6 +206,8 @@ export function reconcile(options: ReconcileOptions): Correction | null {
 
   if (!applyWireState(state, snapshot.state)) return null
 
+  options.onAdopt?.(state)
+
   // Every command we sent after the one the server has executed. The ack is a
   // tick *label*, so this is a filter and not an offset into the buffer: a
   // client whose clock has been slewed has labels that are not contiguous with
@@ -201,6 +217,7 @@ export function reconcile(options: ReconcileOptions): Correction | null {
     if (entry.tick <= snapshot.ack) continue
     simTick(state, inputsFor(slot, entry.cmd), world)
     replayed += 1
+    options.onReplayTick?.(state)
   }
 
   const settled = originOf(state, slot)

@@ -383,6 +383,68 @@ forfeit does to the score are the connection lifecycle's questions
 
 ---
 
+## Reading the logs, and recording a match
+
+The server writes **one JSON object per line** and every one of them carries
+`room` and `tick` — null where the event is not about a room, never absent, so
+a query never has to branch on whether a key is there
+(`packages/server/src/log.ts`). A bug report arrives as "room 7QK4M2, about a
+minute in", and those are the two coordinates it turns into:
+
+```sh
+flyctl logs | jq -c 'select(.room == "7QK4M2")'
+flyctl logs | jq -c 'select(.level != "info")'
+flyctl logs | jq -c 'select(.event == "sim.speed_clamped")'
+```
+
+That last one should never print. It is the 3000 qu/s rail in `pmove`, on a game
+whose best rocket jump peaks near 1000; if it fires, a command stream produced a
+velocity movement cannot (`docs/physics-spec.md` §2.6).
+
+Neither should `registry.room_faulted`, and it is the more alarming of the two:
+it means ticking or sweeping a room threw, which means some frame reached code
+that treated it as trustworthy. **Limits** above says what that costs and what
+contains it.
+
+```sh
+# who is being turned away at the door, and why
+flyctl logs | jq -c 'select(.event | startswith("upgrade."))'
+flyctl logs | jq -c 'select(.event == "room.peer_refused") | {room, peer, fate, refused}'
+
+# what this machine is actually enforcing, from its boot line
+flyctl logs | jq -c 'select(.event == "server.limits")'
+```
+
+`room.peer_refused` is one line per closed *connection*, never one per refused
+frame — a log an attacker can fill is a log nobody can read, which is the same
+reason the throttle itself is silent. `fate` says which limit it hit and
+`refused` says how many frames it took to get there, so "closed on the first
+binary frame" and "closed after a hundred" read differently.
+
+**`GLADIATOR_DEMO_DIR` records every match on the machine to a file.** Off by
+default, because a machine holding two hundred rooms would otherwise hold two
+hundred growing arrays and write two hundred files. Turn it on when chasing
+something a playtester can describe and nobody can reproduce:
+
+```sh
+flyctl secrets set GLADIATOR_DEMO_DIR=/data/demos
+# ... later, once the match has ended and the room has closed
+flyctl ssh sftp get /data/demos/<stamp>-7QK4M2.demo.json
+pnpm demo replay <stamp>-7QK4M2.demo.json
+```
+
+A demo is the *command stream*, not the state stream, so replaying it re-runs
+the exact match rather than showing a recording of it — and `replay` compares
+the hash trace it produces against the one the file carries, which is how you
+find out whether the two ends disagreed at all. `--until <tick>` stops it where
+the report says. `AGENTS.md` under **Observability**.
+
+A recording lands on disk when the room is closed and forgotten, which is when
+both players have gone plus the empty-room TTL above. A machine that is
+SIGKILLed rather than drained writes nothing.
+
+---
+
 ## Verifying a deploy
 
 ```sh

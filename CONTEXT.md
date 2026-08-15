@@ -146,6 +146,12 @@ produce, sampled every half second. The regression test for determinism itself:
 a change to the physics moves the trace, and a change nobody meant to make
 cannot ride along with one they did.
 
+**Demo** — a recording of a real match: the command stream a host executed, the
+seed and rules it ran under, the ticks `startMatch` fired on, and the hash trace
+it produced. The inputs and not the states, because the world is a function of
+them — which is what makes it small, and what makes replaying it a *check*
+rather than a playback. `packages/sim/src/demo.ts`; `pnpm demo`.
+
 **Transport** — the interface a WebSocket, the in-process loopback and (later)
 WebTransport all satisfy. It moves bytes and knows nothing about what they
 mean. Its contract requires reliable, ordered delivery, and records which parts
@@ -274,6 +280,40 @@ rather than the one now in hand — the two weapons share one timer.
 **HUD box** — an element marked `data-hud-box`: part of the set the browser test
 measures at 16:9, 21:9 and 4:3 and requires to be on screen and not overlapping
 anything else. `scripts/e2e.mjs`.
+
+**Dev HUD** — the `?dev=1` performance panel: tick, round trip, pending
+commands, the last prediction error in units, snapshot bytes per second, frame
+pacing, and the two counters below. Deliberately not a **HUD box** — it is an
+instrument, not part of the layout a player sees. `ui/devHud.ts`.
+
+---
+
+## Observability
+
+**Self-splash mispredict** — the client predicted taking its own splash damage
+and the server disagreed, or the reverse. A far sharper determinism canary than
+a correction distance, because self-splash is a *predicate* — you either ate
+your own rocket or you did not — where a position is continuous and always a
+little wrong. `packages/client/src/net/mispredict.ts`.
+
+**Speed clamp** — the 3000 qu/s safety rail in `pmove`, a collision and netcode
+guard rather than physics; Quake has none. Nothing in play approaches it, so a
+clamp is a report about something upstream. §2.6.
+
+**Observation seam** — a function the simulation calls to say something happened
+(`onSpeedClamp`, `onSelfSplash`). It exists because `packages/sim` has no
+`console` and no counters; it is purely observational, so two peers with
+different observers still produce the same world. Tallied by
+`packages/sim/src/counters.ts`.
+
+**Structured log** — one JSON object per event, one line each, with `room` and
+`tick` on every entry — null where there is no room, never absent.
+`packages/server/src/log.ts`.
+
+**Input to photon** — the wall-clock between a hand moving and the screen
+showing a world that moved. Six stages, three of them this project's; the budget
+and the measurement are `docs/latency.md` and `pnpm latency`. Distinct from
+every netcode number, which is about the *opponent*.
 
 ---
 
