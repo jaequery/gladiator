@@ -19,7 +19,7 @@
 import { sanitizeUserCmd, type UserCmd } from './usercmd.ts'
 
 /** Bump on any change to the message shapes below. */
-export const PROTOCOL_VERSION = 2
+export const PROTOCOL_VERSION = 3
 
 /**
  * The most commands one frame may carry. The client's accumulator clamps a
@@ -28,8 +28,15 @@ export const PROTOCOL_VERSION = 2
  */
 export const MAX_CMDS_PER_BATCH = 256
 
-/** A `UserCmd` on the wire: `[forwardMove, sideMove, yaw, pitch, buttons]`. */
-export type WireCmd = readonly [number, number, number, number, number]
+/**
+ * A `UserCmd` on the wire: `[forwardMove, sideMove, yaw, pitch, buttons,
+ * weapon]`.
+ *
+ * The held weapon rides along on every command rather than arriving as a
+ * switch event, because a lost event leaves the two peers holding different
+ * weapons for the rest of the match — see `usercmd.ts`.
+ */
+export type WireCmd = readonly [number, number, number, number, number, number]
 
 export type ClientHello = {
   readonly t: 'hello'
@@ -100,24 +107,25 @@ export type ServerMessage =
 
 /** Pack a command for the wire. */
 export function encodeCmd(cmd: UserCmd): WireCmd {
-  return [cmd.forwardMove, cmd.sideMove, cmd.yaw, cmd.pitch, cmd.buttons]
+  return [cmd.forwardMove, cmd.sideMove, cmd.yaw, cmd.pitch, cmd.buttons, cmd.weapon]
 }
 
 /**
  * Unpack a command from the wire, clamping it into a legal one.
  *
- * Anything that is not a five-number tuple becomes a standing-still command
+ * Anything that is not a six-number tuple becomes a standing-still command
  * rather than an error: a tick is a total function, so the door is the only
  * place a bad value can be turned away.
  */
 export function decodeCmd(wire: unknown): UserCmd {
-  if (!Array.isArray(wire) || wire.length !== 5) return sanitizeUserCmd(null)
+  if (!Array.isArray(wire) || wire.length !== 6) return sanitizeUserCmd(null)
   return sanitizeUserCmd({
     forwardMove: wire[0],
     sideMove: wire[1],
     yaw: wire[2],
     pitch: wire[3],
     buttons: wire[4],
+    weapon: wire[5],
   })
 }
 

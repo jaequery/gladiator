@@ -1,18 +1,28 @@
 /**
  * The golden replay: a committed input stream and the hash trace it produces.
  *
- * Ten seconds — 1250 sub-steps — of two players moving, turning and jumping,
- * sampled every half second. Between them the keyframes below touch every
- * field of a `UserCmd` the kernel reads, cross a yaw wrap in both directions,
- * spend time airborne and time at rest, and leave both players somewhere other
- * than where they started.
+ * Ten seconds — 1250 sub-steps — of two players moving, turning, jumping and
+ * shooting, sampled every half second. Between them the keyframes below touch
+ * every field of a `UserCmd` the kernel reads, cross a yaw wrap in both
+ * directions, spend time airborne and time at rest, and leave both players
+ * somewhere other than where they started.
+ *
+ * They also fire. Three rockets and two rail shots, including a rocket jump
+ * each, so the trace covers the phases weapons added to a sub-step: a
+ * projectile spawning, flying, detonating and being removed, and splash
+ * rewriting a player's velocity. Entities appearing and disappearing mid-match
+ * is exactly the kind of thing two peers can come to disagree about, and it is
+ * cheap to have the determinism gate watch it.
+ *
+ * The two of them survive the ten seconds on purpose — each ends on 51 health,
+ * having paid for one rocket jump — because a fixture whose players are dead
+ * halfway through stops exercising anything. Round rules are GLAD-L4SYN9's.
  *
  * ## What a failure here means
  *
  * The trace changed. That is not automatically a bug: any ticket that changes
- * what a sub-step *does* — `pmove`, tracing, weapons (GLAD-0QWRYK) — moves
- * this trace, deliberately, and re-baking it is
- * part of that work. What the test buys is that the change is *noticed*, and
+ * what a sub-step *does* — `pmove`, tracing, weapons, round rules — moves this
+ * trace, deliberately, and re-baking it is part of that work. What the test buys is that the change is *noticed*, and
  * that a change nobody meant to make cannot ride along with one they did.
  *
  * ## Re-baking it
@@ -33,7 +43,7 @@
  */
 
 import type { Replay, TraceSample } from '../replay.ts'
-import { BUTTON_JUMP } from '../usercmd.ts'
+import { BUTTON_ATTACK, BUTTON_JUMP } from '../usercmd.ts'
 
 export const GOLDEN_REPLAY: Replay = {
   name: 'two-players-10s',
@@ -58,8 +68,14 @@ export const GOLDEN_REPLAY: Replay = {
     { tick: 41, slot: 0, forwardMove: 1, sideMove: 1, yawDeg: 0, pitchDeg: 0, buttons: 0 },
     { tick: 120, slot: 0, forwardMove: 1, sideMove: 1, yawDeg: 45, pitchDeg: 0, buttons: 0 },
     { tick: 200, slot: 0, forwardMove: 0, sideMove: -1, yawDeg: 90, pitchDeg: -12, buttons: 0 },
-    { tick: 300, slot: 0, forwardMove: -1, sideMove: 0, yawDeg: 135, pitchDeg: -20, buttons: 0 },
-    { tick: 400, slot: 0, forwardMove: 1, sideMove: 0, yawDeg: 200, pitchDeg: 0, buttons: BUTTON_JUMP },
+    // Out in the open and level: the rocket crosses the arena and detonates on
+    // a far wall a second later, so the fixture covers a whole flight rather
+    // than just a muzzle flash. Aimed up it would leave over the walls, which
+    // have no ceiling on them, and still be in the air at the last sample.
+    { tick: 300, slot: 0, forwardMove: -1, sideMove: 0, yawDeg: 135, pitchDeg: 0, buttons: BUTTON_ATTACK },
+    // A rocket jump: the jump and the shot on the same tick, looking at the
+    // floor. The tick after releases both, or the refire would fire again.
+    { tick: 400, slot: 0, forwardMove: 1, sideMove: 0, yawDeg: 200, pitchDeg: 89, buttons: BUTTON_JUMP | BUTTON_ATTACK },
     { tick: 401, slot: 0, forwardMove: 1, sideMove: 0, yawDeg: 200, pitchDeg: 0, buttons: 0 },
     { tick: 600, slot: 0, forwardMove: 0, sideMove: 0, yawDeg: 200, pitchDeg: 0, buttons: 0 },
     { tick: 700, slot: 0, forwardMove: 1, sideMove: 1, yawDeg: 320, pitchDeg: 8, buttons: 0 },
@@ -74,9 +90,12 @@ export const GOLDEN_REPLAY: Replay = {
     { tick: 150, slot: 1, forwardMove: 1, sideMove: -1, yawDeg: 250, pitchDeg: 0, buttons: 0 },
     { tick: 250, slot: 1, forwardMove: -1, sideMove: 1, yawDeg: 300, pitchDeg: 25, buttons: 0 },
     { tick: 350, slot: 1, forwardMove: 1, sideMove: 0, yawDeg: 0, pitchDeg: 15, buttons: 0 },
-    { tick: 500, slot: 1, forwardMove: 1, sideMove: 0, yawDeg: 0, pitchDeg: 0, buttons: BUTTON_JUMP },
+    { tick: 500, slot: 1, forwardMove: 1, sideMove: 0, yawDeg: 0, pitchDeg: 89, buttons: BUTTON_JUMP | BUTTON_ATTACK },
     { tick: 501, slot: 1, forwardMove: 1, sideMove: 0, yawDeg: 0, pitchDeg: 0, buttons: 0 },
-    { tick: 800, slot: 1, forwardMove: 0, sideMove: 1, yawDeg: 90, pitchDeg: 0, buttons: 0 },
+    // The railgun, held: hitscan, a 1500 ms refire, and 500 qu/s of knockback
+    // on anything it finds. Aimed over the arena rather than at slot 0, so the
+    // fixture keeps two live players for the whole ten seconds.
+    { tick: 800, slot: 1, forwardMove: 0, sideMove: 1, yawDeg: 90, pitchDeg: -20, buttons: BUTTON_ATTACK, weapon: 1 },
     { tick: 1000, slot: 1, forwardMove: 1, sideMove: 1, yawDeg: -120, pitchDeg: -30, buttons: BUTTON_JUMP },
     { tick: 1001, slot: 1, forwardMove: 1, sideMove: 1, yawDeg: -120, pitchDeg: -30, buttons: 0 },
   ],
@@ -87,25 +106,25 @@ export const GOLDEN_REPLAY: Replay = {
  * 62.5 ticks, rounded to the nearest tick. See `sampleTicks`.
  */
 export const GOLDEN_TRACE: readonly TraceSample[] = [
-  { tick: 0, timeMs: 0, hash: '2a04d1eb' },
-  { tick: 63, timeMs: 504, hash: 'a39e8064' },
-  { tick: 125, timeMs: 1000, hash: '6c328975' },
-  { tick: 188, timeMs: 1504, hash: '8af842b9' },
-  { tick: 250, timeMs: 2000, hash: '23b50f53' },
-  { tick: 313, timeMs: 2504, hash: 'a588e493' },
-  { tick: 375, timeMs: 3000, hash: 'ca5155df' },
-  { tick: 438, timeMs: 3504, hash: '874e0fa7' },
-  { tick: 500, timeMs: 4000, hash: '3a84c356' },
-  { tick: 563, timeMs: 4504, hash: '8ebf3eac' },
-  { tick: 625, timeMs: 5000, hash: '8d8a1cf4' },
-  { tick: 688, timeMs: 5504, hash: 'ea4346f2' },
-  { tick: 750, timeMs: 6000, hash: '601ee83d' },
-  { tick: 813, timeMs: 6504, hash: '73848aef' },
-  { tick: 875, timeMs: 7000, hash: 'a09399ab' },
-  { tick: 938, timeMs: 7504, hash: '5978421c' },
-  { tick: 1000, timeMs: 8000, hash: '5737fd6a' },
-  { tick: 1063, timeMs: 8504, hash: '365df550' },
-  { tick: 1125, timeMs: 9000, hash: 'fe2ad56f' },
-  { tick: 1188, timeMs: 9504, hash: 'e2485a7f' },
-  { tick: 1250, timeMs: 10000, hash: '465d685d' },
+  { tick: 0, timeMs: 0, hash: '0a103755' },
+  { tick: 63, timeMs: 504, hash: 'fffbfc94' },
+  { tick: 125, timeMs: 1000, hash: 'f868c7a9' },
+  { tick: 188, timeMs: 1504, hash: '89b66467' },
+  { tick: 250, timeMs: 2000, hash: 'edc99fd1' },
+  { tick: 313, timeMs: 2504, hash: '775569ba' },
+  { tick: 375, timeMs: 3000, hash: '13bb4975' },
+  { tick: 438, timeMs: 3504, hash: '82ccd376' },
+  { tick: 500, timeMs: 4000, hash: 'd45a1299' },
+  { tick: 563, timeMs: 4504, hash: '79bbd37b' },
+  { tick: 625, timeMs: 5000, hash: '4e78fab0' },
+  { tick: 688, timeMs: 5504, hash: '7d4a4836' },
+  { tick: 750, timeMs: 6000, hash: '4ea4ac36' },
+  { tick: 813, timeMs: 6504, hash: '78b5dad0' },
+  { tick: 875, timeMs: 7000, hash: '6519fdb5' },
+  { tick: 938, timeMs: 7504, hash: '245231c4' },
+  { tick: 1000, timeMs: 8000, hash: 'c406d142' },
+  { tick: 1063, timeMs: 8504, hash: 'bf277fd8' },
+  { tick: 1125, timeMs: 9000, hash: '585515b8' },
+  { tick: 1188, timeMs: 9504, hash: '4e0ae51c' },
+  { tick: 1250, timeMs: 10000, hash: '4e9825b0' },
 ]

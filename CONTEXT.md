@@ -31,7 +31,28 @@ modes because the choice changes the skill ceiling, not just the numbers
 (GLAD-L4SYN9).
 
 **Rocket jump** — firing a rocket at your feet and riding the splash impulse.
-The reason self-damage exists.
+The reason self-damage exists. Worth 500 qu/s standing and 770 with a jump on
+the same tick; what that measurably climbs to is `docs/physics-spec.md` §3.4.
+
+**Splash** — the damage an explosion does to everything near it, falling off
+linearly to nothing at 120 units. Measured to the nearest point on a player's
+**box**, not to its centre, so a rocket at your feet does its full 100.
+`docs/physics-spec.md` §3.3.
+
+**Knockback** — the velocity a hit imparts: five units of speed per point of
+damage, **added** to the current velocity rather than replacing it. Splash is
+biased upward; a railgun hit pushes along the shooter's aim. It also arms the
+**knockback timer**, a window of up to 200 ms in which the ground neither
+brakes you nor steers you — which is why you cannot cancel a rocket jump the
+instant you land. `docs/physics-spec.md` §3.3.
+
+**Trajectory** — how a rocket's position is known: `trBase`, `trDelta` and the
+tick it was fired on, evaluated in closed form rather than integrated. It is
+what lets the wire mention a rocket exactly once. `docs/physics-spec.md` §3.2.
+
+**Refire** — the interval between shots, and the only thing that gates one.
+800 ms for the rocket launcher, 1500 ms for the railgun, on a single timer both
+weapons share. There is no ammunition anywhere in the simulation.
 
 **Strafe jump** — gaining speed by holding a strafe key and turning into it
 mid-air, exploiting how Quake's `pmove` projects acceleration onto velocity.

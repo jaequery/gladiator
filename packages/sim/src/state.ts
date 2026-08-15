@@ -50,6 +50,14 @@ export type EntityFlag = (typeof EntityFlag)[keyof typeof EntityFlag]
 /** `slot` for an entity that no player controls. */
 export const NO_SLOT = -1
 
+/**
+ * An entity id that names nothing. Ids start at 1, so zero is free.
+ *
+ * `ownerId` for something nobody fired, and the "nothing was hit directly"
+ * argument to `radiusDamage`.
+ */
+export const NO_ENTITY = 0
+
 /** `expireTick` for an entity that lives until something kills it. */
 export const NEVER_EXPIRES = -1
 
@@ -84,6 +92,29 @@ export type EntityState = {
   knockbackTicks: number
   /** The entity that is responsible for this one — a rocket's shooter. */
   ownerId: number
+  /**
+   * For a player: the weapon they are holding, a {@link Weapon}. For a rocket:
+   * the weapon that fired it, which is what tells a renderer what to draw.
+   */
+  weapon: number
+  /**
+   * The first tick this player may fire on again.
+   *
+   * One timer for both weapons, which is Quake 3's single `ps->weaponTime`
+   * rather than a simplification: switching weapons must not be a way to fire
+   * sooner than either weapon's refire allows. `weapons.ts`.
+   */
+  nextFireTick: number
+  /**
+   * Where a projectile's trajectory starts — the muzzle it left, in Quake
+   * units. Zero for everything else.
+   *
+   * A rocket is a *trajectory*, not a position: its origin at any tick is
+   * `trBase + (t - trTime) * 0.001 * velocity`, evaluated from `spawnTick`, so
+   * a peer that is told about a rocket once can compute where it is on every
+   * tick afterwards without being told again. `projectile.ts`.
+   */
+  trBase: MutVec3
   spawnTick: number
   /** Tick at which the kernel removes this entity, or `NEVER_EXPIRES`. */
   expireTick: number
@@ -124,6 +155,9 @@ export type EntityInit = {
   health?: number
   knockbackTicks?: number
   ownerId?: number
+  weapon?: number
+  nextFireTick?: number
+  trBase?: MutVec3
   expireTick?: number
 }
 
@@ -139,7 +173,10 @@ export function spawnEntity(state: GameState, init: EntityInit): EntityState {
     angles: init.angles ?? vec3(),
     health: init.health ?? 0,
     knockbackTicks: init.knockbackTicks ?? 0,
-    ownerId: init.ownerId ?? 0,
+    ownerId: init.ownerId ?? NO_ENTITY,
+    weapon: init.weapon ?? 0,
+    nextFireTick: init.nextFireTick ?? 0,
+    trBase: init.trBase ?? vec3(),
     spawnTick: state.tick,
     expireTick: init.expireTick ?? NEVER_EXPIRES,
   }
@@ -181,6 +218,9 @@ export function cloneEntity(entity: EntityState): EntityState {
     health: entity.health,
     knockbackTicks: entity.knockbackTicks,
     ownerId: entity.ownerId,
+    weapon: entity.weapon,
+    nextFireTick: entity.nextFireTick,
+    trBase: [entity.trBase[0], entity.trBase[1], entity.trBase[2]],
     spawnTick: entity.spawnTick,
     expireTick: entity.expireTick,
   }
@@ -247,6 +287,11 @@ export function encodeInto(writer: ByteWriter, state: GameState): void {
     writeF64(writer, entity.health)
     writeI32(writer, entity.knockbackTicks)
     writeI32(writer, entity.ownerId)
+    writeU8(writer, entity.weapon)
+    writeI32(writer, entity.nextFireTick)
+    writeF64(writer, entity.trBase[0])
+    writeF64(writer, entity.trBase[1])
+    writeF64(writer, entity.trBase[2])
     writeI32(writer, entity.spawnTick)
     writeI32(writer, entity.expireTick)
   }
@@ -254,7 +299,7 @@ export function encodeInto(writer: ByteWriter, state: GameState): void {
 
 /** The canonical bytes for a state. Allocates; `encodeInto` does not. */
 export function encodeExact(state: GameState): Uint8Array {
-  const writer = createWriter(64 + state.entities.length * 128)
+  const writer = createWriter(64 + state.entities.length * 160)
   encodeInto(writer, state)
   return writtenBytes(writer).slice()
 }

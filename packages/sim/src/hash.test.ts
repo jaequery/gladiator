@@ -88,7 +88,7 @@ describe('state hash', () => {
     // A golden value. If this changes, either the state shape changed or the
     // digest did — and both are things a reviewer should be made to look at,
     // because every deployed client and server has to agree on it.
-    expect(formatHash(hashState(oneStandingPlayer()))).toBe('9ffe7211')
+    expect(formatHash(hashState(oneStandingPlayer()))).toBe('9a83285b')
   })
 })
 

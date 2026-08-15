@@ -197,8 +197,10 @@ state per frame silently skips whichever ticks shared one.
 ### Phase order
 
 `tick()` runs fixed phases, and the order is the contract later tickets build
-against: advance the PRNG, move players, integrate, expire. Adding a phase
-means deciding where it goes, once, for everyone.
+against: advance the PRNG, move players, fire weapons, move rockets, expire.
+Adding a phase means deciding where it goes, once, for everyone — and two of
+those adjacencies are mechanics rather than bookkeeping (see **The weapons
+layer**).
 
 The *movement* phase has an order of its own, and it is not negotiable either:
 `docs/physics-spec.md` §1.5. `PM_CheckJump` runs before `PM_Friction`, and that
@@ -217,7 +219,9 @@ code that owns them — `GRAVITY`, `RUN_SPEED` and `JUMP_VELOCITY` in
 `pmove/accelerate.ts`; the player bounding box is `bbox.ts`; the collision
 constants — `OVERCLIP`, `STEP_SIZE`, `MIN_WALK_NORMAL`, the trace epsilon — are
 `slidemove.ts` and `trace.ts`; the map's rules — the ramp gradients, the spawn
-headroom and separation minima — are `map/schema.ts`; angles are angle units,
+headroom and separation minima — are `map/schema.ts`; the weapons' are the
+table in `weapons.ts` and the push formula in `damage.ts`; angles are angle
+units,
 defined in `usercmd.ts`; sine and cosine are `trig.ts`. Everything else imports
 rather than restating. Two names for one number is the drift everything else in
 this file exists to prevent, so if you find yourself adding a `constants.ts`,
@@ -243,6 +247,38 @@ Three things in there look like bugs and are load-bearing — the acceleration
 gate on `dot(velocity, wishdir)`, `PM_CheckJump` before `PM_Friction`, and
 integer velocity snapping. All three are argued in `docs/physics-spec.md` §1
 and measured in `pmove/pmove.test.ts`.
+
+### The weapons layer
+
+`packages/sim/src/weapons.ts` (the table, the muzzle, the fire phase, the
+railgun), `projectile.ts` (a rocket in flight), `damage.ts` (what a hit does).
+Numbers and reasoning: `docs/physics-spec.md` §3.
+
+**Two weapons, and there is never a third.** `WEAPONS` is a two-element *tuple*
+type, so a third entry is a type error rather than a review comment. Neither has
+ammunition — no count in `GameState`, nothing to decrement — and the only thing
+between two shots is `EntityState.nextFireTick`, one timer shared by both.
+
+Two things in here look like details and are mechanics:
+
+- **A rocket is a trajectory, not a position.** `trBase`, `trDelta` and
+  `spawnTick`, evaluated in closed form every tick, with the delta snapped to
+  whole units. Nothing accumulates, which is what lets the wire mention a rocket
+  exactly once (GLAD-5QGO11 builds on this).
+- **The trajectory clock starts 50 ms in the past**, so a rocket is 45 units
+  downrange on the tick it is fired. That is why a rocket at your feet detonates
+  on the frame you press the button rather than the one after.
+
+And one ordering, in `tick()`: **players move, then fire, then rockets move.**
+`PM_CheckJump` assigns `velocity[2]`, so splash applied before the movement
+phase would be overwritten by the jump it was meant to add to. Fire before move
+and there is no rocket jump — the game still runs and still looks right, which
+is the worst kind of wrong.
+
+`ROCKET_JUMP_LAUNCH` is derived here — splash damage through the knockback
+formula — and re-exported by `map/reachability.ts`, so changing the splash
+damage fails the reachability tests instead of quietly re-tuning every ledge in
+`maps/`.
 
 ### The collision layer
 

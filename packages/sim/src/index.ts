@@ -12,6 +12,7 @@ export {
 } from './arena.ts'
 
 export {
+  DAMAGE_ORIGIN_HEIGHT,
   PLAYER_HALF_WIDTH,
   PLAYER_HEIGHT,
   PLAYER_MAXS,
@@ -31,6 +32,23 @@ export {
   queryBrushes,
 } from './collide.ts'
 export type { Brush, CollisionWorld, Plane, PlaneSpec } from './collide.ts'
+
+export {
+  G_KNOCKBACK,
+  KNOCKBACK_DAMAGE_CAP,
+  KNOCKBACK_PER_DAMAGE,
+  MAX_KNOCKBACK_TIME_MS,
+  MIN_KNOCKBACK_TIME_MS,
+  PLAYER_MASS,
+  SELF_DAMAGE_SCALE,
+  SPLASH_UP_BIAS,
+  applyDamage,
+  canDamage,
+  distanceToBox,
+  knockbackSpeed,
+  knockbackTicksFor,
+  radiusDamage,
+} from './damage.ts'
 
 export {
   createWriter,
@@ -134,6 +152,13 @@ export { formatDiagnostics, validateMap } from './map/validate.ts'
 export type { MapDiagnostic } from './map/validate.ts'
 
 export {
+  MISSILE_PRESTEP_MS,
+  explodeProjectile,
+  moveProjectiles,
+  projectilePosition,
+} from './projectile.ts'
+
+export {
   addScaledVec3,
   angleVectors,
   copyVec3,
@@ -144,6 +169,7 @@ export {
   normalizeVec3,
   scaleVec3,
   setVec3,
+  snapVector,
   subVec3,
   vec3,
 } from './math.ts'
@@ -245,6 +271,7 @@ export {
   EntityFlag,
   EntityKind,
   NEVER_EXPIRES,
+  NO_ENTITY,
   NO_SLOT,
   cloneEntity,
   cloneGameState,
@@ -261,7 +288,13 @@ export type { EntityInit, EntityState, GameState } from './state.ts'
 
 export { MAX_HOST_FRAME_MS, TICK_DT, TICK_INTERVAL_MS, TICK_RATE } from './tick.ts'
 
-export { SURFACE_CLIP_EPSILON, createTrace, traceBox, traceRay } from './trace.ts'
+export {
+  SURFACE_CLIP_EPSILON,
+  createTrace,
+  rayBoxFraction,
+  traceBox,
+  traceRay,
+} from './trace.ts'
 export type { TraceResult } from './trace.ts'
 
 export { CloseReason, TransportState, messageSize } from './transport.ts'
@@ -272,13 +305,32 @@ export { cosRad, sinRad } from './trig.ts'
 export {
   ANGLE_UNITS,
   ANGLE_UNITS_PER_DEGREE,
+  BUTTON_ATTACK,
   BUTTON_JUMP,
   MAX_PITCH_UNITS,
   NULL_CMD,
   RADIANS_PER_ANGLE_UNIT,
   angleUnitsToRadians,
   pitchUnitsFromDegrees,
+  WEAPON_COUNT,
   sanitizeUserCmd,
   yawUnitsFromDegrees,
 } from './usercmd.ts'
 export type { UserCmd } from './usercmd.ts'
+
+export {
+  AMMO_UNLIMITED,
+  MUZZLE_FORWARD,
+  RAILGUN_RANGE,
+  ROCKET_LIFETIME_MS,
+  ROCKET_SPEED,
+  WEAPONS,
+  Weapon,
+  fireWeapon,
+  fireWeapons,
+  muzzlePoint,
+  refireTicksOf,
+  spawnProjectile,
+  weaponDef,
+} from './weapons.ts'
+export type { WeaponDef } from './weapons.ts'

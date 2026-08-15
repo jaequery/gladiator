@@ -60,6 +60,23 @@ export const PLAYER_MINS: Vec3 = [-PLAYER_HALF_WIDTH, -PLAYER_HALF_WIDTH, 0]
 export const PLAYER_MAXS: Vec3 = [PLAYER_HALF_WIDTH, PLAYER_HALF_WIDTH, PLAYER_HEIGHT]
 
 /**
+ * The height above the feet a push is aimed at, in Quake units.
+ *
+ * This is the §0.2 seam, and it is the only place it is needed at runtime.
+ * Quake 3 measures the direction of a splash push from `r.currentOrigin`, which
+ * for a client is the middle of the box — 24 units above the soles this repo
+ * puts the origin on. Transcribing `G_RadiusDamage` against our origin means
+ * adding those 24 back, once, here.
+ *
+ * It is **not** the same 24 as `SPLASH_UP_BIAS` in `damage.ts`, which is a
+ * bias Quake adds deliberately on top of it so that splash throws players
+ * upwards. The two are equal by coincidence and mean different things — and
+ * together they are why a rocket 48 units to your side pushes you at exactly
+ * 45 degrees rather than at 27. `docs/physics-spec.md` §3.3.
+ */
+export const DAMAGE_ORIGIN_HEIGHT = 24
+
+/**
  * A point, for traces that sweep no volume at all — a railgun shot, a
  * line-of-sight query, a rocket that is treated as a point.
  *

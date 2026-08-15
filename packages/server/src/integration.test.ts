@@ -82,6 +82,7 @@ function scriptedCommand(tick: number): UserCmd {
     yaw: (tick * 37) % 65536,
     pitch: 0,
     buttons: tick % 90 === 0 ? 1 : 0,
+    weapon: 0,
   }
 }
 

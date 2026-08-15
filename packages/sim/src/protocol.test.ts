@@ -14,18 +14,32 @@ import { NULL_CMD, type UserCmd } from './usercmd.ts'
 
 describe('wire commands', () => {
   it('round-trips a command exactly', () => {
-    const cmd: UserCmd = { forwardMove: 1, sideMove: -1, yaw: 40000, pitch: -1234, buttons: 1 }
+    const cmd: UserCmd = {
+      forwardMove: 1,
+      sideMove: -1,
+      yaw: 40000,
+      pitch: -1234,
+      buttons: 1,
+      weapon: 1,
+    }
     expect(decodeCmd(encodeCmd(cmd))).toEqual(cmd)
   })
 
   it('survives JSON, which is the round-trip that actually happens', () => {
-    const cmd: UserCmd = { forwardMove: -1, sideMove: 1, yaw: 65535, pitch: 16202, buttons: 0 }
+    const cmd: UserCmd = {
+      forwardMove: -1,
+      sideMove: 1,
+      yaw: 65535,
+      pitch: 16202,
+      buttons: 0,
+      weapon: 0,
+    }
     const overTheWire = JSON.parse(JSON.stringify(encodeCmd(cmd))) as unknown
     expect(decodeCmd(overTheWire)).toEqual(cmd)
   })
 
   it('turns a malformed tuple into a standing-still command', () => {
-    for (const junk of [null, 'x', [], [1, 2, 3], [1, 2, 3, 4, 5, 6]]) {
+    for (const junk of [null, 'x', [], [1, 2, 3], [1, 2, 3, 4, 5], [1, 2, 3, 4, 5, 6, 7]]) {
       expect(decodeCmd(junk)).toEqual(NULL_CMD)
     }
   })
@@ -62,16 +76,16 @@ describe('parseClientMessage', () => {
   })
 
   it('parses a command batch', () => {
-    const raw = JSON.stringify({ t: 'cmds', startTick: 7, cmds: [[1, 0, 100, 0, 1]] })
+    const raw = JSON.stringify({ t: 'cmds', startTick: 7, cmds: [[1, 0, 100, 0, 1, 1]] })
     expect(parseClientMessage(raw)).toEqual({
       t: 'cmds',
       startTick: 7,
-      cmds: [[1, 0, 100, 0, 1]],
+      cmds: [[1, 0, 100, 0, 1, 1]],
     })
   })
 
   it('refuses a batch bigger than the cap, an empty one, or a negative tick', () => {
-    const oversized = new Array(MAX_CMDS_PER_BATCH + 1).fill([0, 0, 0, 0, 0])
+    const oversized = new Array(MAX_CMDS_PER_BATCH + 1).fill([0, 0, 0, 0, 0, 0])
     expect(parseClientMessage(JSON.stringify({ t: 'cmds', startTick: 0, cmds: oversized }))).toBe(
       null,
     )
