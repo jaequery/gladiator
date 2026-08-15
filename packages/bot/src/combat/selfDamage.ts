@@ -40,6 +40,8 @@
 import { PLAYER_MAXS, PLAYER_MINS, distanceToBox, vec3 } from '@gladiator/sim'
 import type { CollisionWorld, MutVec3, Vec3 } from '@gladiator/sim'
 
+import { SHIPPED_SKILL } from '../tuning.ts'
+import type { BotSkill } from '../tuning.ts'
 import { splashAt } from './damage.ts'
 import { predictImpact } from './rocketAim.ts'
 
@@ -52,7 +54,7 @@ import { predictImpact } from './rocketAim.ts'
  * this number is what stops the bot from being the sort of opponent you can
  * safely walk straight at.
  */
-export const SELF_SPLASH_ALLOWANCE = 25
+export const SELF_SPLASH_ALLOWANCE = SHIPPED_SKILL.selfSplashAllowance
 
 /**
  * How much health the bot refuses to shoot itself below, in points.
@@ -71,12 +73,12 @@ export const SELF_SPLASH_RESERVE = 10
  * conservative reading and it keeps this a function of the one number that
  * decides whether a shot can kill you.
  */
-export function acceptableSelfSplash(health: number): number {
+export function acceptableSelfSplash(health: number, skill: BotSkill = SHIPPED_SKILL): number {
   // Under `SelfDamage.Full` with no armour, splash costs half its points in
   // health, so this is the largest splash that leaves the reserve standing.
   const survivable = (health - SELF_SPLASH_RESERVE) * 2
   if (survivable <= 0) return 0
-  return survivable < SELF_SPLASH_ALLOWANCE ? survivable : SELF_SPLASH_ALLOWANCE
+  return survivable < skill.selfSplashAllowance ? survivable : skill.selfSplashAllowance
 }
 
 /* Scratch. Single-threaded and synchronous; see `perception/sight.ts`. */
@@ -112,7 +114,12 @@ export function predictSelfSplash(
  * so every caller in the game passes `false`, and the day one does not, this is
  * where it says so.
  */
-export function selfDamageAllows(splash: number, health: number, rocketJump: boolean): boolean {
+export function selfDamageAllows(
+  splash: number,
+  health: number,
+  rocketJump: boolean,
+  skill: BotSkill = SHIPPED_SKILL,
+): boolean {
   if (rocketJump) return true
-  return splash <= acceptableSelfSplash(health)
+  return splash <= acceptableSelfSplash(health, skill)
 }

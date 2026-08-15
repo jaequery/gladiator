@@ -55,6 +55,8 @@ import {
 import type { CollisionWorld, MutVec3, TraceResult, Vec3 } from '@gladiator/sim'
 
 import type { ThreatContact, WorldModel } from '../perception/worldModel.ts'
+import { SHIPPED_SKILL } from '../tuning.ts'
+import type { BotSkill } from '../tuning.ts'
 import { SPLASH_RADIUS } from './damage.ts'
 
 /**
@@ -66,7 +68,7 @@ import { SPLASH_RADIUS } from './damage.ts'
  * accelerates over about a fifth of a second, so a dodge needs several of those
  * to be worth starting.
  */
-export const DODGE_HORIZON_SECONDS = 0.7
+export const DODGE_HORIZON_SECONDS = SHIPPED_SKILL.dodgeHorizonSeconds
 
 /**
  * The closest approach that counts as dangerous, in units.
@@ -75,7 +77,7 @@ export const DODGE_HORIZON_SECONDS = 0.7
  * the margin is because the closest approach is measured to a point and the
  * thing being missed is a box.
  */
-export const DODGE_DANGER = SPLASH_RADIUS + 30
+export const DODGE_DANGER = SPLASH_RADIUS + SHIPPED_SKILL.dodgeDangerMargin
 
 /**
  * How much room a dodge needs, in units.
@@ -84,10 +86,10 @@ export const DODGE_DANGER = SPLASH_RADIUS + 30
  * third of a second from a standing start. A direction with less than
  * {@link DODGE_CLEAR} of it available is a direction into a wall.
  */
-export const DODGE_PROBE = 96
+export const DODGE_PROBE = SHIPPED_SKILL.dodgeProbe
 
 /** The share of {@link DODGE_PROBE} that has to be clear for a direction to count. */
-export const DODGE_CLEAR = 0.5
+export const DODGE_CLEAR = SHIPPED_SKILL.dodgeClear
 
 /* Scratch. Single-threaded and synchronous; see `perception/sight.ts`. */
 const centre: MutVec3 = vec3()
@@ -103,13 +105,17 @@ const probe: TraceResult = createTrace()
  * Its own rockets are skipped: knowing where you aimed is not a reason to run
  * from it, and a rocket jump would otherwise make the bot flee its own launch.
  */
-export function nearestThreat(model: WorldModel): ThreatContact | null {
+export function nearestThreat(
+  model: WorldModel,
+  skill: BotSkill = SHIPPED_SKILL,
+): ThreatContact | null {
+  const danger = SPLASH_RADIUS + skill.dodgeDangerMargin
   centre[0] = model.self.origin[0]
   centre[1] = model.self.origin[1]
   centre[2] = model.self.origin[2] + DAMAGE_ORIGIN_HEIGHT
 
   let worst: ThreatContact | null = null
-  let soonest = DODGE_HORIZON_SECONDS
+  let soonest = skill.dodgeHorizonSeconds
 
   for (const threat of model.threats) {
     if (threat.own) continue
@@ -133,7 +139,7 @@ export function nearestThreat(model: WorldModel): ThreatContact | null {
     const mx = rx - vx * at
     const my = ry - vy * at
     const mz = rz - vz * at
-    if (mx * mx + my * my + mz * mz >= DODGE_DANGER * DODGE_DANGER) continue
+    if (mx * mx + my * my + mz * mz >= danger * danger) continue
 
     soonest = at
     worst = threat
@@ -163,6 +169,7 @@ export function planDodge(
   world: CollisionWorld,
   model: WorldModel,
   threat: ThreatContact,
+  skill: BotSkill = SHIPPED_SKILL,
 ): boolean {
   const origin = model.self.origin
   const vx = threat.velocity[0]
@@ -179,7 +186,7 @@ export function planDodge(
 
   if (flat === 0) {
     // Straight down: there is no line to step out of, only a point to leave.
-    return offer(out, world, origin, away[0], away[1])
+    return offer(out, world, origin, away[0], away[1], skill)
   }
 
   perpendicular[0] = -vy / flat
@@ -190,8 +197,8 @@ export function planDodge(
   const side = away[0] * perpendicular[0] + away[1] * perpendicular[1]
   const sign = side >= 0 ? 1 : -1
 
-  if (offer(out, world, origin, perpendicular[0] * sign, perpendicular[1] * sign)) return true
-  if (offer(out, world, origin, -perpendicular[0] * sign, -perpendicular[1] * sign)) return true
+  if (offer(out, world, origin, perpendicular[0] * sign, perpendicular[1] * sign, skill)) return true
+  if (offer(out, world, origin, -perpendicular[0] * sign, -perpendicular[1] * sign, skill)) return true
 
   // The diagonals: still mostly across the rocket, with enough retreat in them
   // to find a way out of a corner. Nothing here runs straight back down the
@@ -200,7 +207,7 @@ export function planDodge(
   for (const turn of [sign, -sign]) {
     candidate[0] = (perpendicular[0] * turn + away[0]) * s
     candidate[1] = (perpendicular[1] * turn + away[1]) * s
-    if (offer(out, world, origin, candidate[0], candidate[1])) return true
+    if (offer(out, world, origin, candidate[0], candidate[1], skill)) return true
   }
 
   return false
@@ -221,18 +228,19 @@ function offer(
   origin: Vec3,
   x: number,
   y: number,
+  skill: BotSkill,
 ): boolean {
   const length = Math.sqrt(x * x + y * y)
   if (length === 0) return false
   const ux = x / length
   const uy = y / length
 
-  probeTo[0] = origin[0] + ux * DODGE_PROBE
-  probeTo[1] = origin[1] + uy * DODGE_PROBE
+  probeTo[0] = origin[0] + ux * skill.dodgeProbe
+  probeTo[1] = origin[1] + uy * skill.dodgeProbe
   probeTo[2] = origin[2]
 
   traceBox(probe, world, origin, probeTo, PLAYER_MINS, PLAYER_MAXS)
-  if (probe.startsolid || probe.fraction < DODGE_CLEAR) return false
+  if (probe.startsolid || probe.fraction < skill.dodgeClear) return false
 
   out[0] = ux
   out[1] = uy

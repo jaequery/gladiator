@@ -1,0 +1,59 @@
+{
+  "skill": 0.6,
+  "anchors": {
+    "novice": 0.45,
+    "expert": 0.8
+  },
+  "axis": {
+    "reactionMinMs": {
+      "novice": 290,
+      "expert": 145
+    },
+    "reactionSpreadMs": {
+      "novice": 250,
+      "expert": 80
+    },
+    "aimErrorFraction": {
+      "novice": 0.58,
+      "expert": 0.08
+    },
+    "motorError": {
+      "novice": 0.55,
+      "expert": 0.1
+    },
+    "tremorUnits": {
+      "novice": 1240,
+      "expert": 120
+    },
+    "railSettleUnits": {
+      "novice": 160,
+      "expert": 30
+    },
+    "railSettleRate": {
+      "novice": 130,
+      "expert": 58
+    },
+    "dodgeHorizonSeconds": {
+      "novice": 0.35,
+      "expert": 1.25
+    },
+    "leadStraightness": {
+      "novice": 0.75,
+      "expert": 0.02
+    }
+  },
+  "fixed": {
+    "turnRateDegrees": 540,
+    "aimAccelTicks": 10,
+    "maxAimError": 96,
+    "verticalErrorShare": 0.4,
+    "engageRange": 420,
+    "railMinRange": 980,
+    "rocketToleranceMaxDegrees": 4,
+    "selfSplashAllowance": 25,
+    "dodgeDangerMargin": 42,
+    "dodgeProbe": 96,
+    "dodgeClear": 0.5,
+    "leadMaxSeconds": 0.5
+  }
+}

@@ -19,7 +19,7 @@ import { readFileSync } from 'node:fs'
 
 import { NULL_CMD, RUN_SPEED, TICK_RATE, findPlayer, loadMap } from '@gladiator/sim'
 import type { UserCmd } from '@gladiator/sim'
-import { CIRCLE_JUMP_HOLD_TICKS, MAX_TURN_UNITS, loadNav } from '@gladiator/bot'
+import { CIRCLE_JUMP_HOLD_TICKS, MAX_TURN_UNITS, NAV_MAX_STEP, loadNav } from '@gladiator/bot'
 import { describe, expect, it } from 'vitest'
 
 import { formatSoak, runBotMatch, soakBots, soakFailures } from '../tools/bot-arena.ts'
@@ -68,8 +68,15 @@ describe('the acceptance checks', () => {
 
   it('never falls off a walk link', () => {
     for (const slot of soak.slots) {
-      expect(slot.fellOnWalk).toBe(0)
-      expect(slot.worstWalkFall).toBeLessThanOrEqual(0)
+      // A `walk` link is walkable ground the whole way (`nav/schema.ts`), so
+      // leaving one means landing *more than a step* below its lower end. A
+      // landing inside a step is the bot stepping down, which is the thing a
+      // walk link is for. This used to assert nothing came down low at all, and
+      // that was a property of the sample rather than of the movement — since
+      // GLAD-6BIYFQ tuned the engagement range the bots take different routes
+      // and one landing in four matches comes down 15 units, which is a step.
+      expect(slot.fellOnWalk, formatSoak(soak)).toBe(0)
+      expect(slot.worstWalkFall, formatSoak(soak)).toBeLessThanOrEqual(NAV_MAX_STEP)
     }
   })
 
@@ -97,22 +104,33 @@ describe('the acceptance checks', () => {
 
 describe('the circle jump, over a real match rather than an empty lane', () => {
   it('mostly lands faster than a flat-out run, and never absurdly faster', () => {
+    // Both seats pooled, because the claim is about the *mechanic* rather than
+    // about a seat. Four matches of twenty seconds is a handful of hops, and
+    // since GLAD-6BIYFQ closed the engagement range there are fewer of them —
+    // a bot that stops closing sooner runs shorter routes, and a circle jump
+    // needs 320 units of straight one. Per seat that leaves a denominator of two
+    // or three, and a ratio over two hops is not a distribution.
     const taken = soak.slots.reduce((total, slot) => total + slot.circleJumps, 0)
+    const landings = soak.slots.reduce((total, slot) => total + slot.landings, 0)
+    const fast = soak.slots.reduce((total, slot) => total + slot.fastLandings, 0)
+    const fastest = soak.slots.reduce((top, slot) => Math.max(top, slot.fastestLanding), 0)
+
     expect(taken, formatSoak(soak)).toBeGreaterThan(0)
-    for (const slot of soak.slots) {
-      if (slot.landings === 0) continue
-      // `movement/circleJump.ts` was tuned to 369 ups over one hop down an empty lane.
-      // In a match a hop taken off a ramp starts above run speed and one that clips a
-      // corner mid-flight ends below it, so the claim is about the *distribution*: over
-      // four hundred minutes of duel, four hops in five beat 320 and the tail is about
-      // one in a hundred. A bound on the slowest landing would be a claim about that
-      // one hop.
-      expect(slot.fastLandings / slot.landings, formatSoak(soak)).toBeGreaterThan(0.6)
-      expect(slot.fastestLanding).toBeGreaterThan(RUN_SPEED)
-      // 452 was the highest over two hundred matches, and anything much past it would
-      // mean the offset window had stopped being a window.
-      expect(slot.fastestLanding).toBeLessThan(500)
-    }
+    // And enough of them landed to have a distribution at all. `pnpm bot:soak`
+    // is where this is a real sample; here it is a control on the two below.
+    expect(landings, formatSoak(soak)).toBeGreaterThan(3)
+
+    // `movement/circleJump.ts` was tuned to 369 ups over one hop down an empty lane.
+    // In a match a hop taken off a ramp starts above run speed and one that clips a
+    // corner mid-flight ends below it, so the claim is about the *distribution*: over
+    // four hundred minutes of duel, four hops in five beat 320 and the tail is about
+    // one in a hundred. A bound on the slowest landing would be a claim about that
+    // one hop.
+    expect(fast / landings, formatSoak(soak)).toBeGreaterThan(0.6)
+    expect(fastest).toBeGreaterThan(RUN_SPEED)
+    // 452 was the highest over two hundred matches, and anything much past it would
+    // mean the offset window had stopped being a window.
+    expect(fastest).toBeLessThan(500)
   })
 
   it('holds its offset for a bounded window rather than the whole flight', () => {

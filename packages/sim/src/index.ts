@@ -49,10 +49,11 @@ export {
   distanceToBox,
   knockbackSpeed,
   knockbackTicksFor,
+  onDamage,
   onSelfSplash,
   radiusDamage,
 } from './damage.ts'
-export type { SelfSplash } from './damage.ts'
+export type { DamageCause, DamageEvent, SelfSplash } from './damage.ts'
 
 export {
   createWriter,

@@ -43,6 +43,8 @@ import type { CollisionWorld, MutVec3, TraceResult, Vec3 } from '@gladiator/sim'
 
 import { NAV_MAX_STEP } from '../nav/schema.ts'
 import type { WorldModel } from '../perception/worldModel.ts'
+import { SHIPPED_SKILL } from '../tuning.ts'
+import type { BotSkill } from '../tuning.ts'
 
 /**
  * The range past which a rocket is too slow to be the right answer, in units.
@@ -53,7 +55,7 @@ import type { WorldModel } from '../perception/worldModel.ts'
  * splash cannot reach. `maps/arena1.ts` is about 2000 units across, so this is a
  * threshold that separates "across the arena" from "in this fight".
  */
-export const RAIL_MIN_RANGE = 900
+export const RAIL_MIN_RANGE = SHIPPED_SKILL.railMinRange
 
 /**
  * How far below the believed feet the bot looks for a floor before calling
@@ -97,7 +99,11 @@ export function airborneAt(world: CollisionWorld, origin: Vec3): boolean {
  * somebody is standing on anything, and answers the question it can, which is
  * the range one.
  */
-export function selectWeapon(model: WorldModel, world: CollisionWorld | null): Weapon {
+export function selectWeapon(
+  model: WorldModel,
+  world: CollisionWorld | null,
+  skill: BotSkill = SHIPPED_SKILL,
+): Weapon {
   const contact = model.enemy
   if (contact.source === 'none' || !contact.visible) return Weapon.RocketLauncher
 
@@ -106,7 +112,7 @@ export function selectWeapon(model: WorldModel, world: CollisionWorld | null): W
   const dx = contact.origin[0] - model.self.origin[0]
   const dy = contact.origin[1] - model.self.origin[1]
   const dz = contact.origin[2] - model.self.origin[2]
-  if (dx * dx + dy * dy + dz * dz > RAIL_MIN_RANGE * RAIL_MIN_RANGE) return Weapon.Railgun
+  if (dx * dx + dy * dy + dz * dz > skill.railMinRange * skill.railMinRange) return Weapon.Railgun
 
   return Weapon.RocketLauncher
 }

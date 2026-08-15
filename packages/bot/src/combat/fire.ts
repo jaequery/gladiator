@@ -71,18 +71,20 @@ import {
 } from '../aim/controller.ts'
 import type { AimState } from '../aim/controller.ts'
 import {
-  NOMINAL_REACTION_TICKS,
   ageNoise,
   clearTrack,
   createNoise,
   createTrack,
   displaceAim,
+  nominalReactionTicks,
   reactionTicks,
   trackTarget,
 } from '../aim/error.ts'
 import type { AimNoise, AimTrack } from '../aim/error.ts'
 import { NEVER_TICK, SIGHT_HOLD_TICKS } from '../perception/worldModel.ts'
 import type { WorldModel } from '../perception/worldModel.ts'
+import { SHIPPED_SKILL } from '../tuning.ts'
+import type { BotSkill } from '../tuning.ts'
 import { SPLASH_RADIUS } from './damage.ts'
 import { nearestThreat, planDodge } from './dodge.ts'
 import { railSettled } from './railDiscipline.ts'
@@ -118,7 +120,7 @@ export const ROCKET_TOLERANCE_RADIUS = SPLASH_RADIUS * 0.5
  * floor beside somebody standing on top of it. Eight degrees is reached at about
  * 430 units and holds from there in.
  */
-export const ROCKET_TOLERANCE_MAX_DEGREES = 8
+export const ROCKET_TOLERANCE_MAX_DEGREES = SHIPPED_SKILL.rocketToleranceMaxDegrees
 
 /** The same cap in angle units. */
 export const ROCKET_TOLERANCE_MAX = Math.round(
@@ -129,6 +131,14 @@ export const ROCKET_TOLERANCE_MAX = Math.round(
 export type CombatState = {
   /** The bot's seeded stream, shared with the perception layer. `bot.ts`. */
   readonly rng: RngHolder
+  /**
+   * How good this bot is, resolved. `tuning.ts`, GLAD-6BIYFQ.
+   *
+   * On the state rather than in module scope because two bots in one process may
+   * be at two different skills — which is what the band table's asymmetric rows
+   * are, and what a difficulty selector would be.
+   */
+  readonly skill: BotSkill
   readonly aim: AimState
   readonly track: AimTrack
   readonly noise: AimNoise
@@ -161,15 +171,16 @@ export type CombatState = {
   settling: boolean
 }
 
-export function createCombat(rng: RngHolder): CombatState {
+export function createCombat(rng: RngHolder, skill: BotSkill = SHIPPED_SKILL): CombatState {
   return {
     rng,
+    skill,
     aim: createAim(),
     track: createTrack(),
     noise: createNoise(),
     path: createPath(),
     plan: createPlan(),
-    reaction: NOMINAL_REACTION_TICKS,
+    reaction: nominalReactionTicks(skill),
     readyTick: NEVER_TICK,
     lastVisibleTick: NEVER_TICK,
     threatId: -1,
@@ -238,7 +249,7 @@ export function observeCombat(combat: CombatState, model: WorldModel): void {
   // The error is aged on every sub-step the bot is alive and on no other
   // condition, so the number of draws taken cannot depend on anything the bot
   // did not perceive. `aim/error.ts` is where that argument lives.
-  if (self.alive) ageNoise(combat.noise, combat.rng, combat.reaction)
+  if (self.alive) ageNoise(combat.noise, combat.rng, combat.reaction, combat.skill)
   if (!self.alive) return
 
   armReaction(combat, model)
@@ -270,7 +281,7 @@ function armReaction(combat: CombatState, model: WorldModel): void {
   const seen = combat.lastVisibleTick
   const gap = seen === NEVER_TICK ? Number.POSITIVE_INFINITY : model.tick - seen
   if (gap > SIGHT_HOLD_TICKS) {
-    combat.reaction = reactionTicks(combat.rng)
+    combat.reaction = reactionTicks(combat.rng, combat.skill)
     combat.readyTick = model.tick + combat.reaction
   }
   combat.lastVisibleTick = model.tick
@@ -293,7 +304,7 @@ export function planShot(
   model: WorldModel,
   world: CollisionWorld | null,
 ): Weapon {
-  const weapon = selectWeapon(model, world)
+  const weapon = selectWeapon(model, world, combat.skill)
   const plan = combat.plan
 
   if (!combat.track.live) {
@@ -307,7 +318,7 @@ export function planShot(
   }
 
   aimVectors(model.self.angles[0], model.self.angles[1], model)
-  planRocket(plan, world, muzzle, combat.track, combat.path)
+  planRocket(plan, world, muzzle, combat.track, combat.path, combat.skill)
   return weapon
 }
 
@@ -329,7 +340,7 @@ export function planEvade(
 ): boolean {
   if (world === null || !model.self.alive) return false
 
-  const threat = nearestThreat(model)
+  const threat = nearestThreat(model, combat.skill)
   if (threat === null) {
     combat.threatId = -1
     combat.threatTick = NEVER_TICK
@@ -342,7 +353,7 @@ export function planEvade(
   }
   if (model.tick - combat.threatTick < combat.reaction) return false
 
-  return planDodge(out, world, model, threat)
+  return planDodge(out, world, model, threat, combat.skill)
 }
 
 /* --------------------------------------------------------------------------
@@ -385,7 +396,7 @@ export function aimCombat(
   wanted[0] = predicted[0] + combat.plan.offset[0]
   wanted[1] = predicted[1] + combat.plan.offset[1]
   wanted[2] = predicted[2] + combat.plan.offset[2]
-  displaceAim(wanted, wanted, reference, combat.noise)
+  displaceAim(wanted, wanted, reference, combat.noise, combat.skill)
 
   aimAt(combat, model, wanted)
 }
@@ -413,10 +424,15 @@ function aimAt(combat: CombatState, model: WorldModel, target: MutVec3 | null): 
   const dz = target[2] - ez
   combat.range = Math.sqrt(dx * dx + dy * dy + dz * dz)
 
+  // The tremor is added to the *servo's target*, not to the shot: the aim is
+  // sent to where the bot believes its crosshair should be, the servo arrives
+  // there, and `combat/railDiscipline.ts` therefore still sees an aim that has
+  // settled. What the tremor costs is that where it arrived is a fraction of a
+  // degree off the body, which at range is a miss. `aim/error.ts` argues it.
   steerAim(
     combat.aim,
-    pitchUnitsToward(ex, ey, ez, target),
-    yawUnitsToward(ex, ey, target),
+    pitchUnitsToward(ex, ey, ez, target) + combat.noise.tremorPitch,
+    yawUnitsToward(ex, ey, target) + combat.noise.tremorYaw,
     combat.noise.motor,
   )
 }
@@ -451,21 +467,22 @@ export function triggerCombat(
   if (model.tick < self.nextFireTick) return false
 
   if (weapon === Weapon.Railgun) {
-    if (!railSettled(combat.aim)) {
+    if (!railSettled(combat.aim, combat.skill)) {
       combat.settling = true
       return false
     }
     return true
   }
 
-  if (combat.aim.error > rocketTolerance(combat.range)) return false
+  if (combat.aim.error > rocketTolerance(combat.range, combat.skill)) return false
   return selfSplashAllowed(combat, model, world)
 }
 
 /** How far off a rocket may be aimed at this range, in angle units. */
-export function rocketTolerance(range: number): number {
+export function rocketTolerance(range: number, skill: BotSkill = SHIPPED_SKILL): number {
+  const cap = Math.round(skill.rocketToleranceMaxDegrees * ANGLE_UNITS_PER_DEGREE)
   const subtended = subtendedUnits(ROCKET_TOLERANCE_RADIUS, range)
-  return subtended > ROCKET_TOLERANCE_MAX ? ROCKET_TOLERANCE_MAX : subtended
+  return subtended > cap ? cap : subtended
 }
 
 /**
@@ -500,7 +517,7 @@ function selfSplashAllowed(
   // `false` for the rocket jump, which nothing asks for in v1 — see
   // `combat/selfDamage.ts` for where the exemption lives and why it is a
   // parameter rather than a flag.
-  return selfDamageAllows(splash, model.self.health, false)
+  return selfDamageAllows(splash, model.self.health, false, combat.skill)
 }
 
 /**

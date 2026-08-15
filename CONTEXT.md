@@ -809,6 +809,56 @@ wall you backed into does more damage than one landing where you were. It
 reaches the movement layer as a *goal*, so the ledge guard and routing apply to
 it unchanged.
 
+**Tremor** — an angular wobble on where the crosshair is sent, re-rolled on the
+reaction period (GLAD-6BIYFQ). It exists because the other three error sources
+all vanish at steady state, which made a rail at a visible body a certainty and
+the bot a turret. Angular rather than positional, so a fixed wobble is a larger
+lateral miss the further away the target is — which is why a long rail is harder
+than a close one without a range table saying so. Inside the settle test: the
+servo chases the wobbling point and arrives, so the bot is firing at where it
+believes the crosshair is rather than firing sloppily.
+
+**L3 action** — what the decision layer has decided to *be doing*: `dead`,
+`dodge`, `hunt`, `fight`, `listen` or `roam`, resolved in that order of
+precedence. Deliberately the top-level intention rather than the weapon or the
+shot mode, because those flip whenever the opponent's feet leave the floor. How
+often it changes is the band table's dithering row. `packages/bot/src/brain.ts`.
+
+---
+
+## Tuning
+
+**Tuning blob** — `packages/bot/src/tuning.json`: every constant the bot was
+tuned to, in one file, because a parameter search needs something it can write.
+`tuning.ts` is the argument about it. Perception is deliberately not in it.
+
+**Skill** — one dial in `[0, 1]`. `deriveSkill` resolves it into a `BotSkill`
+that rides on the bot, so two bots in one process may be at two different ones.
+Nine values move with it; the rest are the same at every difficulty because
+being better at the game does not mean holding a different number for them.
+
+**Skill band** — one tuned value at the two **rungs** — 0.45 and 0.80 — rather
+than at the ends of the dial. The rungs span 35% of the dial, so a band anchored
+on the ends could only ever make them 35% different, and the ladder would not
+separate. The line runs off past the rungs and is clamped where a value stops
+meaning anything.
+
+**Ladder** — `skill 0.45` and `skill 0.80`, the two variants the shipped bot is
+measured against. It exists to prove the difficulty axis is **monotone**, which
+is what makes `skill` wired to something real rather than a number in a file.
+One difficulty ships; the ladder is one constant away.
+
+**Band table** — ten measurements with a floor *and* a ceiling, from
+GLAD-6BIYFQ. `tools/bot-bands.ts` measures them from the world, `pnpm bot:bands`
+runs the full five-hundred-match sample, and `tools/bot-bands.test.ts` runs a
+smaller one of the same code. A bot that never misses a rail fails as hard as
+one that never lands one.
+
+**Sweep** — `pnpm bot:sweep`: coordinate descent over the tuning blob, across a
+pool of processes, against a **time box** rather than against convergence. It
+only keeps a move that improved the table by more than the sampling noise, so
+the file it writes is never worse than the file it started from.
+
 ---
 
 ## The build
