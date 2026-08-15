@@ -38,6 +38,7 @@ const RUNNING: UserCmd = {
   yaw: yawUnitsFromDegrees(31),
   pitch: pitchUnitsFromDegrees(-7),
   buttons: BUTTON_JUMP,
+  weapon: 0,
 }
 
 /**

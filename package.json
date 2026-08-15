@@ -20,6 +20,7 @@
     "no-physics": "node scripts/no-physics-plugin.mjs",
     "e2e": "node scripts/e2e.mjs",
     "map:bake": "tsx tools/bake-map.ts",
+    "nav:bake": "tsx tools/nav-bake.ts",
     "audio:bake": "tsx tools/synth-audio.ts",
     "audio:verify": "node scripts/audio-check.mjs",
     "assets:build": "tsx tools/assets-build.ts",
@@ -30,6 +31,7 @@
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@gladiator/bot": "workspace:*",
     "@gladiator/sim": "workspace:*",
     "@gltf-transform/core": "4.4.2",
     "@gltf-transform/extensions": "4.4.2",

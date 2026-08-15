@@ -15,7 +15,7 @@ messages. Most of them are still to be written:
 | 0.3 | Coordinate systems and the axis map           | **below**    |
 | 1.x | `pmove`: friction, acceleration, snapping     | **below**    |
 | 2.x | Tracing: swept AABB, `SlideMove`, step-up     | **below**    |
-| 3.x | Weapons: rockets, splash, railgun             | GLAD-0QWRYK  |
+| 3.x | Weapons: rockets, splash, railgun             | **below**    |
 | 4.x | The map format, its baker and its validator   | **below**    |
 | 5.x | Reachability: the climbs a level is built around | **below**  |
 | 6.x | Spawning: selection, facing, telefrag, protection | **below** |
@@ -665,6 +665,200 @@ whose inputs are not committed is a different test every time it runs.
 
 ---
 
+## §3 Weapons
+
+Two of them, and there will never be a third. Rocket Arena took the item
+scramble out of deathmatch so a duel would be decided by movement and aim; a
+third weapon is a third thing to balance in exchange for no skill anybody
+learns.
+
+Code: `packages/sim/src/weapon.ts` (which weapon an entity is *holding* — an
+identity small enough to cross the network, which the renderer reads),
+`weapons.ts` (what the weapons *do*: the table, the muzzle, the fire phase and
+the railgun), `projectile.ts` (a rocket in flight), `damage.ts` (what a hit
+does).
+
+### §3.1 The table
+
+| | Rocket launcher | Railgun |
+| --- | --- | --- |
+| delivery | `TR_LINEAR` projectile, 900 qu/s | hitscan, 8192 qu |
+| direct damage | 100 | 100 |
+| splash | 100 falling off linearly over 120 qu | none |
+| refire | 800 ms (100 sub-steps) | 1500 ms (188 sub-steps) |
+| knockback | 5 x damage, biased upward | 500 qu/s along the shot |
+| ammo | unlimited | unlimited |
+
+**There is no ammunition state.** Not a large number — none: `GameState` carries
+no count, nothing decrements, and the only thing between two shots is the
+refire timer. A match cannot end because somebody ran out, and the bot cannot
+be accused of having more shots than a human.
+
+Both weapons are fully automatic and share **one** refire timer
+(`EntityState.nextFireTick`, Quake 3's `ps->weaponTime`), so switching weapons
+is never a way to fire sooner than either weapon allows. There is no raise or
+drop delay: with two weapons and a shared timer, the switch already costs
+whatever is left of the last shot's interval.
+
+Refire is stated in milliseconds — Quake's numbers — and converted to whole
+sub-steps by rounding **up**. The two directions are not equally harmless:
+rounding down is free damage per second, and rounding up costs at most one 8 ms
+sub-step nobody can perceive. 800 ms is exactly 100 ticks; 1500 ms is 187.5 and
+becomes 188.
+
+A shot leaves the **muzzle**: eye height (§0.2), 14 units along the aim, snapped
+to whole units — Quake 3's `CalcMuzzlePoint`. The 14 is load-bearing rather than
+cosmetic, and §3.2 says why.
+
+### §3.2 A rocket is a trajectory, not a position
+
+A rocket's origin at any tick is a closed form of three numbers fixed when it
+was fired:
+
+```
+pos(t) = trBase + (t_ms - trTime_ms) * 0.001 * trDelta
+trTime_ms = spawnTick * TICK_INTERVAL_MS - MISSILE_PRESTEP_MS
+```
+
+`trBase` is the muzzle, `trDelta` is the velocity, and nothing accumulates. That
+is what lets the wire tell a peer about a rocket **exactly once**: a client that
+received the spawn can evaluate where it is on every tick afterwards, a dropped
+packet cannot leave a rocket hanging in the air, and prediction and authority
+cannot drift apart because neither is integrating.
+
+`trDelta` is **snapped to whole units** at the muzzle (Quake's
+`SnapVector( bolt->s.pos.trDelta )`, "to save net bandwidth"). Both peers
+therefore evaluate the identical expression from identical integer inputs. It
+also means a rocket does not travel at exactly 900 — a diagonal shot leaves at
+899.44 — and that is Quake rather than a rounding bug.
+
+**The 50 ms prestep.** `trTime` starts 50 ms *in the past*, which is Quake's
+`MISSILE_PRESTEP_TIME`, so on the tick it is fired a rocket is already 45 units
+downrange and the sweep from the muzzle covers those 45 units immediately.
+Every close-range rocket depends on it. Aimed at your feet, the muzzle is 14
+units below your eye with 36 units of floor beneath it — inside the 45 — so the
+rocket detonates on the frame you fire it. Without the prestep the splash lands
+a tick late, and a tick of delay costs about four units of rocket-jump height.
+
+Rockets take **no gravity and no drag**, expire after 15 seconds, and *explode*
+when the fuse runs out rather than being quietly removed — a rocket that stopped
+existing on one peer a tick before the other is a desync with a fuse on it.
+
+### §3.3 Damage, splash and knockback
+
+Quake 3's `g_combat.c`. Three details decide how the game plays.
+
+**Splash distance is measured to the nearest point on the target's box**, not to
+its centre. A rocket at your feet is at distance *zero* and deals the full 100,
+which is what makes a rocket jump a fixed, learnable 500 qu/s. Falloff is
+linear: `points = damage * (1 - dist / radius)`.
+
+**Damage is truncated to an integer before knockback is derived from it.**
+Quake's `(int)points`. A rocket 48 units to your side is 33 units from the side
+of your box, which is 72.5 points, which is **72** — and the push is derived
+from the 72, so it is 360 qu/s rather than 362.5. Knockback is a function of the
+damage the player *sees*.
+
+**Self-damage is halved after the knockback has been computed.** Rocket jumping
+lives in the gap between those two statements: 500 qu/s for 50 health, not
+250 qu/s for 50 health. GLAD-L4SYN9 chooses between three self-damage modes and
+passes its own scale in; every number here assumes the default half.
+
+The push itself:
+
+```
+|dv| = g_knockback * min(damage, 200) / mass = 1000 * min(damage, 200) / 200
+     = 5 * damage
+```
+
+**added** to the current velocity, never assigned. Two rockets on one tick throw
+you twice as far, and a rocket you jump into keeps the jump.
+
+Splash is aimed from the explosion at the target with **two** 24s added to its
+`z`, and they are different numbers that happen to be equal:
+
+- one converts this repo's feet-origin (§0.2) to the middle of the box Quake
+  measures `r.currentOrigin` from;
+- one is Quake's deliberate `dir[2] += 24`, whose source comment is "push the
+  center of mass higher than the origin so players get knocked into the air
+  more".
+
+Together they are why a rocket 48 units to your side pushes you at exactly
+**45 degrees** rather than at 27. A railgun hit instead pushes along the
+shooter's **aim**, so wherever on the box it lands, the target goes the way the
+shooter was pointing.
+
+Splash is **occlusion-tested** and does not pass through walls: five rays, one
+to the middle of the box and four to the corners of a 30-unit square around it,
+which is Quake's `CanDamage`. It is optimistic by construction — a pillar
+narrower than the spread lets a corner ray past — and that optimism is Quake's.
+
+A **direct hit does not also splash the player it hit** (Quake's comment: "splash
+damage doesn't apply to person directly hit"), so a rocket in the chest is 100
+and not 200. Everyone else in the radius, the shooter included, takes the
+falloff.
+
+The knockback **timer** — `clamp(2 * min(damage, 200), 50, 200)` ms, rounded to
+the nearest sub-step, so 25 ticks for a full hit — suppresses ground friction,
+swaps ground acceleration for air acceleration, and makes `slideMove` restore
+the velocity a move started with (§1, `EntityState.knockbackTicks`). That window
+is why a rocket jump cannot be cancelled the instant you touch the ground. Quake
+only arms it when it is not already running, so a stream of small hits cannot
+hold a player up indefinitely.
+
+### §3.4 What a rocket jump actually reaches
+
+§5.4 designs ledges around **166** for a standing rocket jump and **395** for a
+jump-plus-rocket, both floors of `v^2 / (2 * 750)` for launches of 500 and 770.
+Measured against a real rocket rather than an assigned velocity
+(`weapons.test.ts`):
+
+| | closed form | measured apex |
+| --- | --- | --- |
+| standing rocket jump | 166.67 | **166.53** |
+| jump plus rocket | 395.27 | **380.94** |
+
+The standing figure lands where §5.4 says. The jump-plus-rocket is **3.6%
+short**, and both reasons are the price of the splash being a rocket rather than
+a number:
+
+- the jump has already spent one sub-step of gravity by the time the explosion
+  lands — 270 becomes 264 — because firing happens *after* the movement phase,
+  and it has to (see §3.5);
+- that same sub-step lifts the player's feet 2.1 units off the floor the rocket
+  detonates against, which costs two points of splash and ten qu/s of push.
+
+`264 + 490 = 754`, and `754^2 / 1500 = 379`.
+
+**The 395 design bound is still right**, and §5.5 already says why: step-up
+applies on the way *down*, so a player arriving at a ledge face while falling
+mantles up to `STEP_SIZE` above their apex. `weapons.test.ts` drives a real
+player with a real rocket at a ledge of exactly 395 and asserts they get on to
+it. What is *not* true is the reading that a jump-plus-rocket peaks at 395 in
+open air; it peaks at 381, and a map that needs the last 14 units of that is
+relying on the mantle.
+
+### §3.5 Firing happens after moving, and rockets move after both
+
+The tick phase order (`kernel.ts`) is:
+
+```
+advance the PRNG -> move players -> fire weapons -> move rockets -> expire
+```
+
+Two of those adjacencies are mechanics rather than bookkeeping.
+
+**Players move before they fire.** `PM_CheckJump` *assigns* `velocity[2]`
+(§1.5), so splash that landed before the movement phase would simply be
+overwritten by the jump it was meant to add to, and there would be no such thing
+as a rocket jump. Quake's order is the same: `PM_Weapon` raises the fire event
+inside `Pmove`, and `ClientEvents` acts on it immediately afterwards.
+
+**Rockets move after both.** A rocket fired this tick is swept this tick, which
+is what the 50 ms prestep (§3.2) is for.
+
+---
+
 ## §4 Maps
 
 The format level geometry is authored in, the tool that compiles it, and the
@@ -876,10 +1070,15 @@ lands under your own feet does its full 100 points of splash, so the push is
 A jump *assigns* `velocity[2] = 270` (§1.5), it does not add, so a jump and a
 rocket on the same tick compose to `270 + 500 = 770` rather than to 500.
 
-**GLAD-0QWRYK owns the rocket.** `ROCKET_JUMP_LAUNCH` lives in
-`map/reachability.ts` because that is what needs it first; when the weapon lands
-it imports this number rather than restating it, and the day it wants a
-different one is the day every ledge height in `maps/` is re-checked.
+`ROCKET_JUMP_LAUNCH` is now **derived** in `weapons.ts` — the splash damage in
+the weapon table, through the knockback formula (§3.3) — and re-exported by
+`map/reachability.ts`, which is what needs it. So the day the splash damage
+changes is the day the reachability tests fail and every ledge height in `maps/`
+is re-checked, which is the point of the indirection.
+
+What a real rocket measurably reaches, as opposed to what the closed form
+predicts, is §3.4. The standing number lands; the jump-plus-rocket apex comes in
+3.6% under, and the 395 climb survives on the step-up slack §5.5 describes.
 
 ### §5.4 The four climbs
 

@@ -43,6 +43,7 @@ import { PLAYER_HEIGHT, PLAYER_MAXS, PLAYER_MINS } from '../bbox.ts'
 import { boxPenetration } from '../collide.ts'
 import type { CollisionWorld } from '../collide.ts'
 import type { MutVec3 } from '../math.ts'
+import { ROCKET_JUMP_LAUNCH } from '../weapons.ts'
 import { FELT_GRAVITY, JUMP_VELOCITY, RUN_SPEED } from '../pmove/index.ts'
 import { MIN_WALK_NORMAL, STEP_SIZE } from '../slidemove.ts'
 import { SURFACE_CLIP_EPSILON, createTrace, traceBox } from '../trace.ts'
@@ -55,20 +56,22 @@ import type { MapBrush, MapSource } from './schema.ts'
  * The four techniques
  * ----------------------------------------------------------------------- */
 
-/**
- * The upward speed a rocket at your own feet gives you, in qu/s.
+/*
+ * The upward speed a rocket at your own feet gives you, in qu/s. **500**.
  *
- * Quake 3's arithmetic, transcribed: `G_Damage` pushes the victim by
+ * Quake 3's arithmetic: `G_Damage` pushes the victim by
  * `g_knockback * knockback / mass`, which is `1000 * knockback / 200`, and a
  * rocket that lands under you does its full 100 points of splash. 100 * 5 =
  * 500.
  *
- * **GLAD-0QWRYK owns the rocket.** When the weapon lands, its knockback has to
- * agree with this number or the map is designed around a jump the game does not
- * have — so it imports this rather than restating it, and the day it wants a
- * different number is the day every ledge height in `maps/` is re-checked.
+ * It is `weapons.ts`'s, derived there from the splash damage in the weapon
+ * table, and re-exported here because this is the file that needs it: every
+ * ledge height in `maps/` is designed around it. So the day the splash damage
+ * changes is the day the reachability tests fail and every ledge gets
+ * re-checked — which is the failure this indirection exists to cause.
+ * `docs/physics-spec.md` §5.3.
  */
-export const ROCKET_JUMP_LAUNCH = 500
+export { ROCKET_JUMP_LAUNCH }
 
 /** Which of the four ways up a climb needs. */
 export type TechniqueKey = 'step' | 'jump' | 'rocket-jump' | 'jump-rocket'

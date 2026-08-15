@@ -21,12 +21,13 @@ import { sanitizeUserCmd, type UserCmd } from './usercmd.ts'
 /**
  * Bump on any change to the message shapes below — **or to what they mean**.
  *
- * Version 3 is the second kind. No frame changed shape; `EntityState` grew
- * `weapon` and `lastFireTick` (GLAD-PWCON8), which changes the canonical
- * encoding and therefore every `hash` a peer computes for the same world. A
- * client one deploy behind would now disagree with the server about a world
- * both of them simulated correctly, and report it as a desync — which is
- * exactly the confusion this number exists to prevent.
+ * Version 3 is both kinds at once. A command grew a sixth number, the weapon
+ * being held (GLAD-0QWRYK), so the frame changed shape. And `EntityState` grew
+ * `weapon`, `lastFireTick`, `nextFireTick` and `trBase` (GLAD-PWCON8 and
+ * GLAD-0QWRYK), which changes the canonical encoding and therefore every `hash`
+ * a peer computes for the same world. A client one deploy behind would disagree
+ * with the server about a world both of them simulated correctly, and report it
+ * as a desync — which is exactly the confusion this number exists to prevent.
  */
 export const PROTOCOL_VERSION = 3
 
@@ -37,8 +38,15 @@ export const PROTOCOL_VERSION = 3
  */
 export const MAX_CMDS_PER_BATCH = 256
 
-/** A `UserCmd` on the wire: `[forwardMove, sideMove, yaw, pitch, buttons]`. */
-export type WireCmd = readonly [number, number, number, number, number]
+/**
+ * A `UserCmd` on the wire: `[forwardMove, sideMove, yaw, pitch, buttons,
+ * weapon]`.
+ *
+ * The held weapon rides along on every command rather than arriving as a
+ * switch event, because a lost event leaves the two peers holding different
+ * weapons for the rest of the match — see `usercmd.ts`.
+ */
+export type WireCmd = readonly [number, number, number, number, number, number]
 
 export type ClientHello = {
   readonly t: 'hello'
@@ -109,24 +117,25 @@ export type ServerMessage =
 
 /** Pack a command for the wire. */
 export function encodeCmd(cmd: UserCmd): WireCmd {
-  return [cmd.forwardMove, cmd.sideMove, cmd.yaw, cmd.pitch, cmd.buttons]
+  return [cmd.forwardMove, cmd.sideMove, cmd.yaw, cmd.pitch, cmd.buttons, cmd.weapon]
 }
 
 /**
  * Unpack a command from the wire, clamping it into a legal one.
  *
- * Anything that is not a five-number tuple becomes a standing-still command
+ * Anything that is not a six-number tuple becomes a standing-still command
  * rather than an error: a tick is a total function, so the door is the only
  * place a bad value can be turned away.
  */
 export function decodeCmd(wire: unknown): UserCmd {
-  if (!Array.isArray(wire) || wire.length !== 5) return sanitizeUserCmd(null)
+  if (!Array.isArray(wire) || wire.length !== 6) return sanitizeUserCmd(null)
   return sanitizeUserCmd({
     forwardMove: wire[0],
     sideMove: wire[1],
     yaw: wire[2],
     pitch: wire[3],
     buttons: wire[4],
+    weapon: wire[5],
   })
 }
 

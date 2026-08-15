@@ -28,6 +28,7 @@ recorded in [`credits.json`](./credits.json) and rendered to
 | `pnpm run no-physics`| fails if a physics engine has appeared in `pnpm-lock.yaml` |
 | `pnpm run guardrails`| proves the boundaries reject violations                |
 | `pnpm run map:bake`  | compiles `maps/*.ts` to `maps/baked/*.json` (`--check` verifies) |
+| `pnpm run nav:bake`  | compiles `maps/*.nav.ts` to `maps/baked/*.nav.json` (`--check` verifies) |
 | `pnpm run audio:bake`| synthesises `packages/client/public/audio/*.wav` (`--check` verifies) |
 | `pnpm run audio:verify`| the audio acceptance checks in a real browser — own CI job |
 | `pnpm run assets:build` | compresses `assets/` into `packages/client/public/` and regenerates the credits (`--check` verifies) |
@@ -58,10 +59,10 @@ and there is no `dist`, so there is exactly one resolution condition and nothing
 for `bundler` and `NodeNext` to disagree about.
 
 Two directories belong to no package and ship with neither build: `maps/` (the
-authored maps and their baked artifacts) and `tools/` (the baker). Both are
-typechecked by the root `tsconfig.json` and linted with Node globals; both may
-import `@gladiator/sim`, which is why it is a devDependency of the root
-`package.json`.
+authored maps, the nav graphs, and their baked artifacts) and `tools/` (the
+bakers). Both are typechecked by the root `tsconfig.json` and linted with Node
+globals; both may import `@gladiator/sim` and `@gladiator/bot`, which is why
+both are devDependencies of the root `package.json`.
 
 ---
 
@@ -218,8 +219,10 @@ state per frame silently skips whichever ticks shared one.
 ### Phase order
 
 `tick()` runs fixed phases, and the order is the contract later tickets build
-against: advance the PRNG, move players, integrate, expire. Adding a phase
-means deciding where it goes, once, for everyone.
+against: advance the PRNG, move players, fire weapons, move rockets, expire.
+Adding a phase means deciding where it goes, once, for everyone — and two of
+those adjacencies are mechanics rather than bookkeeping (see **The weapons
+layer**).
 
 The *movement* phase has an order of its own, and it is not negotiable either:
 `docs/physics-spec.md` §1.5. `PM_CheckJump` runs before `PM_Friction`, and that
@@ -239,8 +242,9 @@ code that owns them — `GRAVITY`, `RUN_SPEED` and `JUMP_VELOCITY` in
 constants — `OVERCLIP`, `STEP_SIZE`, `MIN_WALK_NORMAL`, the trace epsilon — are
 `slidemove.ts` and `trace.ts`; the map's rules — the ramp gradients, the spawn
 headroom and separation minima — are `map/schema.ts`; angles are angle units,
-defined in `usercmd.ts`; the weapon ids are `weapon.ts`; sine and cosine are
-`trig.ts`. Everything else imports
+defined in `usercmd.ts`; the weapon ids are `weapon.ts` and what they *do* is
+the table in `weapons.ts` and the push formula in `damage.ts`; sine and cosine
+are `trig.ts`. Everything else imports
 rather than restating. Two names for one number is the drift everything else in
 this file exists to prevent, so if you find yourself adding a `constants.ts`,
 put the constant next to the code that owns it instead.
@@ -265,6 +269,40 @@ Three things in there look like bugs and are load-bearing — the acceleration
 gate on `dot(velocity, wishdir)`, `PM_CheckJump` before `PM_Friction`, and
 integer velocity snapping. All three are argued in `docs/physics-spec.md` §1
 and measured in `pmove/pmove.test.ts`.
+
+### The weapons layer
+
+`packages/sim/src/weapon.ts` (which weapon an entity holds, and when it last
+fired — netstate, because you read an opponent's weapon off their silhouette),
+`weapons.ts` (the table, the muzzle, the fire phase, the railgun),
+`projectile.ts` (a rocket in flight), `damage.ts` (what a hit does). Numbers and
+reasoning: `docs/physics-spec.md` §3.
+
+**Two weapons, and there is never a third.** `WEAPONS` is a two-element *tuple*
+type, so a third entry is a type error rather than a review comment. Neither has
+ammunition — no count in `GameState`, nothing to decrement — and the only thing
+between two shots is `EntityState.nextFireTick`, one timer shared by both.
+
+Two things in here look like details and are mechanics:
+
+- **A rocket is a trajectory, not a position.** `trBase`, `trDelta` and
+  `spawnTick`, evaluated in closed form every tick, with the delta snapped to
+  whole units. Nothing accumulates, which is what lets the wire mention a rocket
+  exactly once (GLAD-5QGO11 builds on this).
+- **The trajectory clock starts 50 ms in the past**, so a rocket is 45 units
+  downrange on the tick it is fired. That is why a rocket at your feet detonates
+  on the frame you press the button rather than the one after.
+
+And one ordering, in `tick()`: **players move, then fire, then rockets move.**
+`PM_CheckJump` assigns `velocity[2]`, so splash applied before the movement
+phase would be overwritten by the jump it was meant to add to. Fire before move
+and there is no rocket jump — the game still runs and still looks right, which
+is the worst kind of wrong.
+
+`ROCKET_JUMP_LAUNCH` is derived here — splash damage through the knockback
+formula — and re-exported by `map/reachability.ts`, so changing the splash
+damage fails the reachability tests instead of quietly re-tuning every ledge in
+`maps/`.
 
 ### The collision layer
 
@@ -386,6 +424,58 @@ and this package does not have one.
 `hashState` hashes raw IEEE 754 bit patterns — it never rounds, because
 rounding is precisely what would hide a slow drift. It does normalise `-0` to
 `+0` and every NaN to one NaN; see `encoding.ts` for why both are necessary.
+
+---
+
+## The bot's navigation data
+
+`packages/bot/src/nav/`, authored in `maps/*.nav.ts`, baked by `pnpm nav:bake`
+to `maps/baked/*.nav.json`. Reasoning lives in `nav/schema.ts`; this is the
+shape of it.
+
+**A hand-placed waypoint graph, not a navmesh, and not AAS.** Quake 3's AAS was
+built to need zero authoring across thirty shipped maps plus every map a
+stranger would ever make, and it cost 626 areas and 88 seconds of compile on a
+duel map this size. Gladiator has one arena and sixty-odd meaningful positions.
+The deciding argument is not the compile time: **the link types are the
+design**. "This gap is a jump", "you drop off here and cannot get back up" is
+level-design intent, and a generator can only discover what the geometry
+happens to admit.
+
+**Links are directed and there are four kinds** — `walk`, `jump`, `drop`,
+`teleport` — each mapping to exactly one traversal controller in the bot's
+movement (GLAD-TSED8V). `rocketjump` is a v2 kind. Until it exists the
+positions only a rocket reaches are tagged `perch` rather than `ground`, and
+nothing routes to them. That is the data telling the truth; linking them with a
+jump the movement cannot make would make the routing guarantee pass and the bot
+walk into a wall.
+
+**Every `ground` node routes to every other one, and the bake refuses a graph
+where one does not.** It is the same rule `map/reachability.ts` enforces for the
+map, at the level the bot actually uses, and it is what makes "the bot can
+always get there" a property rather than a hope.
+
+**A path query is one array read.** Floyd-Warshall runs once at bake time over
+seventy nodes and its next-hop and cost tables are committed; so is a
+node-by-node visibility bitset, which turns "can I see that position" — the
+lookup underneath *breaking* line of sight — into a bit test. Nothing in
+`nav/query.ts` may contain a loop whose length depends on the node count;
+`query.test.ts` proves it by counting table reads on a four-node graph and a
+seventy-node one and requiring the same number.
+
+**The artifact carries the map's hash.** Every claim in a nav graph is a claim
+about where the geometry is, and all of them expire the instant a brush moves.
+`loadNav` takes the loaded map's hash and refuses a mismatch, which is the
+difference between a sentence at startup and a bot pathing into a wall that
+used to be a doorway.
+
+**A `walk` link is validated by walking it.** `nav/validate.ts` runs the real
+`pmove` from one node to the other and checks that it arrives. A swept box
+would be cheaper and it is the wrong instrument: the collision world expands a
+brush's own planes by the player box, which is exact for an axis-aligned brush
+and over-approximates at the top edge of a ramp, where the expanded slope juts
+a few units into the air above the surface. `StepSlideMove` steps over that and
+a static sweep at a fixed height does not.
 
 ---
 

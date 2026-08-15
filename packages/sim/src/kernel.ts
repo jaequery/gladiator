@@ -31,12 +31,12 @@
  *
  * ## What is *not* here yet
  *
- * Gameplay. The step below moves players and expires entities, and that is all.
- * Weapons (GLAD-0QWRYK) and round rules (GLAD-L4SYN9) add phases; a real map
- * (GLAD-G2M8QQ, GLAD-B8DI4J) replaces the `CollisionWorld` the kernel is handed
- * rather than any code in here. The phase order below is the contract those
- * tickets build against, and each of them will move the golden trace — which is
- * what the golden trace is for.
+ * Round rules (GLAD-L4SYN9): what a death does, when a round ends, and which of
+ * the three self-damage modes is in force. A real map (GLAD-G2M8QQ,
+ * GLAD-B8DI4J) replaces the `CollisionWorld` the kernel is handed rather than
+ * any code in here. The phase order below is the contract those tickets build
+ * against, and each of them will move the golden trace — which is what the
+ * golden trace is for.
  *
  * The constants come from `tick.ts` and `pmove/` rather than being restated
  * here. Two names for one number is the drift this repo is built to prevent.
@@ -46,14 +46,16 @@ import { SKELETON_ARENA } from './arena.ts'
 import { PLAYER_MAXS, PLAYER_MINS } from './bbox.ts'
 import type { CollisionWorld } from './collide.ts'
 import { copyVec3 } from './math.ts'
-import { GRAVITY, createPmoveBody, pmove } from './pmove/index.ts'
+import { createPmoveBody, pmove } from './pmove/index.ts'
 import type { PmoveBody } from './pmove/index.ts'
+import { moveProjectiles } from './projectile.ts'
 import { advanceRng } from './rng.ts'
 import { EntityFlag, EntityKind } from './state.ts'
 import type { EntityState, GameState } from './state.ts'
 import { MAX_HOST_FRAME_MS, TICK_DT, TICK_INTERVAL_MS } from './tick.ts'
 import { NULL_CMD } from './usercmd.ts'
 import type { UserCmd } from './usercmd.ts'
+import { fireWeapons } from './weapons.ts'
 
 /**
  * The commands for one sub-step, indexed by player slot.
@@ -178,6 +180,14 @@ export function advanceHost(
  *
  * The phase order is the contract. It is fixed, and it is the reason two peers
  * running different builds of the *renderer* still agree about the world.
+ *
+ * One ordering in it is a game mechanic rather than bookkeeping: **players move
+ * before they fire, and rockets move after both**. Firing after moving is what
+ * makes a rocket jump work at all — `PM_CheckJump` *assigns* `velocity[2]`, so
+ * splash that landed before the movement phase would simply be overwritten by
+ * the jump it was meant to add to. And rockets moving last is what lets a
+ * rocket fired this tick detonate on this tick, which is what the 50 ms
+ * trajectory prestep is for (`projectile.ts`).
  */
 export function tick(
   state: GameState,
@@ -194,7 +204,8 @@ export function tick(
   advanceRng(state)
 
   movePlayers(state, inputs, world)
-  integrate(state)
+  fireWeapons(state, inputs, world)
+  moveProjectiles(state, world)
   expire(state)
 }
 
@@ -260,29 +271,6 @@ function storeBody(entity: EntityState, body: PmoveBody): void {
 
   if (body.jumpHeld) entity.flags |= EntityFlag.JumpHeld
   else entity.flags &= ~EntityFlag.JumpHeld
-}
-
-/**
- * Gravity and Euler integration for everything that is not a player.
- *
- * Which today is nothing: the only non-player entity kind is `Projectile`, and
- * rockets are GLAD-0QWRYK's — they will want a trace and an explosion, not
- * this. It is kept as the one line of behaviour a spawned entity has so that
- * "an entity exists and the world advances" stays testable in the meantime.
- */
-function integrate(state: GameState): void {
-  for (const entity of state.entities) {
-    if (entity.kind === EntityKind.None) continue
-    if (entity.kind === EntityKind.Player) continue
-
-    if ((entity.flags & EntityFlag.OnGround) === 0) {
-      entity.velocity[2] -= GRAVITY * TICK_DT
-    }
-
-    entity.origin[0] += entity.velocity[0] * TICK_DT
-    entity.origin[1] += entity.velocity[1] * TICK_DT
-    entity.origin[2] += entity.velocity[2] * TICK_DT
-  }
 }
 
 /**

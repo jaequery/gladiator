@@ -95,6 +95,34 @@ describe('golden replay', () => {
     expect(GOLDEN_TRACE.map((sample) => sample.tick)).toEqual(ticks)
   })
 
+  it('fires rockets and rail shots, so the trace covers the weapons phases', () => {
+    // A fixture that stopped shooting would still pass every other assertion
+    // in this file, and would quietly stop guarding the phases that spawn and
+    // remove entities mid-match — which is where two peers are most likely to
+    // come apart.
+    const state = createReplayState(GOLDEN_REPLAY)
+    const kernel = createKernel(state)
+    const commands = commandSourceFor(GOLDEN_REPLAY)
+
+    // Counted from the id counter rather than from the entity list: two of the
+    // three rockets are rocket jumps, and a rocket jump detonates on the tick
+    // it is fired, so it is never in the list when a tick ends.
+    const firstId = state.nextEntityId
+    let seen = 0
+    for (let i = 0; i < GOLDEN_REPLAY.durationTicks; i++) {
+      tick(kernel.state, commands(kernel.state.tick + 1))
+      if (state.entities.some((e) => e.kind === EntityKind.Projectile)) seen += 1
+    }
+
+    expect(state.nextEntityId - firstId).toBe(3)
+    // In the air for a decent slice of the ten seconds, not a single tick.
+    expect(seen).toBeGreaterThan(100)
+    // And both players paid for their own rocket jump and lived through it.
+    expect(state.entities.filter((e) => e.kind === EntityKind.Player).map((e) => e.health)).toEqual([
+      51, 51,
+    ])
+  })
+
   it('leaves both players somewhere other than where they started', () => {
     // A trace of a world where nothing happens would pass every assertion in
     // this file and prove nothing at all.

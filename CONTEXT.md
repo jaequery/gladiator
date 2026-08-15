@@ -31,7 +31,28 @@ modes because the choice changes the skill ceiling, not just the numbers
 (GLAD-L4SYN9).
 
 **Rocket jump** — firing a rocket at your feet and riding the splash impulse.
-The reason self-damage exists.
+The reason self-damage exists. Worth 500 qu/s standing and 770 with a jump on
+the same tick; what that measurably climbs to is `docs/physics-spec.md` §3.4.
+
+**Splash** — the damage an explosion does to everything near it, falling off
+linearly to nothing at 120 units. Measured to the nearest point on a player's
+**box**, not to its centre, so a rocket at your feet does its full 100.
+`docs/physics-spec.md` §3.3.
+
+**Knockback** — the velocity a hit imparts: five units of speed per point of
+damage, **added** to the current velocity rather than replacing it. Splash is
+biased upward; a railgun hit pushes along the shooter's aim. It also arms the
+**knockback timer**, a window of up to 200 ms in which the ground neither
+brakes you nor steers you — which is why you cannot cancel a rocket jump the
+instant you land. `docs/physics-spec.md` §3.3.
+
+**Trajectory** — how a rocket's position is known: `trBase`, `trDelta` and the
+tick it was fired on, evaluated in closed form rather than integrated. It is
+what lets the wire mention a rocket exactly once. `docs/physics-spec.md` §3.2.
+
+**Refire** — the interval between shots, and the only thing that gates one.
+800 ms for the rocket launcher, 1500 ms for the railgun, on a single timer both
+weapons share. There is no ammunition anywhere in the simulation.
 
 **Strafe jump** — gaining speed by holding a strafe key and turning into it
 mid-air, exploiting how Quake's `pmove` projects acceleration onto velocity.
@@ -229,11 +250,11 @@ between two received states, so their motion is smooth rather than stepped.
 saw them when deciding whether a shot hit (GLAD-5QGO11).
 
 **Weapon** — which of the two an entity is holding, as a netstate field
-(`packages/sim/src/weapon.ts`). Behaviour is GLAD-0QWRYK's; the field exists
-because an opponent's weapon is something you *read*, one snapshot after the
-server changed it. Paired with **`lastFireTick`** — the tick they last fired
-on, carried as state rather than sent as an event so it survives a dropped
-snapshot.
+(`packages/sim/src/weapon.ts`). What they *do* is `weapons.ts` and
+`docs/physics-spec.md` §3; the field exists because an opponent's weapon is
+something you *read*, one snapshot after the server changed it. Paired with
+**`lastFireTick`** — the tick they last fired on, carried as state rather than
+sent as an event so it survives a dropped snapshot.
 
 **Netstate / snapshot** — the serialised slice of sim state the server sends to
 clients each tick.
@@ -256,6 +277,35 @@ is deliberately *not* the sim state (GLAD-V7CMHR).
 **Navigation data** — precomputed routing baked from the map, so the bot's
 pathfinding is a lookup rather than a search (GLAD-OB46VC).
 
+**Nav graph** — the navigation data as authored: `maps/<map>.nav.ts`, a list of
+nodes and the directed links between them, hand-placed rather than generated.
+`packages/bot/src/nav/schema.ts` argues why.
+
+**Nav node** — one place worth standing, at the player's feet. The bake *drops*
+it on to the surface underneath, because an axis-aligned box rests on its
+uphill edge and a coordinate read off a ramp in the map file is always a little
+wrong.
+
+**Link kind** — how a body gets from one nav node to the next: `walk`, `jump`,
+`drop` or `teleport`. Directed, always — a ledge you can drop off and cannot
+climb back on to is the commonest shape in an arena and an undirected graph
+cannot say it. Each kind maps to exactly one traversal controller in the bot's
+movement (GLAD-TSED8V). `rocketjump` is a v2 kind.
+
+**Ground / perch** — the two routing classes a nav node can be in. Every
+`ground` node has to route to every other one and the bake refuses a graph
+where one does not; a `perch` is a position no v1 link reaches — a balcony, the
+tower — which the bot can see from and fall off but not route to.
+
+**Next-hop table** — the all-pairs routing Floyd-Warshall computes at bake
+time. `nextHop[from][to]` is where to move *now*, so a path follower asks again
+every time it arrives and recovers from being knocked off its route without
+replanning.
+
+**Visibility bitset** — which nav nodes can see which, eye to eye, computed
+once and stored a bit per pair. Symmetric by construction. It is what makes
+breaking line of sight an O(1) question (GLAD-V7CMHR).
+
 **Fairness harness** — the tests that assert the bot cannot see, hear or aim
 better than the rules allow.
 
@@ -276,6 +326,11 @@ data) into the compact form the sim loads (GLAD-G2M8QQ, GLAD-OB46VC).
 **Baked map** — what `pnpm map:bake` writes: `maps/baked/<name>.json`, carrying
 the format version, the map, and the content hash. Committed, so a build needs
 no bake step in front of it. `docs/physics-spec.md` §4.
+
+**Baked nav** — what `pnpm nav:bake` writes: `maps/baked/<name>.nav.json`,
+carrying the graph, the routing and visibility tables, and **two** hashes — its
+own, and the hash of the map it was baked against. The second one is what stops
+a graph that describes yesterday's geometry from loading (GLAD-OB46VC).
 
 **Baked sound** — what `pnpm audio:bake` writes: `packages/client/public/audio/*.wav`,
 synthesised from arithmetic by `tools/synth-audio.ts` rather than downloaded.

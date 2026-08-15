@@ -10,8 +10,10 @@
  * and the angle the server receives are the same integer by construction.
  */
 import {
+  BUTTON_ATTACK,
   BUTTON_JUMP,
   type UserCmd,
+  Weapon,
   pitchUnitsFromDegrees,
   yawUnitsFromDegrees,
 } from '@gladiator/sim'
@@ -31,12 +33,26 @@ const LEFT_KEYS = ['KeyA', 'ArrowLeft']
 const RIGHT_KEYS = ['KeyD', 'ArrowRight']
 const JUMP_KEYS = ['Space']
 
+/**
+ * Fire. A mouse button rather than a key, so it is spelled as a code that no
+ * `KeyboardEvent` can produce and lives in the same held-key set as everything
+ * else — which keeps `commandFrom` a pure function of "what is held".
+ */
+const ATTACK_KEYS = ['Mouse0']
+
+/** Weapon select. Two weapons, two keys, and there will never be a third. */
+const WEAPON_KEYS: readonly (readonly [string, Weapon])[] = [
+  ['Digit1', Weapon.RocketLauncher],
+  ['Digit2', Weapon.Railgun],
+]
+
 const TRACKED_KEYS = new Set([
   ...FORWARD_KEYS,
   ...BACK_KEYS,
   ...LEFT_KEYS,
   ...RIGHT_KEYS,
   ...JUMP_KEYS,
+  ...WEAPON_KEYS.map(([code]) => code),
 ])
 
 export type ViewAngles = {
@@ -65,12 +81,17 @@ export type InputController = {
  * Turn a held-key set and a view into a command. Exported separately from the
  * DOM plumbing so it can be tested without a browser.
  */
-export function commandFrom(held: ReadonlySet<string>, angles: ViewAngles): UserCmd {
+export function commandFrom(
+  held: ReadonlySet<string>,
+  angles: ViewAngles,
+  weapon: Weapon = Weapon.RocketLauncher,
+): UserCmd {
   const forward = FORWARD_KEYS.some((key) => held.has(key)) ? 1 : 0
   const back = BACK_KEYS.some((key) => held.has(key)) ? 1 : 0
   const left = LEFT_KEYS.some((key) => held.has(key)) ? 1 : 0
   const right = RIGHT_KEYS.some((key) => held.has(key)) ? 1 : 0
   const jump = JUMP_KEYS.some((key) => held.has(key))
+  const attack = ATTACK_KEYS.some((key) => held.has(key))
 
   return {
     // Holding both directions cancels, rather than one arbitrarily winning.
@@ -78,7 +99,8 @@ export function commandFrom(held: ReadonlySet<string>, angles: ViewAngles): User
     sideMove: right - left,
     yaw: yawUnitsFromDegrees(angles.yawDegrees),
     pitch: pitchUnitsFromDegrees(angles.pitchDegrees),
-    buttons: jump ? BUTTON_JUMP : 0,
+    buttons: (jump ? BUTTON_JUMP : 0) | (attack ? BUTTON_ATTACK : 0),
+    weapon,
   }
 }
 
@@ -95,9 +117,12 @@ export function createInputController(
   const held = new Set<string>()
   const angles: ViewAngles = { yawDegrees: 0, pitchDegrees: 0 }
   const pointer = createPointerLock(canvas)
+  let weapon: Weapon = Weapon.RocketLauncher
 
   const onKeyDown = (event: KeyboardEvent) => {
     if (!TRACKED_KEYS.has(event.code)) return
+    const selected = WEAPON_KEYS.find(([code]) => code === event.code)
+    if (selected !== undefined) weapon = selected[1]
     held.add(event.code)
     // Space scrolls the page otherwise, which is a jump that also moves the
     // viewport — an unmistakable "this is a document, not a game" tell.
@@ -120,6 +145,19 @@ export function createInputController(
     if (angles.pitchDegrees < -89) angles.pitchDegrees = -89
   }
 
+  // Fire is only fire while the pointer is locked. Otherwise the click that
+  // *asks* for the lock would also be the shot that opens the round.
+  const onMouseDown = (event: MouseEvent) => {
+    if (!pointer.locked || event.button !== 0) return
+    held.add('Mouse0')
+    event.preventDefault()
+  }
+
+  const onMouseUp = (event: MouseEvent) => {
+    if (event.button !== 0) return
+    held.delete('Mouse0')
+  }
+
   const onBlur = () => held.clear()
 
   // Keys held when the lock is released would otherwise stay held forever, and
@@ -132,6 +170,8 @@ export function createInputController(
   window.addEventListener('keyup', onKeyUp)
   window.addEventListener('blur', onBlur)
   document.addEventListener('mousemove', onMouseMove)
+  document.addEventListener('mousedown', onMouseDown)
+  document.addEventListener('mouseup', onMouseUp)
 
   return {
     get locked() {
@@ -141,7 +181,7 @@ export function createInputController(
       return pointer.raw
     },
     angles,
-    sample: () => commandFrom(held, angles),
+    sample: () => commandFrom(held, angles, weapon),
     requestLock: () => pointer.request(),
     onLockChange: (listener) => pointer.onChange(listener),
     dispose: () => {
@@ -149,6 +189,8 @@ export function createInputController(
       window.removeEventListener('keyup', onKeyUp)
       window.removeEventListener('blur', onBlur)
       document.removeEventListener('mousemove', onMouseMove)
+      document.removeEventListener('mousedown', onMouseDown)
+      document.removeEventListener('mouseup', onMouseUp)
       pointer.dispose()
     },
   }

@@ -9,9 +9,12 @@
  * — Quake's 16-bit angles — so "the angle the client sent" and "the angle the
  * server received" are the same number by construction rather than by luck.
  *
- * The full command (`msec`, weapon selection, impulse, the rest of the button
- * bits) is GLAD-OOELC5's; this is the walking skeleton's subset.
+ * The full command (`msec`, impulse, the rest of the button bits) is
+ * GLAD-OOELC5's; this is the walking skeleton's subset plus what it takes to
+ * shoot.
  */
+
+import { Weapon } from './weapon.ts'
 
 /** Quantisation of a full turn. 2^16, so the conversion below is exact. */
 export const ANGLE_UNITS = 65536
@@ -29,8 +32,15 @@ export const ANGLE_UNITS_PER_DEGREE = ANGLE_UNITS / 360
  */
 export const MAX_PITCH_UNITS = 16202
 
-/** Button bits. Fire, weapon-switch and crouch arrive with their tickets. */
+/** Button bits. Crouch arrives with its ticket. */
 export const BUTTON_JUMP = 1
+
+/**
+ * Hold to fire. Both weapons are fully automatic, as Quake's are: the refire
+ * interval is the only thing between shots, so there is no press-to-fire latch
+ * and holding the button empties nothing.
+ */
+export const BUTTON_ATTACK = 2
 
 export type UserCmd = {
   /** -1 back, 0, +1 forward. */
@@ -43,15 +53,26 @@ export type UserCmd = {
   readonly pitch: number
   /** Button bitfield. */
   readonly buttons: number
+  /**
+   * The weapon the player is holding, a {@link Weapon}.
+   *
+   * Carried on every command rather than sent as a switch *event*, for the
+   * same reason the whole command is: a lost event leaves two peers holding
+   * different weapons for the rest of the match, and a repeated field cannot
+   * be lost. It is also what makes the bot's weapon selection go through
+   * exactly the door a human's does.
+   */
+  readonly weapon: Weapon
 }
 
-/** Standing still, looking down the +x axis. */
+/** Standing still, looking down the +x axis, holding the rocket launcher. */
 export const NULL_CMD: UserCmd = {
   forwardMove: 0,
   sideMove: 0,
   yaw: 0,
   pitch: 0,
   buttons: 0,
+  weapon: Weapon.RocketLauncher,
 }
 
 /** Wrap a signed angle in degrees into `[0, ANGLE_UNITS)` angle units. */
@@ -97,11 +118,22 @@ export function sanitizeUserCmd(value: unknown): UserCmd {
   const raw = (value ?? {}) as Partial<Record<keyof UserCmd, unknown>>
   const yaw = clampInteger(raw.yaw, ANGLE_UNITS)
   const buttons = clampInteger(raw.buttons, 0xffff)
+  // Anything that is not one of the two weapons becomes the launcher — the one
+  // a player spawns holding. `Weapon.None` is a legal *entity* state (a corpse,
+  // a rocket) and is not something a command may ask for: a player with empty
+  // hands is not a thing this game has.
+  const weapon = raw.weapon
+  const held =
+    typeof weapon === 'number' && (weapon === Weapon.RocketLauncher || weapon === Weapon.Railgun)
+      ? weapon
+      : Weapon.RocketLauncher
+
   return {
     forwardMove: clampInteger(raw.forwardMove, 1),
     sideMove: clampInteger(raw.sideMove, 1),
     yaw: ((yaw % ANGLE_UNITS) + ANGLE_UNITS) % ANGLE_UNITS,
     pitch: clampInteger(raw.pitch, MAX_PITCH_UNITS),
     buttons: buttons < 0 ? 0 : buttons,
+    weapon: held,
   }
 }

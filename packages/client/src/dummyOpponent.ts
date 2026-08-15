@@ -135,6 +135,8 @@ export function dummyOpponent(tick: number, centre: Vec3): EntityState {
     lastFireTick: stopped || lastFire === 0 ? NEVER_FIRED : lastFire,
     knockbackTicks: 0,
     ownerId: 0,
+    nextFireTick: 0,
+    trBase: [0, 0, 0],
     spawnTick: 0,
     expireTick: NEVER_EXPIRES,
   }

@@ -51,6 +51,14 @@ export type EntityFlag = (typeof EntityFlag)[keyof typeof EntityFlag]
 /** `slot` for an entity that no player controls. */
 export const NO_SLOT = -1
 
+/**
+ * An entity id that names nothing. Ids start at 1, so zero is free.
+ *
+ * `ownerId` for something nobody fired, and the "nothing was hit directly"
+ * argument to `radiusDamage`.
+ */
+export const NO_ENTITY = 0
+
 /** `expireTick` for an entity that lives until something kills it. */
 export const NEVER_EXPIRES = -1
 
@@ -74,12 +82,13 @@ export type EntityState = {
   angles: MutVec3
   health: number
   /**
-   * The weapon in this entity's hands. `weapon.ts`.
+   * The weapon in this entity's hands, or for a rocket, the weapon that fired
+   * it. `weapon.ts`.
    *
    * Netstate rather than a client-side guess, because an opponent's weapon is
    * something you *read* and change your movement about, and you have to be
-   * able to read it one snapshot after the server changed it. Set by
-   * GLAD-0QWRYK; drawn by GLAD-PWCON8.
+   * able to read it one snapshot after the server changed it. Written every
+   * tick by the fire phase (`weapons.ts`); drawn by the renderer.
    */
   weapon: Weapon
   /**
@@ -103,6 +112,27 @@ export type EntityState = {
   knockbackTicks: number
   /** The entity that is responsible for this one — a rocket's shooter. */
   ownerId: number
+  /**
+   * The first tick this player may fire on again.
+   *
+   * The forward-looking half of the pair `lastFireTick` opens: one says when
+   * the last shot happened, for the renderer, and this says when the next may,
+   * for the rules. They differ by the refire interval of the weapon that
+   * actually fired, which is why this is a field rather than a sum — Quake's
+   * single `ps->weaponTime`, and the reason switching weapons is never a way
+   * to fire sooner than either weapon allows. `weapons.ts`.
+   */
+  nextFireTick: number
+  /**
+   * Where a projectile's trajectory starts — the muzzle it left, in Quake
+   * units. Zero for everything else.
+   *
+   * A rocket is a *trajectory*, not a position: its origin at any tick is
+   * `trBase + (t - trTime) * 0.001 * velocity`, evaluated from `spawnTick`, so
+   * a peer that is told about a rocket once can compute where it is on every
+   * tick afterwards without being told again. `projectile.ts`.
+   */
+  trBase: MutVec3
   spawnTick: number
   /** Tick at which the kernel removes this entity, or `NEVER_EXPIRES`. */
   expireTick: number
@@ -145,6 +175,8 @@ export type EntityInit = {
   lastFireTick?: number
   knockbackTicks?: number
   ownerId?: number
+  nextFireTick?: number
+  trBase?: MutVec3
   expireTick?: number
 }
 
@@ -162,7 +194,9 @@ export function spawnEntity(state: GameState, init: EntityInit): EntityState {
     weapon: init.weapon ?? Weapon.None,
     lastFireTick: init.lastFireTick ?? NEVER_FIRED,
     knockbackTicks: init.knockbackTicks ?? 0,
-    ownerId: init.ownerId ?? 0,
+    ownerId: init.ownerId ?? NO_ENTITY,
+    nextFireTick: init.nextFireTick ?? 0,
+    trBase: init.trBase ?? vec3(),
     spawnTick: state.tick,
     expireTick: init.expireTick ?? NEVER_EXPIRES,
   }
@@ -212,6 +246,8 @@ export function cloneEntity(entity: EntityState): EntityState {
     lastFireTick: entity.lastFireTick,
     knockbackTicks: entity.knockbackTicks,
     ownerId: entity.ownerId,
+    nextFireTick: entity.nextFireTick,
+    trBase: [entity.trBase[0], entity.trBase[1], entity.trBase[2]],
     spawnTick: entity.spawnTick,
     expireTick: entity.expireTick,
   }
@@ -280,6 +316,10 @@ export function encodeInto(writer: ByteWriter, state: GameState): void {
     writeI32(writer, entity.lastFireTick)
     writeI32(writer, entity.knockbackTicks)
     writeI32(writer, entity.ownerId)
+    writeI32(writer, entity.nextFireTick)
+    writeF64(writer, entity.trBase[0])
+    writeF64(writer, entity.trBase[1])
+    writeF64(writer, entity.trBase[2])
     writeI32(writer, entity.spawnTick)
     writeI32(writer, entity.expireTick)
   }
@@ -287,7 +327,7 @@ export function encodeInto(writer: ByteWriter, state: GameState): void {
 
 /** The canonical bytes for a state. Allocates; `encodeInto` does not. */
 export function encodeExact(state: GameState): Uint8Array {
-  const writer = createWriter(64 + state.entities.length * 128)
+  const writer = createWriter(64 + state.entities.length * 160)
   encodeInto(writer, state)
   return writtenBytes(writer).slice()
 }
