@@ -33,16 +33,29 @@
  * assuming one.
  */
 import type { LoadedMap, Transport } from '@gladiator/sim'
-import { systemClock } from '@gladiator/server/clock'
+import { systemClock, type Clock } from '@gladiator/server/clock'
 import { createLoopbackPair, type LoopbackPair } from '@gladiator/server/net/loopbackTransport'
 import { createRoom, type Room } from '@gladiator/server/room'
+import { stepsFor } from '@gladiator/server/scheduler'
 
 export type ListenServerOptions = {
   readonly map: LoadedMap
   readonly build: string
   readonly seed?: number
-  /** Seats. One until there is a bot to put in the other. */
+  /** Seats. Two, as on Fly; the bot takes the other one. */
   readonly capacity?: number
+  /** The code this room answers to. Cosmetic in a tab; there is no registry. */
+  readonly id?: string
+  /**
+   * Wall-clock, injected.
+   *
+   * A tab passes nothing and gets `performance.now()`. A test passes its own,
+   * because the host's clock is what the rate limit in front of the input
+   * buffer is measured against (`@gladiator/server/inputQueue.ts`) — and a test
+   * that plays a minute of commands in a millisecond of real time would have
+   * every one of them past the first thirty-two refused at the door.
+   */
+  readonly clock?: Clock
 }
 
 export type ListenServer = {
@@ -57,17 +70,27 @@ export type ListenServer = {
    */
   readonly pair: LoopbackPair
   /**
-   * The host's housekeeping beat: peers that have gone quiet, and the
-   * clock-sync pings.
+   * The host's frame: the sub-steps this much wall-clock is worth, and then the
+   * housekeeping — peers that have gone quiet, and the clock-sync pings.
    *
-   * A `Room` never holds a timer (`@gladiator/server/loop.ts`), so somebody has
-   * to give it one — on Fly that is a `setInterval`, and in a tab it is the
-   * animation frame that is already running. The frame loop calling this is
-   * what makes the tab a *host* rather than a room nobody winds up, and it is
-   * why the clock estimate reads the same ~0 ms here as it would read 40 ms
-   * over a socket, through exactly the same code.
+   * A `Room` never holds a timer (`@gladiator/server/room.ts`), so somebody has
+   * to give it one — on Fly that is `scheduler.ts`'s drift-corrected loop, and
+   * in a tab it is the animation frame that is already running. The frame loop
+   * calling this is what makes the tab a *host* rather than a room nobody winds
+   * up, and it is why the clock estimate reads the same ~0 ms here as it would
+   * read 40 ms over a socket, through exactly the same code.
+   *
+   * The accumulator is `stepsFor`, the same pure fold the Node scheduler uses,
+   * so a tab and a Fly machine turn a frame into sub-steps by one rule rather
+   * than by two that happen to agree. What a tab does *not* need is the aim-at-
+   * the-next-boundary half of that module: `requestAnimationFrame` already
+   * schedules itself against the display, and a second timer chasing 62.5 Hz
+   * inside a 60 Hz frame would be two clocks arguing.
+   *
+   * Returns the sub-steps run, which is what the diagnostics panel reads to say
+   * whether the host in this tab is keeping up.
    */
-  beat(nowMs: number): void
+  beat(nowMs: number): number
   stop(): void
 }
 
@@ -75,24 +98,41 @@ export function createListenServer(options: ListenServerOptions): ListenServer {
   const pair: LoopbackPair = createLoopbackPair()
   const room = createRoom({
     map: options.map,
-    // A real clock, because a listen server is a real host: it is what a peer's
-    // idle timeout is measured against. It never reaches `tick()` — a room's
-    // world advances by commands, which is what makes this room and the one on
-    // Fly produce the same hashes from the same input.
-    clock: systemClock(),
+    // A real clock by default, because a listen server is a real host: it is
+    // what a peer's idle timeout and the input buffer's rate limit are measured
+    // against. It never reaches `tick()` — a room's world advances by the
+    // sub-steps the frame beat hands it, which is what makes this room and the
+    // one on Fly produce the same hashes from the same input.
+    clock: options.clock ?? systemClock(),
     build: options.build,
-    id: 'listen',
+    id: options.id ?? 'LOCAL1',
     ...(options.seed === undefined ? {} : { seed: options.seed }),
     ...(options.capacity === undefined ? {} : { capacity: options.capacity }),
     peerId: (index) => `local-${index}`,
   })
   room.join(pair.server)
 
+  // The previous frame's clock reading, so a beat knows how much wall-clock it
+  // is worth. `null` until the first one: the alternative is a first frame
+  // measured against zero, which is every millisecond since the tab was opened.
+  let lastMs: number | null = null
+  let remainderMs = 0
+
   return {
     transport: pair.client,
     room,
     pair,
-    beat: (nowMs: number) => room.sweep(nowMs),
+
+    beat(nowMs: number): number {
+      const elapsedMs = lastMs === null ? 0 : nowMs - lastMs
+      lastMs = nowMs
+      const fold = stepsFor(remainderMs, elapsedMs)
+      remainderMs = fold.remainderMs
+      const steps = room.advance(fold.steps)
+      room.sweep(nowMs)
+      return steps
+    },
+
     stop: () => pair.close(),
   }
 }

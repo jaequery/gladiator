@@ -1,5 +1,5 @@
 /**
- * The host. One world, the peers connected to it, and nothing else.
+ * The host. One world, the two peers duelling in it, and nothing else.
  *
  * This is the module the whole listen-server pattern turns on: it is the
  * authoritative side of a duel, and it runs unchanged on Fly behind a WebSocket
@@ -18,25 +18,36 @@
  * The two things it deliberately does not do are the two things that would
  * break that:
  *
- * - **It never calls `setInterval`.** A beat is something the host is given
- *   (`loop.ts`), which is what lets a test drive thousands of ticks in
- *   microseconds instead of waiting a minute for a timer.
+ * - **It never calls `setInterval`.** A beat is something the host is given —
+ *   `scheduler.ts` on Fly, the animation frame in a tab — which is what lets a
+ *   test drive thousands of ticks in microseconds instead of waiting a minute
+ *   for a timer.
  * - **It never constructs a server.** It takes transports. `net/wsTransport.ts`
  *   is the thin `ws` adapter on the Node side and `net/loopbackTransport.ts` is
  *   the in-process one, and this module cannot tell them apart.
  *
- * ## The world advances by commands, not by wall-clock
+ * ## The world advances on a schedule, and the schedule is not in here
  *
- * The clock is here for the room's *life* — a peer that has stopped talking —
- * and never reaches `tick()`. That is not squeamishness: it is the property
- * that makes one recorded input stream produce the same final state hash
- * in-process and over a real socket, which is what `net/parity.test.ts`
- * asserts. The moment wall-clock decided how many ticks a batch was worth, the
- * two paths would agree only by luck.
+ * {@link Room.advance} takes a whole number of sub-steps and runs exactly that
+ * many. It does not read a clock to decide how many, and there is no wall-clock
+ * anywhere near `tick()`: the scheduler measures the elapsed time, folds it into
+ * sub-steps (`scheduler.ts`), and hands the count to every room on the machine.
  *
- * The tick scheduler that will eventually drive a room at a steady 125 Hz is
- * GLAD-FHKBN8, and the input-buffer policy in front of it is `inputQueue.ts`.
- * Both hang off this shape rather than replacing it.
+ * That split is what makes a recorded input stream reproducible. A test can run
+ * ten thousand sub-steps at a single instant of its manual clock and get the
+ * same hashes a real server produces over a real minute, which is what
+ * `net/parity.test.ts` asserts — and the moment a room decided for itself how
+ * far to advance, the two would agree only by luck.
+ *
+ * ## Two seats, one command per seat per sub-step
+ *
+ * Each peer has a jitter buffer (`inputQueue.ts`) and every sub-step drains
+ * exactly one command from each. That is the answer to the question a
+ * single-seat room could dodge — whose command does a shared tick carry when
+ * only one of them has sent anything — and the answer is *both*, with a
+ * documented fallback for the one that is silent. A tick never stalls waiting
+ * for a peer, because a stall on one peer's socket is a hitch in the other
+ * peer's game.
  *
  * ## It does hold a stopwatch, and it is the only one
  *
@@ -47,39 +58,36 @@
  * (GLAD-5QGO11), so a client that reported it could ask to be rewound further.
  * A pong is therefore taken off the wire in `receive` and never reaches
  * `session.ts`, which deliberately has no clock to measure with.
- *
- * ## One peer, for now
- *
- * {@link RoomOptions.capacity} defaults to one, and a second peer is refused
- * rather than quietly given a slot. With one peer, "a batch advances the world
- * by its own commands" is unambiguous; with two it is not — whose command does
- * a shared tick carry when only one of them has sent anything? The answer is
- * `inputQueue.ts`: one queue per peer, one command drained from each per tick,
- * and a documented fallback for the one that has sent nothing. Seating the
- * second player is GLAD-FHKBN8, which is the ticket that owns the scheduler
- * doing the draining.
  */
 import {
   CloseReason,
   DUEL_SLOTS,
+  MatchPhase,
   NO_SLOT,
   SKELETON_SEED,
   TransportState,
   UNKNOWN_RTT,
+  buildSpawnPlan,
   createMapState,
   hashState,
   parseClientMessage,
+  snapshotFrame,
+  startMatch,
+  tick as simTick,
   type ClientMessage,
   type GameState,
   type LoadedMap,
+  type MatchRules,
   type ServerMessage,
   type SpawnPlan,
   type Transport,
   type TransportMessage,
+  type UserCmd,
 } from '@gladiator/sim'
 
 import type { Clock } from './clock.ts'
 import { createClockSync, type ServerClockSync } from './clockSync.ts'
+import { createInputQueue, type InputQueue } from './inputQueue.ts'
 import {
   CLOSE_BAD_FRAME,
   CLOSE_ROOM_FULL,
@@ -87,12 +95,19 @@ import {
   createSession,
   rejectBadFrame,
   type ServerIdentity,
-  type SessionSim,
   type SessionState,
 } from './session.ts'
 
 /** How long a peer may say nothing before the room lets go of it. */
 export const DEFAULT_IDLE_TIMEOUT_MS = 60_000
+
+/**
+ * Seats. Two, because the game is a duel.
+ *
+ * Derived from `DUEL_SLOTS` rather than written as `2`, so the one place that
+ * decides how many players a world has is the one place the slots are named.
+ */
+export const DUEL_CAPACITY = DUEL_SLOTS.length
 
 export type RoomOptions = {
   /** The world this room is authoritative over, already loaded and verified. */
@@ -101,11 +116,30 @@ export type RoomOptions = {
   readonly clock: Clock
   /** Which commit. Sent in the welcome so a stale client can be told so. */
   readonly build: string
-  /** Names this room in logs. The room registry that will mint these is GLAD-FHKBN8. */
+  /**
+   * The room code, which is also this room's name in the logs.
+   *
+   * Minted by `rooms.ts`; it is a value here rather than something this module
+   * generates, because a room that minted its own code could not be the same
+   * room a browser tab runs behind a loopback (`roomCode.ts` draws from Web
+   * Crypto, and the listen server has no registry to be unique within).
+   */
   readonly id?: string
   readonly seed?: number
-  /** How many peers may be seated. See the note in the header. */
+  /** How many peers may be seated. Two; see {@link DUEL_CAPACITY}. */
   readonly capacity?: number
+  /** The match this room plays. Defaults to the Rocket Arena best-of-five. */
+  readonly rules?: MatchRules
+  /**
+   * Where a round may stand its players.
+   *
+   * A function of the map, so it costs `spawns² × 9` traces to build and is
+   * worth building once per *map* rather than once per room. The server passes
+   * the one it built at boot (`map.ts`); a caller that does not gets a fresh
+   * one, which is the right default for a test and the wrong one for a registry
+   * minting a room per match.
+   */
+  readonly plan?: SpawnPlan
   readonly idleTimeoutMs?: number
   /**
    * Peer ids, injected.
@@ -135,6 +169,8 @@ export type RoomPeer = {
    * that direction is not negotiable.
    */
   readonly rttMs: number
+  /** Commands buffered for this peer and not yet executed. */
+  readonly queued: number
   readonly open: boolean
   close(code?: number, reason?: string): void
 }
@@ -145,8 +181,13 @@ export type RoomSnapshot = {
   readonly hash: number
   readonly peers: number
   readonly capacity: number
+  readonly phase: MatchPhase
+  readonly round: number
+  /** Commands offered by every peer, whatever became of them. */
   readonly commands: number
   readonly gaps: number
+  /** Sub-steps in which some peer's buffer was empty and the fallback ran. */
+  readonly starved: number
 }
 
 export type Room = {
@@ -167,6 +208,16 @@ export type Room = {
    */
   join(transport: Transport): RoomPeer
   /**
+   * Advance the world by exactly `steps` sub-steps, then tell every peer where
+   * it got to. Returns the steps run.
+   *
+   * The count comes from the scheduler and is never decided here — see the
+   * header. Zero is a legal and common answer: two of every three host frames
+   * at 62.5 Hz are worth two sub-steps and the rest are worth one or three, and
+   * a frame worth none is simply a frame that arrived early.
+   */
+  advance(steps: number): number
+  /**
    * Wall-clock housekeeping: peers that have gone quiet, and the clock-sync
    * pings. Never advances the simulation.
    *
@@ -174,8 +225,6 @@ export type Room = {
    * was given. It is compared against readings this room took itself — when a
    * peer was last heard from, and when a ping went out — and a second clock's
    * origin would make an idle timeout arbitrary and a round trip meaningless.
-   * The beat that supplies it is `loop.ts` on Fly and the animation frame in a
-   * tab.
    */
   sweep(nowMs: number): void
   hash(): number
@@ -189,6 +238,8 @@ type PeerRecord = {
   readonly transport: Transport
   /** Per peer, because a round trip is a property of one link, not of a room. */
   readonly clockSync: ServerClockSync
+  /** Per peer, because a jitter buffer is a property of one link too. */
+  readonly queue: InputQueue
   session: SessionState
   lastHeardMs: number
   open: boolean
@@ -200,28 +251,48 @@ function frameOf(message: ServerMessage): string {
 }
 
 export function createRoom(options: RoomOptions): Room {
-  const capacity = options.capacity ?? 1
+  const capacity = options.capacity ?? DUEL_CAPACITY
   const idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS
   const log = options.log ?? (() => undefined)
   const clock = options.clock
   const id = options.id ?? 'room'
 
-  const identity: ServerIdentity = { build: options.build, mapHash: options.map.hash }
+  const identity: ServerIdentity = {
+    build: options.build,
+    mapHash: options.map.hash,
+    room: id,
+  }
 
   // One world, created once. Which peers exist and when they arrive does not
   // change it — `createMapState` stands a player in slot 0 and the rest of the
-  // round rules are `match/round.ts`'s business, driven by `startMatch` when
-  // there is somebody to start a match for.
-  const state: GameState = createMapState(options.map.source, options.seed ?? SKELETON_SEED)
+  // round rules are `match/round.ts`'s business, driven by `startMatch` once
+  // there are two players to start a match for.
+  const state: GameState = createMapState(
+    options.map.source,
+    options.seed ?? SKELETON_SEED,
+    options.rules,
+  )
 
-  // No spawn plan while nothing has started a match. A world with no match in
-  // it is a match in warmup, which is exactly what the walking skeleton and
-  // every physics test have always been. `sim/src/match/match.ts`.
-  const plan: SpawnPlan | null = null
-  const sim: SessionSim = { state, world: options.map.world, plan }
+  // Level data, like the collision world beside it: a function of the map
+  // alone, never written by a sub-step, and therefore never cloned, hashed or
+  // snapshotted. Built here only when nobody handed one over; see the note on
+  // `RoomOptions.plan`.
+  const plan: SpawnPlan = options.plan ?? buildSpawnPlan(options.map.source, options.map.world)
+  const world = options.map.world
 
   const peers: PeerRecord[] = []
   let joined = 0
+  let starved = 0
+
+  /**
+   * The commands for one sub-step, reused.
+   *
+   * A room ticks 125 times a second for the length of a match and `tick()`
+   * allocates nothing in the steady state; a fresh two-element array per
+   * sub-step would make this the only thing on the authoritative side producing
+   * garbage. Every slot is written before `tick()` reads one.
+   */
+  const inputs: (UserCmd | null)[] = [null, null]
 
   const freeSlot = (): number => {
     for (const slot of DUEL_SLOTS) {
@@ -242,6 +313,9 @@ export function createRoom(options: RoomOptions): Room {
     get rttMs() {
       return record.clockSync.rttMs
     },
+    get queued() {
+      return record.queue.depth
+    },
     get open() {
       return record.open
     },
@@ -260,11 +334,14 @@ export function createRoom(options: RoomOptions): Room {
     record.transport.send(frameOf(message))
   }
 
+  /** Peers whose commands count: seated, still open, and past the handshake. */
+  const playing = (record: PeerRecord): boolean =>
+    record.open && record.session.greeted && !record.session.rejected
+
   const receive = (record: PeerRecord, message: TransportMessage): void => {
-    // Read once, and used for both the idle sweep and the round trip. Two
-    // readings of a clock inside one delivery is two opinions about when the
-    // frame arrived, and the second of them would be the one the RTT is
-    // measured against.
+    // Read once, and used for the idle sweep, the round trip and the rate
+    // limit in front of the input buffer. Two readings of a clock inside one
+    // delivery is two opinions about when the frame arrived.
     const nowMs = clock.nowMs()
     record.lastHeardMs = nowMs
 
@@ -289,10 +366,54 @@ export function createRoom(options: RoomOptions): Room {
     const step =
       parsed === null
         ? rejectBadFrame(record.session)
-        : applyMessage(record.session, parsed, identity)
+        : applyMessage(record.session, parsed, identity, nowMs)
     record.session = step.session
     for (const reply of step.replies) send(record, reply)
     if (step.close !== undefined) record.transport.close(step.close.code, step.close.reason)
+  }
+
+  /**
+   * Start the match once every seat is filled by a peer that has greeted.
+   *
+   * The one edge out of warmup, and it is here rather than in the simulation
+   * because the simulation is not the layer that knows both players have
+   * arrived (`match/round.ts`). Called between sub-steps, never inside one, so
+   * the first tick of round one is a tick both players can act on.
+   */
+  const startWhenFull = (): void => {
+    if (state.match.phase !== MatchPhase.Warmup) return
+    if (peers.filter(playing).length < capacity) return
+    log(`room ${id}: both seats filled, starting the match at tick ${state.tick}`)
+    startMatch(state, plan)
+  }
+
+  /**
+   * Tell every peer where the world got to.
+   *
+   * The hash first, then the state it is the hash of. The order is the one the
+   * walking skeleton was built around: the hash is an *independent* statement
+   * about the authoritative world, and a client comparing it against what it
+   * predicted is the desync canary. Reconciliation reads the second frame; the
+   * instrument reads the first.
+   *
+   * Once per host frame rather than once per sub-step. At 125 Hz a frame per
+   * tick would be 125 frames a second in each direction to say "still fine",
+   * and the client is comparing against its own history anyway — one per host
+   * frame finds a desync within 16 ms of it happening at half the traffic.
+   *
+   * The `ack` is this peer's own, and it is a *client* tick label rather than a
+   * server one: how much of that peer's input is in the world, which is a
+   * different question from how far the world has been advanced. They came
+   * apart the moment this scheduler started draining a buffer at a fixed rate.
+   * `sim/src/protocol.ts` argues it at length under `ServerSnapshot`.
+   */
+  const report = (): void => {
+    const hash = hashState(state)
+    for (const record of peers) {
+      if (!playing(record)) continue
+      send(record, { t: 'hash', tick: state.tick, hash })
+      send(record, snapshotFrame(state, record.queue.executedTick))
+    }
   }
 
   return {
@@ -328,20 +449,31 @@ export function createRoom(options: RoomOptions): Room {
         return {
           id: peerId,
           slot: NO_SLOT,
-          session: createSession(peerId, sim, NO_SLOT),
+          session: createSession(peerId, NO_SLOT),
           lastHeardMs: clock.nowMs(),
           rttMs: UNKNOWN_RTT,
+          queued: 0,
           open: false,
           close: (code = CloseReason.Normal, reason = '') => transport.close(code, reason),
         }
       }
 
+      // The buffer's admission window opens at zero rather than at the world's
+      // current tick, because **a tick label is the peer's, not the world's**.
+      // A client counts its own predicted ticks from one and the server counts
+      // sub-steps from one, and the two numbers are equal only by coincidence —
+      // a player joining a room that has been running for a minute would
+      // otherwise have every command they ever send refused as late. `ack` is
+      // in this space too, which is exactly why it is a separate field from
+      // `state[0]` in a snapshot (`sim/src/protocol.ts`).
+      const queue = createInputQueue()
       const record: PeerRecord = {
         id: peerId,
         slot,
         transport,
         clockSync: createClockSync(),
-        session: createSession(peerId, sim, slot),
+        queue,
+        session: createSession(peerId, slot, queue),
         lastHeardMs: clock.nowMs(),
         open: true,
       }
@@ -359,6 +491,36 @@ export function createRoom(options: RoomOptions): Room {
       })
 
       return viewOf(record)
+    },
+
+    advance(steps: number): number {
+      if (!Number.isInteger(steps) || steps <= 0) return 0
+
+      // An empty room does not tick. A machine holding two hundred rooms that
+      // players have created and not yet joined would otherwise be running
+      // 25,000 sub-steps a second over worlds nobody is in — and a room's tick
+      // counter would stop meaning "how long has this match been running".
+      // A peer that is seated but has not finished the handshake still counts:
+      // it is a player arriving, and the handful of ticks that takes is a
+      // rounding error next to a room sitting empty for a minute.
+      if (peers.length === 0) return 0
+
+      startWhenFull()
+
+      for (let step = 0; step < steps; step += 1) {
+        inputs[DUEL_SLOTS[0]] = null
+        inputs[DUEL_SLOTS[1]] = null
+        for (const record of peers) {
+          if (!playing(record)) continue
+          const taken = record.queue.take()
+          if (taken.consumed === 0) starved += 1
+          inputs[record.slot] = taken.cmd
+        }
+        simTick(state, inputs, world, plan)
+      }
+
+      report()
+      return steps
     },
 
     sweep(nowMs: number) {
@@ -379,18 +541,13 @@ export function createRoom(options: RoomOptions): Room {
 
         // Clock sync rides on the housekeeping beat rather than a timer of its
         // own, for the same reason the room has no timer at all: a beat is
-        // something the host is given (`loop.ts`), so a test drives a
-        // conversation of hundreds of pings in the microseconds it takes to run
-        // them. A peer that has not greeted us is not pinged — it may be a
-        // client one deploy behind that is about to be told so.
+        // something the host is given, so a test drives a conversation of
+        // hundreds of pings in the microseconds it takes to run them. A peer
+        // that has not greeted us is not pinged — it may be a client one deploy
+        // behind that is about to be told so.
         if (!record.session.greeted || record.session.rejected) continue
         if (!record.clockSync.due(nowMs)) continue
-        // Nothing is buffered yet: today a command batch advances the world by
-        // its own commands the moment it lands, so the depth of the jitter
-        // buffer in front of that is zero by construction. The scheduler that
-        // drains `inputQueue.ts` at a steady 125 Hz, and makes this number the
-        // real one, is GLAD-FHKBN8.
-        send(record, record.clockSync.ping(nowMs, state.tick, 0))
+        send(record, record.clockSync.ping(nowMs, state.tick, record.queue.depth))
       }
     },
 
@@ -402,8 +559,11 @@ export function createRoom(options: RoomOptions): Room {
       hash: hashState(state),
       peers: peers.length,
       capacity,
+      phase: state.match.phase,
+      round: state.match.round,
       commands: peers.reduce((total, peer) => total + peer.session.commands, 0),
       gaps: peers.reduce((total, peer) => total + peer.session.gaps, 0),
+      starved,
     }),
 
     close(code = CloseReason.Normal, reason = '') {

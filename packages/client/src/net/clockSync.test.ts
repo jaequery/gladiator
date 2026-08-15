@@ -4,10 +4,12 @@
  * The first describe is the one that matters: a real `server/clockSync.ts`
  * pinging a real `client/net/clockSync.ts` through a real
  * `net/laggedTransport.ts`, at 40, 80 and 180 ms of round trip with jitter on
- * both legs, and the estimate has to land within a tick of the truth. Nothing
- * about that is stubbed except the thing that is somebody else's ticket: a
- * server whose world advances on its own clock at 125 Hz is GLAD-FHKBN8, so the
- * truth here is a tick counter derived from wall-clock rather than a room's.
+ * both legs, and the estimate has to land within a tick of the truth. The truth
+ * is a tick counter derived from wall-clock rather than a room's, which is the
+ * same thing a room's counter now is: `server/src/scheduler.ts` advances every
+ * world by exactly the sub-steps the elapsed wall-clock is worth. What this file
+ * does not carry is the *consumer* of the estimate — the lead the frame loop
+ * slews toward — which is measured end to end in `net/netcode.test.ts`.
  *
  * The second is the other half of the ticket's claim, and it is asserted where
  * a player would see it fail: on the **camera position the renderer is handed**,

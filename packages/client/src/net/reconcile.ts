@@ -46,10 +46,13 @@
  * it has executed (`ServerSnapshot.ack`). Everything after that ack is still
  * ours to replay. The world's tick is adopted as-is: the server is
  * authoritative about what tick it is, and a client that kept its own count
- * would have two answers to a question that only ever has one. Today the two
- * numbers are equal, because a host advances the world by exactly the batch it
- * was handed; when a scheduler drains a jitter buffer at a fixed rate
- * (GLAD-FHKBN8) they will not be, and this is already written for that.
+ * would have two answers to a question that only ever has one.
+ *
+ * The two numbers are *not* equal and are not in the same numbering: the host
+ * advances on its own clock and the ack advances on whatever this peer sent
+ * (`server/src/scheduler.ts`). Which is why the client's *command* counter is a
+ * third number, free-running and steered by the lead, and why `predict` takes a
+ * label rather than reading one off the world it just advanced.
  */
 import {
   EntityKind,

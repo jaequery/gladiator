@@ -99,7 +99,12 @@ describe('the host is isomorphic', () => {
 
   it('reaches the modules it is supposed to, and no more', () => {
     const names = [...modules.keys()].map((path) => relative(HERE, path)).sort()
-    expect(names).toEqual(['clock.ts', 'clockSync.ts', 'room.ts', 'session.ts'])
+    // The list is asserted whole rather than as "none of these are forbidden",
+    // so that a new import into the host is a decision somebody makes on
+    // purpose. `inputQueue.ts` joined it with the tick scheduler: a room drains
+    // one command per peer per sub-step, and the buffer that holds them has to
+    // run in a tab as well.
+    expect(names).toEqual(['clock.ts', 'clockSync.ts', 'inputQueue.ts', 'room.ts', 'session.ts'])
   })
 
   it('names nothing that would pin it to one runtime', () => {

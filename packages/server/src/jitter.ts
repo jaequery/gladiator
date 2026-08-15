@@ -11,9 +11,11 @@
  *
  * This measures it, on whatever machine it is running on, and the number is
  * logged at boot and served from `/healthz`. That is deliberately not the same
- * thing as the tick scheduler, which is GLAD-FHKBN8: this is an instrument, and
- * keeping it separate means the scheduler can be rewritten without losing the
- * baseline it was measured against.
+ * thing as the tick scheduler (`scheduler.ts`), which measures its *own*
+ * lateness while doing real work: this is an instrument with nothing to do, so
+ * it reads the floor the machine offers, and keeping the two apart means the
+ * scheduler can be rewritten without losing the baseline it was measured
+ * against. `measure-jitter.ts` prints both, and `docs/deploy.md` records them.
  */
 import { TICK_INTERVAL_MS } from '@gladiator/sim'
 
@@ -35,6 +37,57 @@ export type JitterProbe = {
   snapshot(): JitterSnapshot
   /** One line, for the boot log. */
   describe(): string
+}
+
+/**
+ * A bounded ring of samples with percentiles over it.
+ *
+ * Factored out because the tick scheduler (`scheduler.ts`) measures the same
+ * quantity about itself — how late its own wakeups are — and "the p99 of a
+ * ring of doubles" implemented twice is two things that can disagree about
+ * whether the 99th percentile is a rank or an interpolation.
+ */
+export type SampleLog = {
+  add(value: number): void
+  readonly count: number
+  readonly mean: number
+  readonly max: number
+  /** The `p`th percentile over the samples still held. */
+  quantile(p: number): number
+}
+
+export function createSampleLog(capacity = HISTORY): SampleLog {
+  const history = new Float64Array(capacity)
+  let count = 0
+  let total = 0
+  let max = 0
+
+  return {
+    add(value: number) {
+      history[count % capacity] = value
+      count += 1
+      total += value
+      if (value > max) max = value
+    },
+
+    get count() {
+      return count
+    },
+
+    get mean() {
+      return count === 0 ? 0 : total / count
+    },
+
+    get max() {
+      return max
+    },
+
+    quantile(p: number): number {
+      const kept = Math.min(count, capacity)
+      const sorted = Array.from(history.subarray(0, kept)).sort((a, b) => a - b)
+      return percentile(sorted, p)
+    },
+  }
 }
 
 /**
@@ -65,10 +118,7 @@ export function createJitterProbe(options: JitterOptions = {}): JitterProbe {
   const schedule = options.schedule ?? ((fn, delayMs) => setTimeout(fn, delayMs))
   const cancel = options.cancel ?? ((handle: NodeJS.Timeout) => clearTimeout(handle))
 
-  const history = new Float64Array(HISTORY)
-  let count = 0
-  let total = 0
-  let max = 0
+  const samples = createSampleLog(HISTORY)
   let handle: NodeJS.Timeout | null = null
   let deadline = 0
 
@@ -76,11 +126,7 @@ export function createJitterProbe(options: JitterOptions = {}): JitterProbe {
     const lateness = now() - deadline
     // Only lateness is interesting: a timer that fires early is a clock going
     // backwards, and clamping keeps one of those from poisoning the mean.
-    const sample = lateness > 0 ? lateness : 0
-    history[count % HISTORY] = sample
-    count += 1
-    total += sample
-    if (sample > max) max = sample
+    samples.add(lateness > 0 ? lateness : 0)
 
     // Absolute deadlines, not `setTimeout(interval)`: relative scheduling adds
     // each wakeup's lateness to the next one, so the measurement would drift
@@ -90,18 +136,14 @@ export function createJitterProbe(options: JitterOptions = {}): JitterProbe {
     handle = schedule(wake, delay > 0 ? delay : 0)
   }
 
-  const takeSnapshot = (): JitterSnapshot => {
-    const kept = Math.min(count, HISTORY)
-    const sorted = Array.from(history.subarray(0, kept)).sort((a, b) => a - b)
-    return {
-      intervalMs,
-      samples: count,
-      meanMs: count === 0 ? 0 : total / count,
-      p50Ms: percentile(sorted, 50),
-      p99Ms: percentile(sorted, 99),
-      maxMs: max,
-    }
-  }
+  const takeSnapshot = (): JitterSnapshot => ({
+    intervalMs,
+    samples: samples.count,
+    meanMs: samples.mean,
+    p50Ms: samples.quantile(50),
+    p99Ms: samples.quantile(99),
+    maxMs: samples.max,
+  })
 
   return {
     start() {

@@ -404,8 +404,9 @@ it, and a bobbing viewmodel is the most moving thing on screen.
 dies, so every animation state can be watched in a real browser. Snapshots do
 now arrive (GLAD-6RT64L) and `net/interpolate.ts` draws whatever is in them, so
 the stand-in is only reached when the buffer holds no other player — which is a
-page with nobody on the other end of it, and will stay reachable until a room
-can seat two peers (GLAD-FHKBN8). It produces `EntityState` and goes through the
+page with nobody on the other end of it: a room whose second seat is still
+empty, or single-player before there is a bot to put in it (GLAD-V7CMHR). It
+produces `EntityState` and goes through the
 same interpolation path a real snapshot pair does, and it never touches
 `GameState` — so the client and the server go on agreeing about the world
 exactly as they did before.

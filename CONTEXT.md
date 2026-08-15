@@ -306,10 +306,38 @@ to advance the world: a room's world is a function of the commands it received,
 which is what makes one recorded input stream produce one hash over a socket and
 in-process.
 
-**Room** — one match's worth of host state, addressed by a room code. Seats
-peers, owns one `GameState`, holds no timer and opens no socket.
+**Room** — one match's worth of host state, addressed by a room code. Seats two
+peers, owns one `GameState`, holds no timer and opens no socket. Advanced by
+`advance(steps)`, which runs exactly the sub-steps it is handed and never reads
+a clock to decide how many. `packages/server/src/room.ts`.
 
-**Room code** — the short string a player sends a friend to be dueled by.
+**Room registry** — every room on the machine, as a `Map` from code to room
+(`packages/server/src/rooms.ts`). One machine, on purpose: two players in a room
+must reach the same process. Mints codes, answers to the ones a human typed, and
+reaps a room nobody has been in for a minute so codes do not leak.
+
+**Room code** — the short string a player sends a friend to be dueled by. Six
+characters of Crockford base32 — the digits and the letters minus I, L, O and U
+— which is exactly 30 bits. Read leniently and written strictly:
+`packages/server/src/roomCode.ts`; the guess rate at this deploy's concurrency
+is `docs/deploy.md`.
+
+**Tick scheduler** — the one timer on the machine
+(`packages/server/src/scheduler.ts`). Wakes ~62.5 times a second aiming at
+absolute boundaries rather than sleeping an interval, folds the elapsed
+wall-clock into whole 8 ms sub-steps, and hands the count to every room.
+Measures how late its own wakeups are and holds them to `WAKEUP_BUDGET_MS`, one
+tick at the 99th percentile.
+
+**Host frame** — one wakeup of the scheduler: 16 ms, which is exactly two
+sub-steps when it arrives on time. A tab's host frame is the animation frame,
+folded by the same `stepsFor`.
+
+**Command tick** — the label a client puts on a command, counted by the client
+and free-running. Not the tick of the world the client predicted, which a
+snapshot overwrites sixty times a second; the two are separate so the lead can
+be steered on one without the other fighting it. `ServerSnapshot.ack` is in this
+numbering.
 
 **Prediction** — the client simulating its own input immediately rather than
 waiting for the server, so movement feels instant

@@ -11,11 +11,12 @@
  * the container ships one file and cannot start with a map that is not the one
  * it was built with.
  *
- * Which map is a hard-coded `testbed` for now. Room-to-map assignment arrives
- * with the room registry (GLAD-FHKBN8), and the arena that will replace this
- * one is GLAD-B8DI4J.
+ * Which map is a hard-coded `testbed`. Every room on the machine plays it, and
+ * the arena that will replace it is GLAD-B8DI4J — a change of *value*, not of
+ * code. Rooms are minted per match (`rooms.ts`) and the map is not, which is
+ * why the spawn plan lives out here beside the world rather than inside a room.
  */
-import { loadMap, type LoadedMap } from '@gladiator/sim'
+import { buildSpawnPlan, loadMap, type LoadedMap, type SpawnPlan } from '@gladiator/sim'
 
 import baked from '../../../maps/baked/testbed.json' with { type: 'json' }
 
@@ -31,3 +32,14 @@ export const SERVER_MAP: LoadedMap = loadMap(baked)
  * behind — it just fails later and much less legibly.
  */
 export const SERVER_MAP_HASH: string = SERVER_MAP.hash
+
+/**
+ * Every pair of points a round may legally start from, worked out once.
+ *
+ * `spawns² × 9` traces with the real player box, and a function of the map
+ * alone — so it is built here, at module load, and shared by every room on the
+ * machine. Building it per room would be paying a level-design question over
+ * again for each match, and a machine minting rooms would pay it repeatedly for
+ * an answer that cannot change. `sim/src/match/spawn.ts`.
+ */
+export const SERVER_PLAN: SpawnPlan = buildSpawnPlan(SERVER_MAP.source, SERVER_MAP.world)

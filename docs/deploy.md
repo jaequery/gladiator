@@ -146,36 +146,144 @@ and a shared-CPU cloud instance competing for a hyperthread can be much later
 than asked. A p99 above one tick means the server's idea of "now" lurches, which
 players see as the world stuttering — and it is invisible on an idle laptop.
 
-So it is measured, on whatever machine is actually running:
+### The budget: **p99 wakeup lateness ≤ 8 ms**, one tick
+
+`WAKEUP_BUDGET_MS` in `packages/server/src/scheduler.ts`, and the reasoning is
+the reason it is written down rather than assumed. A wakeup late by less than a
+tick lands in the same 8 ms the world was going to be advanced through anyway:
+the accumulator hands the missing milliseconds to the next frame and the tick
+count over any second is unchanged. Past one tick, one wakeup in a hundred is a
+whole sub-step behind where it believed it was, and every snapshot that frame
+produces is a tick stale for everyone in every room on the machine.
+
+A **p99** rather than a maximum, because a maximum on a shared vCPU measures the
+worst steal event in the sample window and nothing else, and a budget blown by
+one 40 ms hiccough an hour is a budget nobody can act on. The max is recorded
+beside it because a *very* large one means something different — a GC pause or a
+machine being descheduled — and `resyncs` next to it says how often the
+scheduler had to give up on a boundary and re-aim.
+
+### Measuring it
+
+Two numbers, and the second is the one the budget is about.
+
+- **The bare timer** (`jitter.ts`) asks to be woken every 8 ms with nothing to
+  do when it is. That is the floor: what the kernel and Node's event loop cost
+  on this machine.
+- **The tick scheduler** (`scheduler.ts`) is what actually runs, doing what it
+  actually does — N rooms of two players, advanced in exact 8 ms sub-steps at
+  62.5 Hz. A scheduler that wakes on time and then takes 12 ms to tick its rooms
+  is a scheduler whose *next* wakeup is late, and a probe with nothing to do
+  would never see it.
 
 ```sh
-# locally
-pnpm --filter @gladiator/server run jitter -- --seconds 60
+# locally, or over `flyctl ssh console` on the real machine class
+pnpm --filter @gladiator/server run jitter -- --seconds 60 --rooms 50
 
-# on the real machine class, live
-curl -sf https://gladiator.fly.dev/healthz | jq .jitter
+# on the real machine class, live, while players are on it
+curl -sf https://gladiator.fly.dev/healthz | jq '.scheduler, .jitter'
 
 # and in the log, at boot and on SIGTERM
-flyctl logs --app gladiator | grep 'wakeup jitter'
+flyctl logs --app gladiator | grep -E 'wakeup|tick scheduler'
 ```
 
-`/healthz` carries a live snapshot, so the p99 on the machine serving players is
-one `curl` away, and the process logs the same line at boot and on SIGTERM.
+`/healthz` carries a live snapshot of both, including `scheduler.withinBudget` —
+the deploy's own verdict — so the p99 on the machine serving players is one
+`curl` away. The process logs the same lines at boot and on SIGTERM, and
+`pnpm --filter @gladiator/server run jitter` exits non-zero when the loaded p99
+is over budget, so it can be a gate rather than a reading.
 
 ### Recorded measurements
 
-| Where                                              | Samples | p50      | p99      | max      | mean     |
-| -------------------------------------------------- | ------- | -------- | -------- | -------- | -------- |
-| Dev box — Linux x64, Node 20.20.2, under load       | 5625    | 0.000 ms | 2.833 ms | 6.274 ms | 0.230 ms |
-| Fly `shared-cpu-1x`                                 | —       | —        | —        | —        | —        |
+| Where | Load | Frames | p50 | p99 | max | resyncs | dropped | Rate |
+| ----- | ---- | ------ | --- | --- | --- | ------- | ------- | ---- |
+| Dev box — Linux x64, Node 20.20.2, 8 cores idle | 8 rooms | 1250 | 0.000 ms | 1.851 ms | 2.955 ms | 0 | 0 ms | 125.0 Hz |
+| Dev box — same, with 4 busy-loops competing | 50 rooms | 3745 | 0.000 ms | 2.330 ms | 11.976 ms | 3 | 0 ms | 125.0 Hz |
+| Fly `shared-cpu-1x` | — | — | — | — | — | — | — | — |
 
-The dev-box row was taken with a headless-browser end-to-end run in progress on
-the same machine, so it is a loaded number rather than a best case. Even so a
-p99 of 2.8 ms is a third of a tick, and the max of 6.3 ms stays inside one.
+The bare timer on the same runs was p99 3.4 ms idle and 7.4 ms under
+contention, with a max of 37.5 ms — so the *scheduler* is quieter than the probe
+that measures the floor, which is what aiming at absolute boundaries buys: a
+late wakeup shortens the next sleep instead of being added to it.
+
+Both loaded rows hold **exactly 125.0 Hz** and drop no simulated time. Fifty
+rooms is a hundred connections, which is half of `fly.toml`'s `hard_limit`.
 
 **The Fly row is empty and has to be filled in from the first deploy.** It is
 the number the whole measurement exists for — `shared-cpu-1x` is where CPU steal
-lives — and a laptop measures a laptop.
+lives — and a laptop measures a laptop. Take it with the `flyctl ssh console`
+line above, or read `scheduler` off `/healthz` once there is traffic.
+
+### When it is over budget
+
+In order, cheapest first:
+
+1. **Check `resyncs` and `droppedMs`.** Nonzero `droppedMs` means the machine
+   stalled for longer than 250 ms and simulated time was thrown away; that is a
+   different problem from ordinary lateness and usually means GC or eviction.
+2. **Raise the machine class.** `shared-cpu-1x` is the cheapest thing Fly sells
+   and the one most exposed to steal. `performance-1x` is a dedicated core.
+3. **Do not raise `HOST_FRAME_MS`.** A slower host frame makes each wakeup do
+   more work and hides lateness in the accumulator rather than removing it; the
+   snapshots simply arrive in bigger lumps.
+
+---
+
+## Room codes
+
+A match is addressed by six characters of Crockford base32 —
+`0123456789ABCDEFGHJKMNPQRSTVWXYZ`, the digits and the letters minus **I**,
+**L**, **O** and **U**. The first three go because a person reading a code off a
+screen cannot tell them from `1` and `0`; `U` goes so that no draw can spell an
+obscenity, which matters for a string strangers send each other.
+`packages/server/src/roomCode.ts` reads leniently and writes strictly: lower
+case folds up, `O`/`I`/`L` fold to their digits, hyphens and spaces are dropped,
+and a `U` is refused rather than folded — it is not ambiguous with anything, so
+a `U` is a typo or a guess, and mapping it to something would turn a wrong code
+into a *different room*.
+
+### How guessable one is
+
+Six symbols from a 32-symbol alphabet is **32⁶ = 1,073,741,824 codes, exactly 30
+bits**. The number that matters is not the size of the space but the chance a
+guess lands in the *occupied* part of it, and a guess costs a WebSocket upgrade:
+
+| Live rooms | Chance per guess | At 10 guesses/s | At 100 guesses/s |
+| ---------- | ---------------- | --------------- | ---------------- |
+| 1          | 9.3 × 10⁻¹⁰      | 3.4 years       | 124 days         |
+| 100        | 9.3 × 10⁻⁸       | 12.4 days       | 30 hours         |
+| 200 (`MAX_ROOMS`) | 1.9 × 10⁻⁷ | 6.2 days        | 15 hours         |
+
+`MAX_ROOMS` is 200, which is `fly.toml`'s `hard_limit` on *connections* — so it
+is the number of rooms that could exist if every connection opened one and
+nobody ever joined an existing match. It is the worst case, not a capacity plan.
+The arithmetic is `guessProbability` and `expectedGuessSeconds` in `roomCode.ts`
+and it is asserted in `roomCode.test.ts`, so the table above is a number this
+suite can be pointed at rather than a claim somebody made once.
+
+A code is **not a credential** and this is not a security boundary. What the
+table says is that at this deploy's size, an attacker spending an upgrade per
+guess needs days to walk into one stranger's duel — and that they would then be
+told the room is full, because a duel seats two. Connection-level rate limiting
+that would make it worse for them is GLAD-V7M6PQ.
+
+### Why the registry is a `Map` on one machine
+
+Two players in one room have to reach the *same process*, because a room is a
+live `GameState` being advanced 125 times a second and there is no version of
+that which shards. A registry in Redis would tell a second machine which code
+belonged to which room and then have nothing useful to do with the answer. So
+v1 pins to one machine — `min_machines_running = 1` with
+`auto_stop_machines = "off"` — and the registry is an in-memory `Map`, which is
+definitionally consistent because there is only one of it. Scaling out needs a
+room-to-machine directory and a way to route an upgrade at it, and that is
+GLAD-G41FQ9's.
+
+Rooms do not leak: one with no peers in it for a minute is closed and forgotten
+(`EMPTY_ROOM_TTL_MS`). That is deliberately blunt — *when* a peer counts as
+gone, whether a disconnected player may come back to the same room, and what a
+forfeit does to the score are the connection lifecycle's questions
+(GLAD-DVDV6P), and that ticket will want a longer grace period than this.
 
 ---
 

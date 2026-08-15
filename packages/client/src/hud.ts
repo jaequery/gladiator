@@ -41,6 +41,24 @@ export type HudModel = {
   readonly pending: number
 }
 
+/**
+ * How much disagreement is ordinary, as a fraction of the hashes compared.
+ *
+ * Not zero, and the reason is the jitter buffer. A hash frame says what the
+ * *host* simulated; the client's ring says what it predicted. Those differ
+ * whenever the host had no command for a sub-step and ran the fallback, or had
+ * two and merged them (`@gladiator/server/inputQueue.ts`) — which is the buffer
+ * doing its job rather than a simulation disagreeing, and reconciliation
+ * corrects it within a frame.
+ *
+ * So the indicator judges a *rate*. Two percent is comfortably above what a
+ * link this game targets produces (measured at 0.1% on a LAN and under 5% at
+ * 80 ms) and far below what a real desync looks like, which is every hash after
+ * the first bad one. A light that went red on one late packet is a light nobody
+ * reads.
+ */
+export const MISPREDICTION_TOLERANCE = 0.02
+
 export type Hud = {
   update(model: HudModel): void
   /** A fatal message, in place of everything else. */
@@ -153,6 +171,7 @@ export function createHud(root: HTMLElement): Hud {
         setText(agreementValue, '—')
         setState(agreementValue, 'unknown')
       } else {
+        const rate = net.compared === 0 ? 0 : net.mismatched / net.compared
         setText(
           agreementValue,
           `${net.agree ? 'MATCH' : 'MISMATCH'} · ${net.compared} compared, ${net.mismatched} mismatched` +
@@ -160,7 +179,7 @@ export function createHud(root: HTMLElement): Hud {
             (model.corrected > 0 ? `, ${model.corrected} corrected` : '') +
             (model.pending > 0 ? `, ${model.pending} unacked` : ''),
         )
-        setState(agreementValue, net.agree && net.mismatched === 0 ? 'match' : 'mismatch')
+        setState(agreementValue, rate <= MISPREDICTION_TOLERANCE ? 'match' : 'mismatch')
       }
 
       setText(rttValue, net.rttMs === null ? '—' : `${Math.round(net.rttMs)} ms`)

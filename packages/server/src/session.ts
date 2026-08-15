@@ -1,99 +1,92 @@
 /**
- * One connected peer, and the rules for advancing the world it is playing in.
+ * One connected peer: the handshake, and the door its commands come in through.
  *
- * Written as a pure state machine — `(session, frame) -> { session, replies }`
- * — with no socket anywhere in sight, because the interesting failure modes
- * (a command batch with a gap in it, a client one deploy behind, a hostile
- * frame) are all much easier to test than to reproduce over a network.
+ * Written as a pure state machine — `(session, frame, nowMs) -> { session,
+ * replies }` — with no socket anywhere in sight, because the interesting
+ * failure modes (a client one deploy behind, a batch with a gap in it, a
+ * hostile frame) are all much easier to test than to reproduce over a network.
  *
- * The world it advances is handed in rather than constructed here
- * ({@link SessionSim}), and which slot a peer's commands land in is a field
- * rather than a constant. Both are what let `room.ts` be the thing that owns a
- * world and hand the same one to more than one peer (GLAD-FHKBN8), and what
- * keeps this module free of any particular map — which is what makes it
- * isomorphic, and therefore what makes the listen server possible.
+ * ## What it does *not* do any more
  *
- * ## The advance rule
+ * It does not tick the world. Until GLAD-FHKBN8 a command batch advanced the
+ * simulation by exactly its own commands, the moment it landed, and the reply
+ * was the hash and the snapshot of what that produced. That rule is what made a
+ * room single-seat: with two peers, "the world advances by the batch it was
+ * handed" has no answer — whose batch does a shared tick carry when only one of
+ * them has sent anything?
  *
- * **A command batch advances the world by exactly its own commands.** The
- * simulation is not driven by wall-clock here at all: no clock reading reaches
- * `tick()`, so one recorded input stream produces the same state hash whether
- * it arrived over a socket or across an in-process loopback. That equality is
- * what `net/parity.test.ts` asserts, and it is the property the whole
- * listen-server pattern rests on.
+ * The answer is the one `inputQueue.ts` argues for. A batch is now *admitted*
+ * to this peer's jitter buffer and nothing else happens; the world is advanced
+ * by the tick scheduler (`scheduler.ts`), which drains one command from every
+ * peer per sub-step, and the hash and the snapshot go out once per host frame
+ * from `room.ts`. So this file's whole share of a command is the door policy:
+ * has this peer said hello, does the batch follow on from the last one, and
+ * what did the buffer make of each command in it.
  *
- * The buffering policy that sits in front of this — how far ahead a peer may
- * run, what a tick does when its buffer is empty, how many commands a second a
- * peer may have executed — is `inputQueue.ts`, and the tick scheduler that will
- * drain it at a steady 125 Hz is GLAD-FHKBN8. Until that scheduler exists the
- * rule above is still the one in force: a batch advances the world by its own
- * commands, the moment it lands.
+ * ## The clock arrives as an argument
+ *
+ * `nowMs` is passed in, as it is everywhere on the authoritative side, because
+ * the rate limit in front of the buffer is measured in commands per wall-clock
+ * second and this module must still run inside a browser tab.
+ * `room.isomorphic.test.ts` fails the build on a `Date.now()` reachable from
+ * `room.ts`.
  */
 import {
   PROTOCOL_VERSION,
   type ClientMessage,
-  type CollisionWorld,
-  type GameState,
   type ServerMessage,
-  type SpawnPlan,
-  type UserCmd,
   decodeCmd,
-  hashState,
   parseClientMessage,
-  tick as simTick,
-  snapshotFrame,
 } from '@gladiator/sim'
+
+import { CommandFate, createInputQueue, type InputQueue } from './inputQueue.ts'
 
 /**
  * What the server tells a client about itself at the handshake.
  *
- * Two strings that both answer "are we the same deploy", from two angles.
- * `build` is which commit; `mapHash` is which world. Passed as one value
- * rather than two positional strings, because two adjacent strings of the same
- * type is a swap waiting to happen and the swap would not fail a typecheck.
+ * Three strings that answer "are we the same deploy, and which match is this",
+ * from three angles. `build` is which commit; `mapHash` is which world; `room`
+ * is which code this peer ended up in — the host's own answer, so a player who
+ * created a match can be shown the code to send rather than having to invent
+ * one. Passed as one value rather than three positional strings, because three
+ * adjacent strings of the same type is a swap waiting to happen and the swap
+ * would not fail a typecheck.
  */
 export type ServerIdentity = {
   readonly build: string
   /** `map/load.ts`: eight hex digits over the map's content. */
   readonly mapHash: string
-}
-
-/**
- * The world a session advances, and the level data beside it.
- *
- * The same object is shared by every peer in a room — one world, several
- * players — which is why `state` is a reference rather than something this
- * module creates.
- */
-export type SessionSim = {
-  /**
-   * The room's world.
-   *
-   * `readonly` on the *reference* only: `tick()` advances a `GameState` in
-   * place (see `AGENTS.md`), so the object a step returns is the same object it
-   * was given, with new numbers in it. A caller that needs the state as it was
-   * before calls `cloneGameState` itself.
-   */
-  readonly state: GameState
-  readonly world: CollisionWorld
-  /** Where a round may stand its players, or `null` for a world in warmup. */
-  readonly plan: SpawnPlan | null
+  /** The room code. `roomCode.ts`. */
+  readonly room: string
 }
 
 export type SessionState = {
   readonly id: string
   /** Which player slot this peer's commands land in. */
   readonly slot: number
-  readonly sim: SessionSim
-  /** The last tick this session has simulated. Always `sim.state.tick`. */
-  readonly tick: number
+  /**
+   * This peer's jitter buffer.
+   *
+   * A live object held by reference rather than a value carried through the
+   * fold: it is a buffer, and the room drains it from the other side on every
+   * sub-step. Everything else in this state is a value, and the split is the
+   * honest one — the handshake is a state machine and the buffer is a queue.
+   */
+  readonly queue: InputQueue
   readonly greeted: boolean
   /** Set once the client has proven it is not the deploy we are: wrong
    *  protocol, or a different map. */
   readonly rejected: boolean
-  /** Command batches whose `startTick` did not follow on from `tick`. */
+  /** Command batches whose `startTick` did not follow on from the last one. */
   readonly gaps: number
+  /** Commands offered to the buffer, whatever became of them. */
   readonly commands: number
+  /** Commands the buffer took. */
+  readonly accepted: number
+  /** Commands the buffer turned away: duplicate, late, overflowing or too fast. */
+  readonly refused: number
+  /** The highest tick label this peer has offered. Zero before the first. */
+  readonly lastOfferedTick: number
 }
 
 export type SessionStep = {
@@ -118,38 +111,46 @@ export const CLOSE_MAP_MISMATCH = 4004
 /** Close code for a peer arriving at a room that has no seat for it. */
 export const CLOSE_ROOM_FULL = 4005
 
-export function createSession(id: string, sim: SessionSim, slot = 0): SessionState {
+/**
+ * Close code for a room code that names no room.
+ *
+ * Its own code rather than a reused 4005, because the two are different
+ * sentences to a player — "that match is full" and "that match does not exist,
+ * check the code" — and a client that had to guess between them would show the
+ * wrong one.
+ */
+export const CLOSE_NO_SUCH_ROOM = 4006
+
+export function createSession(id: string, slot = 0, queue = createInputQueue()): SessionState {
   return {
     id,
     slot,
-    sim,
-    tick: sim.state.tick,
+    queue,
     greeted: false,
     rejected: false,
     gaps: 0,
     commands: 0,
+    accepted: 0,
+    refused: 0,
+    lastOfferedTick: 0,
   }
 }
 
 /**
  * Apply one already-parsed frame.
  *
- * The reply to a command batch is a hash and a snapshot, both at the last tick
- * applied — not one per tick. At 125 Hz a frame per tick would be 125 frames a
- * second in the other direction to say "still fine", and the client is
- * comparing against its own history anyway, so one per batch finds a desync
- * within a frame of it happening at a fraction of the traffic.
- *
- * The hash comes first, and the order is not cosmetic. It is the canary the
- * walking skeleton was built around: it says whether the world the client
- * *predicted* matched, which is a question that stops having an answer the
- * moment the snapshot behind it has been adopted. Reconciliation reads the
- * second frame; the instrument reads the first.
+ * A `cmds` batch is answered with **nothing**. The acknowledgement a client
+ * needs — the hash, and the authoritative world behind it — is a statement
+ * about the world at the tick the *scheduler* has reached, so it is sent once
+ * per host frame by `room.ts` rather than once per batch by whoever happened to
+ * send one. A batch that produced a reply of its own would be a second, faster
+ * clock in the same conversation.
  */
 export function applyMessage(
   session: SessionState,
   message: ClientMessage,
   identity: ServerIdentity,
+  nowMs: number,
 ): SessionStep {
   if (message.t === 'hello') {
     if (message.protocol !== PROTOCOL_VERSION) {
@@ -198,6 +199,7 @@ export function applyMessage(
           build: identity.build,
           session: session.id,
           mapHash: identity.mapHash,
+          room: identity.room,
         },
       ],
     }
@@ -219,42 +221,38 @@ export function applyMessage(
   // measurement, not a session.
   if (message.t === 'pong') return { session, replies: [] }
 
-  // A batch that does not start where we left off means frames were lost or
-  // reordered. Counted rather than corrected, and reconciliation does not
-  // rescue it either (GLAD-6RT64L): a command the host never received
-  // renumbers every tick after it, so quietly renumbering here would hide the
-  // desync rather than fix it. The transport is TCP and does not lose frames;
-  // a gap means somebody is speaking a protocol this one is not.
-  const gapped = message.startTick !== session.tick + 1
+  // A batch that does not follow on from the last one means frames were lost or
+  // reordered. Counted rather than corrected: the transport is TCP and does not
+  // lose frames, so a gap means somebody is speaking a protocol this one is
+  // not. What a *command* out of order costs is `inputQueue.ts`'s business and
+  // is answered there — kept if its moment has not passed, dropped if it has.
+  const gapped = message.startTick !== session.lastOfferedTick + 1
 
-  // One command per sub-step, into this peer's slot. The array is reused across
-  // the batch: `tick()` allocates nothing in the steady state, and a server
-  // running rooms at 125 Hz should not be the thing that makes garbage.
-  const { state, world, plan } = session.sim
-  const inputs: (UserCmd | null)[] = []
-  for (const wire of message.cmds) {
-    inputs[session.slot] = decodeCmd(wire)
-    simTick(state, inputs, world, plan)
+  let accepted = 0
+  let refused = 0
+  let lastOfferedTick = session.lastOfferedTick
+  for (let index = 0; index < message.cmds.length; index += 1) {
+    const wire = message.cmds[index]
+    // The tick a command carries is the one the client predicted it into, and
+    // the batch numbers from `startTick` upward. It admits the command and
+    // orders the buffer; it does not schedule it. See `inputQueue.ts`.
+    const tick = message.startTick + index
+    const fate = session.queue.offer(tick, decodeCmd(wire), nowMs)
+    if (fate === CommandFate.Queued) accepted += 1
+    else refused += 1
+    if (tick > lastOfferedTick) lastOfferedTick = tick
   }
-
-  // The client's own label for the last command in this batch. Not
-  // `state.tick`: the two agree only while the world is advanced by exactly the
-  // batch it was handed, and a client that inferred one from the other would
-  // replay the wrong commands the day a scheduler drains a buffer instead
-  // (GLAD-FHKBN8). See `ServerSnapshot.ack`.
-  const ackTick = message.startTick + message.cmds.length - 1
 
   return {
     session: {
       ...session,
-      tick: state.tick,
       gaps: session.gaps + (gapped ? 1 : 0),
       commands: session.commands + message.cmds.length,
+      accepted: session.accepted + accepted,
+      refused: session.refused + refused,
+      lastOfferedTick,
     },
-    replies: [
-      { t: 'hash', tick: state.tick, hash: hashState(state) },
-      snapshotFrame(state, ackTick),
-    ],
+    replies: [],
   }
 }
 
@@ -279,8 +277,9 @@ export function applyFrame(
   session: SessionState,
   raw: string,
   identity: ServerIdentity,
+  nowMs: number,
 ): SessionStep {
   const message: ClientMessage | null = parseClientMessage(raw)
   if (message === null) return rejectBadFrame(session)
-  return applyMessage(session, message, identity)
+  return applyMessage(session, message, identity, nowMs)
 }
