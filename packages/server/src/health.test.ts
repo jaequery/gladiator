@@ -26,6 +26,7 @@ const ROOMS: RegistryStats = {
   created: 9,
   reaped: 6,
   missed: 1,
+  faulted: 0,
 }
 
 const QUEUE: QueueStats = {
@@ -127,6 +128,7 @@ describe('the /healthz body', () => {
     map: { name: 'ra1', hash: 'deadbeef' },
     startedAtMs: NOW - 90_000,
     sessions: 6,
+    addresses: 12,
     jitter: { intervalMs: 8, samples: 1000, meanMs: 0.1, p50Ms: 0, p99Ms: 2, maxMs: 9 },
     traffic: { bytesIn: 10, bytesOut: 20, messagesIn: 1, messagesOut: 2 },
     canResume: true,
@@ -151,6 +153,10 @@ describe('the /healthz body', () => {
       recording: false,
       uptimeSeconds: 90,
       sessions: 6,
+      // Served rather than only logged: a number that only ever grows is the
+      // signature of an address-forging flood, and the operator watching one
+      // happen should not have to open a socket to see it. GLAD-V7M6PQ.
+      addresses: 12,
     })
     // `scripts/verify-deploy.sh` reads these two, so they are contract rather
     // than decoration.

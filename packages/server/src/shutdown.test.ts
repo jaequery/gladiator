@@ -74,6 +74,7 @@ function registry(
       created: 0,
       reaped: 0,
       missed: 0,
+      faulted: 0,
     }),
     closeAll: (code = CloseReason.Normal, reason = '') => {
       closedWith = { code, reason }

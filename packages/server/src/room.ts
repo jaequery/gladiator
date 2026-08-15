@@ -118,7 +118,9 @@ import {
 } from './lifecycle.ts'
 import type { Uint32Source } from './roomCode.ts'
 import {
-  CLOSE_BAD_FRAME,
+  // No `CLOSE_BAD_FRAME` here: the binary-frame refusal it used to name moved
+  // to the door, and `validate.ts` closes with it now. Same code, same fault
+  // text, one layer earlier — which is the point of having a door.
   CLOSE_MATCH_ENDED,
   CLOSE_REPLACED,
   CLOSE_ROOM_FULL,
