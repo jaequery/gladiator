@@ -22,6 +22,7 @@
     "map:bake": "tsx tools/bake-map.ts",
     "nav:bake": "tsx tools/nav-bake.ts",
     "audio:bake": "tsx tools/synth-audio.ts",
+    "lightmap:bake": "tsx tools/bake-lightmap.ts",
     "audio:verify": "node scripts/audio-check.mjs",
     "assets:build": "tsx tools/assets-build.ts",
     "assets:budget": "tsx tools/assets-budget.ts",

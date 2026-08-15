@@ -157,6 +157,17 @@ with `applyByPostProcess` left off, Babylon folds ACES into each material's
 fragment shader, so it costs a few instructions rather than a round trip
 through a render target.
 
+**The agreed count is zero, and it is locked from both ends.** ESLint refuses
+the names in `packages/client` — `PostProcess`, `DefaultRenderingPipeline`,
+`FxaaPostProcess` and the rest — with the reason in the message, and
+`scripts/guardrails.mjs` writes a file that uses them and fails if lint accepts
+it. `render/postprocess.test.ts` then asserts the *built* scene: no pass on the
+camera, no pass on the scene, no rendering pipeline registered, and
+`applyByPostProcess` still off. The first stops a pass being imported; the
+second stops one being attached by something that was.
+
+The look is bought somewhere else instead. §12.
+
 Other settings worth knowing:
 
 | Setting | Value | Why |
@@ -372,3 +383,132 @@ GLAD-FHKBN8 and GLAD-6RT64L deliver real snapshots. It produces `EntityState`
 and goes through the same interpolation path a real snapshot pair will, and it
 never touches `GameState` — so the client and the server go on agreeing about
 the world exactly as they did before.
+
+---
+
+## §12 The light is baked, so the arena has none
+
+The single biggest thing in this renderer's budget was, until this ticket, a
+light loop running over every fragment of the biggest object on screen. The
+arena is static and small, so all of that can be computed once, offline, and
+read back out of a texture for nothing.
+
+`pnpm lightmap:bake` traces `maps/baked/*.json` into
+`assets/textures/*_lightmap.png`, which `pnpm assets:build` compresses to a
+`.ktx2`. Both are committed, the same arrangement and for the same reason as
+`maps/baked/`. What goes into the trace is in `tools/bake-lightmap.ts`; three
+things about the *result* bind everything else in this directory.
+
+**The arena's materials have `disableLighting` on.** Babylon skips the light
+loop entirely — no attenuation, no `N·L`, no per-light uniform rebind — because
+every photon is already in the atlas. There is exactly one real-time light left
+in the game, a hemispheric fill, and the arena is **excluded from it**: it is
+there for the two things a bake cannot cover, which are the opponent's model
+and your own hands.
+
+**The albedo rides in `emissiveColor`.** This looks like a mistake and is not.
+Babylon computes `finalDiffuse = clamp(diffuseBase·diffuseColor + emissiveColor
++ vAmbientColor)·baseColor`, and `vAmbientColor` is
+`scene.ambientColor · material.ambientColor` — a *scene*-wide multiplier the
+player models and the viewmodel are also tuned against. Putting the arena's
+albedo through it would mean that re-grading how a model reads in shadow
+silently re-graded every wall in the level. `emissiveColor` reaches the same sum
+and is per-material, so the two are decoupled. With the light loop off it is not
+emission in any physical sense; it is simply the term that survives. The whole
+chain is then Quake's:
+
+```
+colour = albedo x detail texture x lightmap
+```
+
+**A map may now carry as many lights as it likes.** Before the bake the renderer
+drew the first four and silently dropped the rest, so a map's `lights` list was
+a budget. Now nothing reads it at run time and it is a description:
+`maps/arena1.ts` has seven, and four of them exist to light *vertical* surfaces,
+which a ceiling lamp cannot — a single overhead light leaves every wall at `N·L`
+of nearly zero and the tower in the middle of the arena goes black.
+
+### The materials
+
+`render/materials.ts` is the catalogue: five looks — `concrete`, `metal`,
+`trim`, `glass`, `light` — behind the logical names a map writes in
+`MapSurface.material`. A lightmapped world is a world of albedo, so what a
+material *is* here is which detail texture tiles across it, how much of the
+map's tint reaches it, whether it is see-through and whether it makes its own
+light. Gloss and specular are not knobs any more, because there is no run-time
+light for a highlight to answer to.
+
+`light` is the one surface the bake does not touch. Nothing lights a light: a
+lightmap multiplies what it is attached to, so a lamp panel in an otherwise dark
+corner would be baked *dark*. `takesLightmap` is where that decision lives and
+`MapMesh.lightmapped` is the list the renderer hands to `applyLightmap`.
+
+### The atlas is shared code, not a shared convention
+
+Where each face's light lives is `packages/sim/src/map/lightmapUv.ts`, and it is
+in the simulation package on purpose: the baker and the browser both call it, so
+they cannot disagree about which wall a texel belongs to. That failure mode is
+`docs/assets.md` §3's — a *plausible* picture rather than a broken one — and one
+function imported twice is the only fix that survives someone in a hurry.
+
+The unwrap gives every brush face its own rectangle, packed on shelves, at eight
+Quake units per texel. Two details are load-bearing: a face's extremes map to the
+**centres** of the first and last texel of its rectangle, so a bilinear tap can
+never reach the neighbour packed against it; and the atlas *height* is derived
+rather than authored, so the artifact carries no rows of black texels nobody has
+a use for.
+
+---
+
+## §13 The effects, which are a fold and not a callback
+
+`render/fx.ts`. Three effects and a mark: a rocket trail, an explosion, a rail
+beam, and the scorch each one leaves.
+
+It is `audio/cues.ts`'s twin, built the same way and for the same reason. The
+tempting shortcut is to spawn an explosion where one is *caused* — in the weapon
+code, in the input handler — and every version of that is a guess about a
+simulation that is authoritative somewhere else. So the input is what the
+renderer is already drawing, and the output is a list of events:
+
+- **a rocket detonated** is a rocket id that was in the last frame's list and is
+  not in this one's. `GameState` removes a rocket on the tick it explodes and
+  sends nothing else, so its absence *is* the event.
+- **somebody fired** is `lastFireTick` differing from the one last seen, which
+  is the same edge the fire sound is played on.
+- and a player or a rocket seen for the *first* time produces nothing at all,
+  which is what stops a client joining mid-flight from detonating every rocket
+  in the air at once.
+
+The one thing the fold cannot derive is where a shot landed, because a railgun
+is hitscan and leaves no entity behind. The trace comes in as a parameter, and
+`main.ts` passes the simulation's own `traceRay` over the map the client is
+ticking — so a beam stops at the wall the shot stopped at rather than at a wall
+the renderer guessed.
+
+### Ours, not Babylon's, because of the clock
+
+Every particle ages against `tick + alpha` — the simulation's clock and the
+accumulator's remainder — exactly like `animState.ts` and `viewmodel.ts`. Two
+clients drawing the same tick at 60 Hz and at 240 Hz draw the same explosion.
+Babylon's `ParticleSystem` ages itself from the engine's frame delta, which
+would be a second clock in the one part of this program that is allowed none
+(§1).
+
+What is there instead is three meshes of camera-facing quads whose vertices are
+rewritten each frame — one draw call per blend mode, no instancing extension,
+and not a single allocation after construction. The pools are fixed and
+round-robin, so a full pool evicts the *oldest* effect rather than dropping the
+one that just happened.
+
+A trail is paced by **distance travelled**, not by time, for the same reason
+footsteps are: a rocket crossing the arena leaves the same trail at any frame
+rate, and one that is barely moving does not pile smoke up on the spot.
+
+### A mark is a quad, because every surface is a plane
+
+There is no decal projection here and no clipping against the geometry. Every
+surface in this world is cut from a brush plane (`map/geometry.ts`), so a quad
+lying in that plane *is* the decal — computed once at the moment of impact and
+never touched again. `MeshBuilder.CreateDecal` would allocate a mesh per impact,
+in a frame, to solve a problem this world does not have.

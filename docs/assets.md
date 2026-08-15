@@ -30,6 +30,7 @@ is what stops the tree holding an artifact nobody can rebuild.
 | `pnpm assets:budget` | the size guard: 5 MB per file, 24 MB in total |
 | `pnpm assets:vendor` | re-fetch the KTX2 transcoders and the meshopt decoder (only on a Babylon upgrade) |
 | `pnpm assets:placeholders` | regenerate the stand-in art under `assets/` |
+| `pnpm lightmap:bake` | trace each map's light into `assets/textures/*_lightmap.png` (`--check` verifies) |
 
 ---
 
@@ -139,6 +140,30 @@ So: name the UV maps whatever you like, but the lightmap unwrap goes in the
 `applyLightmap` in `packages/client/src/render/lightmap.ts`, which sets
 `coordinatesIndex` with it and refuses a mesh that has no `uv2` rather than
 drawing something plausible.
+
+### The arena's own unwrap is code, not an export
+
+The arena is not a model and never comes through a glTF: its surfaces are cut
+from the collision brushes by `map/geometry.ts`. So there is no second UV set for
+Blender to write — there is a *function* that computes one, and it is
+`packages/sim/src/map/lightmapUv.ts`.
+
+It is in the simulation package for one reason: two programs have to agree about
+it exactly. `tools/bake-lightmap.ts` walks the atlas texel by texel and traces
+light to each one; `render/mapMesh.ts` writes the matching `uv2` on the arena
+mesh in a browser. If those ever computed the layout separately, a change to one
+would light the level from another wall — and the symptom is the *plausible*
+picture above rather than an obviously broken one. One function, imported by
+both, makes the agreement structural rather than remembered.
+
+The output is committed like everything else here: `pnpm lightmap:bake` writes
+the `.png` source and `pnpm assets:build` compresses it, exactly as a bake out of
+Blender would be. `--check` re-traces in memory and fails on a stale artifact, so
+a map that moved without a re-bake cannot ship an atlas describing where the
+walls used to be. `tools/bake-lightmap.test.ts` runs that check on every pull
+request, and asserts the bake has light and *contrast* in it — a uniform atlas
+is what a bake looks like when every shadow ray missed, and it draws a picture,
+so nothing else would catch it.
 
 glTF 2.0 has no lightmap slot — `occlusionTexture` is ambient occlusion, a
 different quantity — so the bake ships as its own `.ktx2` and is attached by
