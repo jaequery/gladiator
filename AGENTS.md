@@ -23,6 +23,7 @@ reasoning are in [`docs/renderer.md`](./docs/renderer.md).
 | `pnpm run no-physics`| fails if a physics engine has appeared in `pnpm-lock.yaml` |
 | `pnpm run guardrails`| proves the boundaries reject violations                |
 | `pnpm run map:bake`  | compiles `maps/*.ts` to `maps/baked/*.json` (`--check` verifies) |
+| `pnpm run nav:bake`  | compiles `maps/*.nav.ts` to `maps/baked/*.nav.json` (`--check` verifies) |
 | `pnpm run ci`        | all six, in that order — what CI runs                  |
 | `pnpm run e2e`       | the browser smoke test — needs Chromium, own CI job    |
 
@@ -44,10 +45,10 @@ and there is no `dist`, so there is exactly one resolution condition and nothing
 for `bundler` and `NodeNext` to disagree about.
 
 Two directories belong to no package and ship with neither build: `maps/` (the
-authored maps and their baked artifacts) and `tools/` (the baker). Both are
-typechecked by the root `tsconfig.json` and linted with Node globals; both may
-import `@gladiator/sim`, which is why it is a devDependency of the root
-`package.json`.
+authored maps, the nav graphs, and their baked artifacts) and `tools/` (the two
+bakers). Both are typechecked by the root `tsconfig.json` and linted with Node
+globals; both may import `@gladiator/sim` and `@gladiator/bot`, which is why
+both are devDependencies of the root `package.json`.
 
 ---
 
@@ -341,6 +342,58 @@ and this package does not have one.
 `hashState` hashes raw IEEE 754 bit patterns — it never rounds, because
 rounding is precisely what would hide a slow drift. It does normalise `-0` to
 `+0` and every NaN to one NaN; see `encoding.ts` for why both are necessary.
+
+---
+
+## The bot's navigation data
+
+`packages/bot/src/nav/`, authored in `maps/*.nav.ts`, baked by `pnpm nav:bake`
+to `maps/baked/*.nav.json`. Reasoning lives in `nav/schema.ts`; this is the
+shape of it.
+
+**A hand-placed waypoint graph, not a navmesh, and not AAS.** Quake 3's AAS was
+built to need zero authoring across thirty shipped maps plus every map a
+stranger would ever make, and it cost 626 areas and 88 seconds of compile on a
+duel map this size. Gladiator has one arena and sixty-odd meaningful positions.
+The deciding argument is not the compile time: **the link types are the
+design**. "This gap is a jump", "you drop off here and cannot get back up" is
+level-design intent, and a generator can only discover what the geometry
+happens to admit.
+
+**Links are directed and there are four kinds** — `walk`, `jump`, `drop`,
+`teleport` — each mapping to exactly one traversal controller in the bot's
+movement (GLAD-TSED8V). `rocketjump` is a v2 kind. Until it exists the
+positions only a rocket reaches are tagged `perch` rather than `ground`, and
+nothing routes to them. That is the data telling the truth; linking them with a
+jump the movement cannot make would make the routing guarantee pass and the bot
+walk into a wall.
+
+**Every `ground` node routes to every other one, and the bake refuses a graph
+where one does not.** It is the same rule `map/reachability.ts` enforces for the
+map, at the level the bot actually uses, and it is what makes "the bot can
+always get there" a property rather than a hope.
+
+**A path query is one array read.** Floyd-Warshall runs once at bake time over
+seventy nodes and its next-hop and cost tables are committed; so is a
+node-by-node visibility bitset, which turns "can I see that position" — the
+lookup underneath *breaking* line of sight — into a bit test. Nothing in
+`nav/query.ts` may contain a loop whose length depends on the node count;
+`query.test.ts` proves it by counting table reads on a four-node graph and a
+seventy-node one and requiring the same number.
+
+**The artifact carries the map's hash.** Every claim in a nav graph is a claim
+about where the geometry is, and all of them expire the instant a brush moves.
+`loadNav` takes the loaded map's hash and refuses a mismatch, which is the
+difference between a sentence at startup and a bot pathing into a wall that
+used to be a doorway.
+
+**A `walk` link is validated by walking it.** `nav/validate.ts` runs the real
+`pmove` from one node to the other and checks that it arrives. A swept box
+would be cheaper and it is the wrong instrument: the collision world expands a
+brush's own planes by the player box, which is exact for an axis-aligned brush
+and over-approximates at the top edge of a ramp, where the expanded slope juts
+a few units into the air above the surface. `StepSlideMove` steps over that and
+a static sweep at a fixed height does not.
 
 ---
 

@@ -39,6 +39,8 @@ import {
   validateMap,
 } from '@gladiator/sim'
 
+import { serializeJson } from './json.ts'
+
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 
 /** Where maps are authored. */
@@ -47,8 +49,15 @@ export const MAPS_DIR = join(ROOT, 'maps')
 /** Where the baked artifacts go. Committed, not generated at build time. */
 export const BAKED_DIR = join(MAPS_DIR, 'baked')
 
-/** Files under `maps/` that are not maps. */
-const NOT_A_MAP = new Set(['helpers.ts'])
+/**
+ * Files under `maps/` that are not maps.
+ *
+ * `*.nav.ts` is excluded by suffix rather than by name: a nav graph sits beside
+ * the map it is for (`arena1.ts` and `arena1.nav.ts`), it is baked by
+ * `tools/nav-bake.ts`, and a map file it got mistaken for would fail with a
+ * confusing error about a missing brush list.
+ */
+const NOT_A_MAP = new Set(['helpers.ts', 'nav-helpers.ts'])
 
 export type BakeOutcome =
   | { readonly ok: true; readonly baked: BakedMap; readonly json: string }
@@ -80,57 +89,12 @@ export function bake(source: MapSource): BakeOutcome {
 }
 
 /* --------------------------------------------------------------------------
- * Serialisation
- *
- * `JSON.stringify(x, null, 2)` would put every coordinate of every brush on its
- * own line and turn a hundred-brush map into four thousand of them, which makes
- * a diff useless and a review impossible. So: one line per brush, per spawn,
- * per surface, and a vector stays a vector.
+ * Serialisation — `tools/json.ts`, shared with the nav baker
  * ----------------------------------------------------------------------- */
-
-/** How wide a rendered *value* may get before it is broken across lines. */
-const LINE_BUDGET = 100
-
-function inlineJson(value: unknown): string | null {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null'
-  if (Array.isArray(value)) {
-    const parts = value.map(inlineJson)
-    if (parts.some((p) => p === null)) return null
-    return `[${parts.join(', ')}]`
-  }
-  const parts: string[] = []
-  for (const [key, item] of Object.entries(value)) {
-    const rendered = inlineJson(item)
-    if (rendered === null) return null
-    parts.push(`${JSON.stringify(key)}: ${rendered}`)
-  }
-  return `{ ${parts.join(', ')} }`
-}
-
-function renderJson(value: unknown, indent: string): string {
-  const inline = inlineJson(value)
-  if (inline !== null && indent.length + inline.length <= LINE_BUDGET) return inline
-
-  const inner = `${indent}  `
-  if (Array.isArray(value)) {
-    if (value.length === 0) return '[]'
-    const items = value.map((item) => `${inner}${renderJson(item, inner)}`)
-    return `[\n${items.join(',\n')}\n${indent}]`
-  }
-  if (value !== null && typeof value === 'object') {
-    const entries = Object.entries(value)
-    if (entries.length === 0) return '{}'
-    const items = entries.map(
-      ([key, item]) => `${inner}${JSON.stringify(key)}: ${renderJson(item, inner)}`,
-    )
-    return `{\n${items.join(',\n')}\n${indent}}`
-  }
-  return JSON.stringify(value) ?? 'null'
-}
 
 /** A baked map as the bytes that go on disk. Stable: same map, same file. */
 export function serialize(baked: BakedMap): string {
-  return `${renderJson(baked, '')}\n`
+  return serializeJson(baked)
 }
 
 /* --------------------------------------------------------------------------
@@ -140,7 +104,13 @@ export function serialize(baked: BakedMap): string {
 /** Every authored map under `maps/`, by name, sorted. */
 export function discoverMaps(dir: string = MAPS_DIR): string[] {
   return readdirSync(dir)
-    .filter((file) => file.endsWith('.ts') && !file.endsWith('.test.ts') && !NOT_A_MAP.has(file))
+    .filter(
+      (file) =>
+        file.endsWith('.ts') &&
+        !file.endsWith('.test.ts') &&
+        !file.endsWith('.nav.ts') &&
+        !NOT_A_MAP.has(file),
+    )
     .sort()
 }
 
