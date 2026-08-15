@@ -25,6 +25,7 @@ import {
   ANGLE_UNITS_PER_DEGREE,
   EntityFlag,
   EntityKind,
+  MatchPhase,
   SKELETON_SEED,
   TICK_INTERVAL_MS,
   TICK_RATE,
@@ -70,6 +71,7 @@ import {
   isFatal,
   joinUrl,
   mustHoldStill,
+  quickMatchRequested,
   resolveServerUrl,
 } from './net/client.ts'
 import { createEntityBuffer, createInterpolationClock } from './net/interpolate.ts'
@@ -97,6 +99,7 @@ import { createFeedbackTracker } from './ui/feedback.ts'
 import { createMatchHud } from './ui/hud.ts'
 import { type HudModel, hudModel } from './ui/hudModel.ts'
 import { type MenuScreen, createMenu } from './ui/menu.ts'
+import { createQueuePanel, queueReadout } from './ui/queue.ts'
 import { matchIntent, roomUrl, shareLink } from './ui/roomFlow.ts'
 import {
   type Settings,
@@ -436,6 +439,11 @@ async function boot(): Promise<void> {
   // for. The two are laid out so as not to collide, which `scripts/e2e.mjs`
   // checks at three aspect ratios.
   const matchHud = createMatchHud(overlay)
+  // Where a player waiting for a stranger finds out that they are waiting.
+  // Mounted whatever this page is doing and shown only when the host has
+  // something to say about a queue, which for a room-code match is never —
+  // `ui/queue.ts`.
+  const queuePanel = createQueuePanel(overlay)
   const feedback = createFeedbackTracker()
   if (shot) overlay.hidden = true
   // Nothing sends snapshots yet, so there is otherwise no opponent to draw.
@@ -727,13 +735,15 @@ async function boot(): Promise<void> {
   }
 
   /**
-   * A match on the host: `code` joins that room, `null` asks for a new one.
+   * A match on the host: `code` joins that room, `null` asks for a new one, and
+   * `queue` asks to be put in line with whoever else is waiting.
    *
-   * The two are one function because they are one thing over the wire — the
-   * only difference is a query parameter — and because "create" and "join" are
-   * the same button as far as everything downstream is concerned.
+   * All three are one function because they are one thing over the wire — the
+   * only difference is a query parameter — and because "create", "join" and
+   * "find me an opponent" are the same button as far as everything downstream
+   * is concerned. A code beats the queue, in `joinUrl` rather than here.
    */
-  const startRemoteMatch = (code: string | null): void => {
+  const startRemoteMatch = (code: string | null, queue = false): void => {
     if (session !== null || shot) return
     if (serverUrl === null) {
       // Built with no host to talk to. `createNetClient` says so on the page
@@ -742,7 +752,7 @@ async function boot(): Promise<void> {
       session.net.connect()
       return
     }
-    const url = joinUrl(serverUrl, code)
+    const url = joinUrl(serverUrl, code, queue)
     session = { listen: null, net: openSession(websocketTransport(url), url), shareable: true }
     session.net.connect()
   }
@@ -864,6 +874,18 @@ async function boot(): Promise<void> {
       // their attempt still in it.
       menu.setTypedCode(intent.typed)
       menu.show('join')
+    } else if (quickMatchRequested(window.location.search)) {
+      // `?queue=1` (GLAD-ZHRFBK), and it skips the menu the way its three
+      // siblings do — deliberately showing no screen at all, because the wait
+      // is already drawn by `queuePanel` below and a menu over it would hide
+      // the one thing this URL exists to show. When the wait times out the host
+      // hands back a room code, which reaches the address bar and the room
+      // screen by the same path every other code does.
+      //
+      // Reached only from the `menu` intent, so a page carrying both a code and
+      // `?queue=1` joins the code. That is the same precedence `joinUrl`
+      // applies on the wire, and the same one the host reads them in.
+      startRemoteMatch(null, true)
     } else {
       menu.show('main')
     }
@@ -1346,6 +1368,15 @@ async function boot(): Promise<void> {
         mispredicted: predictor.mispredicts.stats.selfSplash,
       },
     })
+
+    // The quick-match panel, on the same beat: a wait is quoted in whole
+    // seconds, so ten reads of it a second is nine more than it can show.
+    // It comes off the screen the moment there is a match to play — which is
+    // not the same event as being matched, because a player whose wait timed
+    // out can still be joined by a friend with the code minutes later.
+    queuePanel.update(
+      queueReadout(netNow.queue, readout.match.phase !== MatchPhase.Warmup),
+    )
 
     // On the same 10 Hz beat as the panel above and for the same measured
     // reason: every value on it changes every frame, so throttling the *write*

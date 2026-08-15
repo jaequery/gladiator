@@ -633,6 +633,44 @@ them their character set is right.
 Thirty bits, the guess rate at the concurrency this deploy admits, and the
 empty-room reaper that stops codes leaking are `docs/deploy.md`.
 
+### Quick match is a line of rooms, not a lobby of sockets
+
+`packages/server/src/queue.ts`. GLAD-ZHRFBK. `?queue=1` on the upgrade instead
+of `?room=ABC123`: the host either seats this peer in the room somebody is
+already waiting in, or opens one and parks them in it. Room codes are untouched
+and stay the way two people who know each other play — a request carrying both
+is answered as a *code*, because six characters somebody typed is a request for
+a particular match.
+
+**The obvious shape is the wrong one, and `net/wsTransport.ts` is why.** Holding
+the sockets and building a room once two of them are in hand means parking a
+socket with no handlers installed — and a socket with no handlers silently drops
+what arrives on it, the first thing being the client's `hello`. A lobby would
+therefore have to buffer frames and replay them into a room that does not exist
+yet, which is a second delivery path for the one message whose loss takes the
+whole session down. So the room comes first and the *code* goes in the line, and
+everything after the choice of room is the code path room codes already take:
+the handshake, the welcome, `startWhenFull`, the empty-room reaper.
+
+**An entry is a claim about a room and it is re-checked, never trusted.**
+Nothing tells the queue that a queued player closed their tab — the socket dies,
+`room.ts` forgets the peer, and the entry still names a code. So every entry is
+looked up in the registry the moment before it is used, and a room that has
+gone, emptied, or filled by some other route is dropped. That is what makes "a
+player who queues and walks away is never paired with anybody" true by
+construction rather than by remembering to call a `leave()` from every path a
+socket can die on. The sweep rides the tick scheduler's frame beside the
+registry's own, so the number served on `/healthz` is never more than a host
+frame stale.
+
+**The timeout is an outcome, not a hang-up.** A minute of nobody arriving ends
+the *matching* and nothing else: the socket, the room and the code all survive,
+and the player is told "nobody is waiting — send this code to a friend", which
+is a sentence with an action in it. Closing the socket instead would be the
+server hanging up on a player who has done nothing wrong, and an indefinite
+spinner would be the failure this whole frame exists to prevent. It fires once,
+not once per sweep.
+
 ### A deploy hands the score to the players, because there is nowhere else
 
 `packages/server/src/shutdown.ts` and `resume.ts` (GLAD-G41FQ9). The registry
@@ -1188,6 +1226,86 @@ a static sweep at a fixed height does not.
 
 ---
 
+## The bot's perception, and the fairness boundary
+
+`packages/bot/src/perception/`, `brain.ts`, `bot.ts`. GLAD-V7CMHR. The argument
+lives in `perception/worldModel.ts`; this is the shape of it and the three
+things that hold it up.
+
+**Only the perception layer touches ground truth. Everything above it reads
+`bot.worldModel`.** That is what makes "the bot is not omniscient" a property a
+test can assert rather than a promise in a comment — and the test is
+`perception/fairness.test.ts`, which perturbs state the model deliberately does
+not carry (the opponent's health, armour, refire timer, view angles, weapon
+while unseen, position while unseen, and the world's own PRNG) and requires the
+bot's `UserCmd` stream to come out **bit-identical**. Binary, and un-gameable in
+the way a correlation threshold is not. Two positive controls move the opponent
+somewhere the bot *can* see and require the stream to differ, so it cannot pass
+by the bot standing still.
+
+The static half is `GROUND_TRUTH_BANS` in `eslint.config.js`: nothing in
+`packages/bot` outside `perception/` may name `GameState`, `EntityState`,
+`findPlayer` or `.entities`. Those are the *carriers* — an opponent's vitals
+cannot be reached without one — so banning them is a complete ban on the leaves
+without having to ban `.health`, which the bot legitimately reads about itself.
+`scripts/guardrails.mjs` writes the same probe on both sides of that line and
+requires a failure and a pass, because an exemption nobody has watched is a hole.
+
+### The gap in Quake 3 this exists to close
+
+Q3's `BotFindEnemy` applies a distance-scaled field of view at *acquisition*,
+and then `BotAimAtEnemy` calls the visibility check with a **360-degree** FOV.
+So once a Q3 bot has seen you it tracks you through walls, forever, with nothing
+to decay. That single asymmetry is the actual source of "the bot knew where I
+was". Here there is one entry point (`perception/sight.ts`), acquisition and
+maintenance are two thresholds on the *same* number, and everything after the
+last observation is 2.2 seconds of decay.
+
+### The four channels
+
+| Channel | What it gives | What it deliberately does not |
+| ------- | ------------- | ----------------------------- |
+| **sight** | an exact position and velocity | anything outside a 100-degree cone, past 3000 units, or behind geometry |
+| **sound** | a bearing wrong by up to 22 degrees and a range wrong by a quarter | a position — that would be a wallhack with a nicer name |
+| **damage** | the attacker's *direction*, off the knockback | a range; the state carries no attacker at all |
+| **memory** | the last belief, dead-reckoned and blurring | anything after 2.2 seconds — the contact is *cleared*, not faded to a small number |
+
+Three things in there are decisions rather than details:
+
+- **The visibility fraction's three rays are weighted an eighth, a half and
+  three eighths** — feet, chest, eyes. Equal thirds would make "at least a
+  quarter visible" and "at least something visible" the same predicate, and one
+  of the two thresholds would be dead code. Weighted, a pair of legs under a
+  railing is 0.125: not enough to *spot* somebody, enough to keep tracking one.
+- **Footsteps stop below 140 qu/s**, which is the player's stealth option and
+  the reason it is a threshold on speed rather than a constant `true`. `UserCmd`
+  has no walk bit yet; the day it grows one, this becomes the speed it caps you
+  at.
+- **The sound channel draws from the PRNG strictly after its range gate has
+  passed.** A draw taken on a sound the bot could not hear would advance the
+  stream by an amount that depends on where the opponent is — a leak arriving
+  through the one door the mutation test does not look at.
+
+### Two clocks
+
+Perception runs every sub-step; the decision layer runs every six of them
+(`brain.ts`, 20.8 Hz — 125 is not divisible by 20 and a fractional interval is a
+phase that drifts). Quake's 10 Hz brain is visibly a beat behind at these
+speeds. Turning the standing decision into a command happens every sub-step,
+because a turn is a *rate* and a rate sampled at 20 Hz is a staircase.
+
+**The bot's PRNG is seeded and it is not the sim's.** The bot is a client
+producing input, not a peer producing a world, so it is not required to be
+bit-identical with the server — which is exactly why it lives in `packages/bot`
+and may use `Math.atan2`, banned inside `packages/sim`. It is *seeded* rather
+than ambient so a headless bot match replays.
+
+`BotDecision` is the seam the rest of the bot is built on: path following fills
+in `goal` (GLAD-TSED8V), and aim, weapon choice and firing fill in `aim`,
+`weapon` and `buttons` (GLAD-HK3ATM). Neither reaches past it.
+
+---
+
 ## The HUD
 
 `packages/client/src/ui/`. Four modules and one rule, and the rule is the
@@ -1252,11 +1370,22 @@ the *server's* `normalizeRoomCode` — imported, never restated — because a cl
 with its own copy of the alphabet is a second opinion to keep in step, and the
 failure mode is a player being told a perfectly good code does not exist.
 
-**Three URLs skip the menu, and they are siblings of `?shot=1`.** `?local=1` is
-single-player, `?host=1` opens a room and goes straight in, `?room=` joins one.
+**Four URLs skip the menu, and they are siblings of `?shot=1`.** `?local=1` is
+single-player, `?host=1` opens a room and goes straight in, `?room=` joins one,
+and `?queue=1` asks for a stranger ("Quick match is a line of rooms" above).
 `?host=1` is what `scripts/e2e.mjs` drives so the browser test measures the game
 rather than a menu; a player never types it, they press "create a match", which
 is the same call with the menu still on screen.
+
+Each is read once, at boot, and turned into the same `startBotMatch` or
+`startRemoteMatch` call a button makes — `matchIntent` in `roomFlow.ts` for the
+first three and `quickMatchRequested` for the queue, which is why a page
+carrying both a code and `?queue=1` joins the code: the queue is reached only
+from the `menu` intent, which is the one that means "nothing was asked for".
+`joinUrl` applies the same precedence again on the wire, where the host applies
+it a third time. The queue has no button of its own yet, and `?queue=1` shows no
+menu screen at all: the wait is `ui/queue.ts`'s panel, and a menu over it would
+cover the only thing that URL exists to show.
 
 **Sensitivity is cm/360 and it never leaves the machine.** Centimetres of mouse
 travel per full turn, converted through the mouse's own counts per inch, because

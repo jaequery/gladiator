@@ -32,10 +32,16 @@ send — whoever opens that link lands in the same room with nothing to type. Th
 `W`/`A`/`S`/`D` and space, escape to give the mouse back, and the HUD prints
 both state hashes and whether they agree.
 
-Three URLs skip the menu, for when you know what you want: `?local=1` is
+Four URLs skip the menu, for when you know what you want: `?local=1` is
 single-player against the host in your own tab, `?host=1` opens a room and goes
-straight in, and `?room=H7K2Q9` joins one. Sensitivity is set in cm/360 under
-Settings; which browsers give the raw mouse deltas that number depends on is
+straight in, `?room=H7K2Q9` joins the match that code names, and `?queue=1` asks
+to be matched with whoever else is waiting. The queue says how long it will keep
+looking before it gives up and hands back a code to send a friend instead, and a
+code beats the queue when a page carries both. `AGENTS.md`, "Quick match is a
+line of rooms".
+
+Sensitivity is set in cm/360 under Settings; which browsers give the raw mouse
+deltas that number depends on is
 [`docs/browser-support.md`](./docs/browser-support.md).
 
 ```sh

@@ -37,6 +37,12 @@
  * `wss://host/?room=ABC123` joins an existing one. A code that names no room is
  * answered with a `fault` frame naming it and a 4006 close — a socket that
  * opened and then went quiet is the one failure mode a player cannot diagnose.
+ *
+ * `wss://host/?queue=1` asks to be matched with a stranger: the quick-match
+ * queue seats this peer in the room somebody is already waiting in, or opens
+ * one and parks them in it (`queue.ts`). A code beats it — a player who typed
+ * six characters asked for a *particular* match — which is why `?room=` is read
+ * first below and the queue is only consulted when there is no code.
  */
 import { createServer, type IncomingMessage, type Server } from 'node:http'
 import { randomUUID } from 'node:crypto'
@@ -48,6 +54,7 @@ import {
   DEFAULT_MATCH_RULES,
   NEW_MATCH_SCORE,
   PROTOCOL_VERSION,
+  QueueState,
   createDemoRecorder,
   type MatchRules,
   type MatchScore,
@@ -64,6 +71,7 @@ import { startHostLoop, systemScheduler, type Scheduler } from './loop.ts'
 import { createOriginPolicy } from './origin.ts'
 import { SERVER_MAP, SERVER_MAP_HASH, SERVER_PLAN } from './map.ts'
 import { wsTransport } from './net/wsTransport.ts'
+import { createMatchQueue, type MatchQueue } from './queue.ts'
 import { createRoom, type Room } from './room.ts'
 import { normalizeRoomCode } from './roomCode.ts'
 import { createRoomRegistry, seedForRoom, type RoomRegistry } from './rooms.ts'
@@ -81,6 +89,9 @@ export const ROOM_QUERY_PARAM = 'room'
 /** The query parameter a reconnecting client puts its resume ticket in. */
 export const RESUME_QUERY_PARAM = 'resume'
 
+/** The query parameter a client asking to be matched with a stranger sets. */
+export const QUEUE_QUERY_PARAM = 'queue'
+
 export type GladiatorServer = {
   readonly http: Server
   readonly wss: WebSocketServer
@@ -89,6 +100,8 @@ export type GladiatorServer = {
   readonly sessions: number
   /** The rooms this machine is holding. */
   readonly rooms: RoomRegistry
+  /** The quick-match line over those rooms. `queue.ts`. */
+  readonly queue: MatchQueue
   readonly scheduler: TickScheduler
   /** This machine's ticket authority, for the drain. `resume.ts`. */
   readonly resume: ResumeAuthority
@@ -130,6 +143,14 @@ export type StartOptions = {
    * out of.
    */
   readonly rules?: MatchRules
+  /**
+   * How long a quick-match wait lasts before it times out, in milliseconds.
+   *
+   * `queue.ts`'s `QUEUE_WAIT_TIMEOUT_MS` unless something says otherwise.
+   * Injected for the tests, which drive a manual clock and would otherwise
+   * have to advance it by a minute to watch one wait end.
+   */
+  readonly queueTimeoutMs?: number
   /** Where events go. One JSON object per line; `log.ts`. */
   readonly log?: Log
 }
@@ -149,6 +170,20 @@ export function roomCodeOf(url: string | undefined): string | null {
 /** The resume ticket a reconnecting client is presenting, or `null`. */
 export function resumeTicketOf(url: string | undefined): string | null {
   return queryOf(url, RESUME_QUERY_PARAM)
+}
+
+/**
+ * Whether this connection asked to be matched with a stranger.
+ *
+ * Any value at all counts, as `?local=1` and `?dev=1` do on the client: the
+ * parameter is a flag a menu sets, and a server that refused `?queue=true`
+ * while accepting `?queue=1` would be a rule nobody could guess. What it is
+ * *not* is a code — a request carrying both is a player who typed six
+ * characters, and that is answered before this is consulted.
+ */
+export function queueRequested(url: string | undefined): boolean {
+  if (url === undefined) return false
+  return new URL(url, 'http://gladiator.invalid').searchParams.has(QUEUE_QUERY_PARAM)
 }
 
 function queryOf(url: string | undefined, name: string): string | null {
@@ -253,6 +288,35 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
       }),
   })
 
+  /**
+   * The quick-match line, over the same registry.
+   *
+   * Its entries are room codes, so everything it hands back is a room the rest
+   * of this file already knows how to seat somebody in. `queue.ts` argues why
+   * that is a line of rooms rather than a lobby of sockets.
+   */
+  const queue: MatchQueue = createMatchQueue({
+    rooms,
+    clock,
+    log,
+    ...(options.queueTimeoutMs === undefined ? {} : { waitTimeoutMs: options.queueTimeoutMs }),
+    // The wait ran out. The peer keeps its socket and its room; what it is told
+    // is that nobody came and that it is holding a code worth sending to
+    // somebody. A close here would be the server hanging up on a player who has
+    // done nothing wrong.
+    onTimeout: (entry, waitedMs) => {
+      for (const peer of entry.room.peers) {
+        peer.send({
+          t: 'queue',
+          state: QueueState.Timeout,
+          room: entry.code,
+          waitedMs,
+          timeoutMs: 0,
+        })
+      }
+    },
+  })
+
   // One timer for every world on the machine. It measures how much wall-clock
   // actually went past, folds that into whole 8 ms sub-steps, and hands the
   // count to every room — see `scheduler.ts` for why it aims at boundaries
@@ -263,6 +327,10 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
     onFrame: (frame) => {
       rooms.advance(frame.steps)
       rooms.sweep(frame.nowMs)
+      // After the registry's sweep, and on the same reading of the clock: a
+      // room reaped this frame is an entry the queue must not hand to the next
+      // arrival, and the order makes that true rather than nearly true.
+      queue.sweep(frame.nowMs)
     },
   })
 
@@ -274,6 +342,7 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
       const report = healthReport({
         draining,
         rooms: rooms.stats(),
+        queue: queue.stats(),
         scheduler: ticks.stats(),
         nowMs: clock.nowMs(),
         build: config.build,
@@ -392,6 +461,60 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
     })
 
     const asked = roomCodeOf(request.url)
+    if (asked === null && queueRequested(request.url)) {
+      // Quick match. Either somebody is already waiting — in which case this
+      // socket takes the free seat in their room and both are told the wait is
+      // over — or this one is parked in a room of its own and told how long it
+      // may be kept. `queue.ts`.
+      const admission = queue.admit()
+      if (admission.kind === 'full') {
+        refuse(
+          socket,
+          'server-full',
+          'this server is holding as many matches as it can; try again in a minute',
+          CloseReason.TryAgainLater,
+        )
+        return
+      }
+
+      const entry = admission.entry
+      if (admission.kind === 'waiting') {
+        const peer = entry.room.join(wsTransport(socket, traffic))
+        peer.send({
+          t: 'queue',
+          state: QueueState.Waiting,
+          room: entry.code,
+          waitedMs: 0,
+          timeoutMs: admission.timeoutMs,
+        })
+        return
+      }
+
+      // Read before the join, because afterwards there are two of them and
+      // only one of these has been waiting.
+      const waiting = entry.room.peers
+      const peer = entry.room.join(wsTransport(socket, traffic))
+      for (const other of waiting) {
+        other.send({
+          t: 'queue',
+          state: QueueState.Matched,
+          room: entry.code,
+          waitedMs: admission.waitedMs,
+          timeoutMs: 0,
+        })
+      }
+      // Zero, and honestly so: this peer waited for nothing at all. The number
+      // is per peer rather than per pair for exactly that reason.
+      peer.send({
+        t: 'queue',
+        state: QueueState.Matched,
+        room: entry.code,
+        waitedMs: 0,
+        timeoutMs: 0,
+      })
+      return
+    }
+
     if (asked === null) {
       const opened = rooms.create()
       if (opened === null) {
@@ -472,6 +595,7 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
         wss,
         port,
         rooms,
+        queue,
         scheduler: ticks,
         resume,
         get sessions() {
