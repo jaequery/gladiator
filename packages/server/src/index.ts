@@ -2,13 +2,14 @@
  * The server entry point.
  *
  * Everything interesting is in `server.ts`; this is the part that reads the
- * environment, prints a line, and knows how to die politely.
+ * environment, opens the log, and knows how to die politely.
  */
-import { PROTOCOL_VERSION, TICK_INTERVAL_MS, onSpeedClamp } from '@gladiator/sim'
+import { PROTOCOL_VERSION, TICK_INTERVAL_MS, countSimEvents } from '@gladiator/sim'
 
 import { systemClock } from './clock.ts'
 import { readConfig } from './config.ts'
 import { createJitterProbe } from './jitter.ts'
+import { createLogger } from './log.ts'
 import { describeOriginPolicy } from './origin.ts'
 import { generateResumeSecret } from './resume.ts'
 import { MAX_ROOMS } from './rooms.ts'
@@ -22,39 +23,68 @@ const JITTER_REPORT_MS = 60_000
 const config = readConfig(process.env)
 const jitter = createJitterProbe()
 
-// The simulation has no `console` — that is enforced, not conventional — so the
-// physics-spec §2.6 safety rail reports through a seam the host fills in.
-// Nothing a player can do reaches 3000 qu/s, so a line here means a command
-// stream produced a velocity that movement cannot: worth seeing in the log.
-onSpeedClamp((speed) => {
-  console.warn(`gladiator: clamped a velocity of ${speed.toFixed(0)} qu/s`)
+/**
+ * The log. One JSON object per line, and this is the only place that decides
+ * where a line goes — see `log.ts` for why the sink and the clock are injected
+ * rather than read in there.
+ */
+const log = createLogger({
+  write: (line) => {
+    console.log(line)
+  },
+  time: () => Date.now(),
+  context: { build: config.build },
 })
 
-const server = await startServer({ config, jitter })
+// The simulation has no `console` and no counters — that is enforced, not
+// conventional — so the two conditions worth noticing are seams a host fills
+// in, and `countSimEvents` is the tally on both of them. Nothing a player can
+// do reaches 3000 qu/s, so a clamp here means a command stream produced a
+// velocity that movement cannot: worth a line, every time, with the count
+// beside it so a storm of them reads as one problem rather than a thousand.
+const counters = countSimEvents({
+  onSpeedClamp: (speed) => {
+    log('sim.speed_clamped', {
+      level: 'warn',
+      speed: Math.round(speed),
+      clamps: counters.speedClamps,
+    })
+  },
+})
 
-console.log(
-  `gladiator server listening on :${server.port} — build ${config.build}, protocol ${PROTOCOL_VERSION}, ` +
-    `ticking at ${1000 / HOST_FRAME_MS} Hz into ${1000 / TICK_INTERVAL_MS} Hz sub-steps, ` +
-    `up to ${MAX_ROOMS} rooms, ` +
-    describeOriginPolicy(config),
-)
+const server = await startServer({ config, jitter, log })
+
+log('server.listening', {
+  port: server.port,
+  protocol: PROTOCOL_VERSION,
+  hostFrameHz: 1000 / HOST_FRAME_MS,
+  tickHz: 1000 / TICK_INTERVAL_MS,
+  maxRooms: MAX_ROOMS,
+  allowedOrigins: config.allowedOrigins.join(' '),
+  vercelProject: config.vercelProject,
+  // Empty means no preview may connect, which is the fail-closed state and not
+  // a default — so it is worth a field of its own rather than an inference.
+  vercelScope: config.vercelScope,
+  originPolicy: describeOriginPolicy(config),
+  allowLocalhost: config.allowLocalhost,
+  demoDir: config.demoDir,
+})
 
 // Said at boot rather than discovered during a deploy. A machine that cannot
 // mint a resume ticket is a machine whose deploy ends every match on it, and
 // the secret has to be the *same* on both machines — so a per-process fallback
 // would be a working test and a broken production. `resume.ts`, `NOTES.md`.
 if (server.resume.enabled) {
-  console.log('resume: RESUME_SECRET is set — matches survive a deploy')
-} else if (config.build === 'dev') {
-  console.warn(
-    'resume: no RESUME_SECRET, so a restart ends every live match. For local development:\n' +
-      `  RESUME_SECRET=${generateResumeSecret()} pnpm --filter @gladiator/server dev`,
-  )
+  log('resume.enabled', { detail: 'RESUME_SECRET is set — matches survive a deploy' })
 } else {
-  console.warn(
-    'resume: no RESUME_SECRET on a deployed build — every live match ends at the next deploy. ' +
-      'Set it with: flyctl secrets set RESUME_SECRET="$(openssl rand -hex 32)"',
-  )
+  log('resume.disabled', {
+    level: 'warn',
+    detail: 'no RESUME_SECRET, so every live match ends at the next deploy',
+    fix:
+      config.build === 'dev'
+        ? `RESUME_SECRET=${generateResumeSecret()} pnpm --filter @gladiator/server dev`
+        : 'flyctl secrets set RESUME_SECRET="$(openssl rand -hex 32)"',
+  })
 }
 
 // The number that matters is the one measured on the machine class actually
@@ -66,8 +96,8 @@ if (server.resume.enabled) {
 // work. `WAKEUP_BUDGET_MS` is the budget and `docs/deploy.md` says what to do
 // when it is over.
 const report = setTimeout(() => {
-  console.log(`bare timer: ${jitter.describe()}`)
-  console.log(server.scheduler.describe())
+  log('jitter.bare_timer', { detail: jitter.describe() })
+  log('scheduler.report', { detail: server.scheduler.describe() })
 }, JITTER_REPORT_MS)
 report.unref()
 
@@ -79,21 +109,23 @@ report.unref()
  */
 installSignalHandlers({
   process,
-  log: (line) => console.log(line),
+  log,
   drain: async (signal) => {
-    console.log(
-      `${signal} received — ${server.rooms.size} rooms live, ${server.scheduler.describe()}`,
-    )
-    const report = await drainServer({
-      server,
-      resume: server.resume,
-      clock: systemClock(),
-      log: (line) => console.log(line),
+    log('server.shutdown', {
+      signal,
+      rooms: server.rooms.size,
+      speedClamps: counters.speedClamps,
+      selfSplashes: counters.selfSplashes,
+      scheduler: server.scheduler.describe(),
     })
-    console.log(
-      `drained in ${Math.round(report.waitedMs)} ms: ${report.rooms} rooms, ${report.told} peers told, ` +
-        `${report.ticketed} ticketed${report.timedOut ? ' — deadline reached' : ''}`,
-    )
-    return report
+    const drained = await drainServer({ server, resume: server.resume, clock: systemClock(), log })
+    log('server.drained', {
+      waitedMs: Math.round(drained.waitedMs),
+      rooms: drained.rooms,
+      told: drained.told,
+      ticketed: drained.ticketed,
+      timedOut: drained.timedOut,
+    })
+    return drained
   },
 })

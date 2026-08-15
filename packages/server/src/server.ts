@@ -46,7 +46,9 @@ import type { Duplex } from 'node:stream'
 import {
   CloseReason,
   DEFAULT_MATCH_RULES,
+  NEW_MATCH_SCORE,
   PROTOCOL_VERSION,
+  createDemoRecorder,
   type MatchRules,
   type MatchScore,
 } from '@gladiator/sim'
@@ -54,8 +56,10 @@ import { WebSocketServer, type WebSocket } from 'ws'
 
 import { systemClock, type Clock } from './clock.ts'
 import type { ServerConfig } from './config.ts'
+import { writeDemoFile } from './demoFile.ts'
 import { createTrafficMeter, healthReport, readinessOf, type Readiness } from './health.ts'
 import { createJitterProbe, type JitterProbe } from './jitter.ts'
+import { createLogger, type Log } from './log.ts'
 import { startHostLoop, systemScheduler, type Scheduler } from './loop.ts'
 import { createOriginPolicy } from './origin.ts'
 import { SERVER_MAP, SERVER_MAP_HASH, SERVER_PLAN } from './map.ts'
@@ -126,7 +130,8 @@ export type StartOptions = {
    * out of.
    */
   readonly rules?: MatchRules
-  readonly log?: (line: string) => void
+  /** Where events go. One JSON object per line; `log.ts`. */
+  readonly log?: Log
 }
 
 /**
@@ -154,7 +159,13 @@ function queryOf(url: string | undefined, name: string): string | null {
 
 export function startServer(options: StartOptions): Promise<GladiatorServer> {
   const { config } = options
-  const log = options.log ?? ((line: string) => console.log(line))
+  const log =
+    options.log ??
+    createLogger({
+      write: (line) => console.log(line),
+      time: () => Date.now(),
+      context: { build: config.build },
+    })
   const jitter = options.jitter ?? createJitterProbe()
   const clock = options.clock ?? systemClock()
   const beats = options.scheduler ?? systemScheduler()
@@ -176,9 +187,31 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
 
   const connections = new Map<WebSocket, { alive: boolean }>()
 
+  /**
+   * Write a room's recording out, if this deploy is recording.
+   *
+   * Every way a room can end funnels through the registry's `onClosing`, so
+   * this is one hook rather than one per ending — and it is wrapped there, so a
+   * full disk costs a log line rather than the rest of the shutdown.
+   */
+  const keepDemo = (code: string, room: Room): void => {
+    if (config.demoDir === null) return
+    const demo = room.demo()
+    if (demo === null || demo.frames.length === 0) return
+    const path = writeDemoFile(config.demoDir, demo, Date.now())
+    log('demo.written', {
+      room: code,
+      tick: room.tick,
+      path,
+      frames: demo.frames.length,
+      samples: demo.trace.length,
+    })
+  }
+
   const rooms: RoomRegistry = createRoomRegistry({
     clock,
     log,
+    onClosing: keepDemo,
     ...(options.random === undefined ? {} : { random: options.random }),
     create: (code: string, score: MatchScore): Room =>
       createRoom({
@@ -198,6 +231,25 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
         rules,
         peerId: () => randomUUID(),
         log,
+        // A recording is the command stream this room executes. Only when this
+        // deploy asked for one — `config.demoDir`, `demoFile.ts`.
+        ...(config.demoDir === null
+          ? {}
+          : {
+              recorder: createDemoRecorder({
+                build: config.build,
+                room: code,
+                map: { name: SERVER_MAP.source.name, hash: SERVER_MAP_HASH },
+                seed: seedForRoom(code),
+                protocol: PROTOCOL_VERSION,
+                rules,
+                // Carried into the header rather than left implicit: a room
+                // rebuilt after a deploy starts its match at a score, and a
+                // replay that started at nil-nil would diverge from its own
+                // trace on the first sample. `sim/src/demo.ts`.
+                ...(score === NEW_MATCH_SCORE ? {} : { score }),
+              }),
+            }),
       }),
   })
 
@@ -231,6 +283,10 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
         jitter: jitter.snapshot(),
         traffic: traffic.stats,
         canResume: resume.enabled,
+        // Whether this machine is recording matches, so "did the demo capture
+        // I turned on actually take" is answerable with curl rather than by
+        // waiting for a room to close. `docs/deploy.md`.
+        recording: config.demoDir !== null,
       })
       response.writeHead(report.status, { 'content-type': 'application/json' })
       response.end(report.body)
@@ -289,7 +345,7 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
     if (!verdict.allowed) {
       // Logged, because "the preview deploy cannot connect" is otherwise a
       // silent failure that looks exactly like the server being down.
-      log(`upgrade refused: ${verdict.reason}`)
+      log('upgrade.refused', { level: 'warn', reason: verdict.reason })
       rejectUpgrade(socket, 403, 'Forbidden')
       return
     }
@@ -370,7 +426,7 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
       // they are deliberately one sentence. Telling a guesser which of the two
       // they hit is telling them their character set is right.
       const shown = normalizeRoomCode(asked) ?? asked.slice(0, 16)
-      log(`join refused: no room ${shown}`)
+      log('join.no_such_room', { level: 'warn', room: shown })
       refuse(
         socket,
         'no-such-room',

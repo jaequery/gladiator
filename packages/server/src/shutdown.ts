@@ -43,6 +43,7 @@
 import { CloseReason, MatchPhase, type ServerDrain } from '@gladiator/sim'
 
 import type { Clock } from './clock.ts'
+import { NO_LOG, type Log } from './log.ts'
 import type { ResumeAuthority } from './resume.ts'
 import { matchScoreOf } from './resume.ts'
 import type { RoomRegistry } from './rooms.ts'
@@ -114,7 +115,7 @@ export type DrainOptions = {
   readonly server: Drainable
   readonly resume: ResumeAuthority
   readonly clock: Clock
-  readonly log?: (line: string) => void
+  readonly log?: Log
   readonly deadlineMs?: number
   readonly noticeMs?: number
   readonly retryAfterMs?: number
@@ -184,7 +185,7 @@ export function tellPeers(options: {
  */
 export async function drainServer(options: DrainOptions): Promise<DrainReport> {
   const { server, resume, clock } = options
-  const log = options.log ?? (() => undefined)
+  const log = options.log ?? NO_LOG
   const deadlineMs = options.deadlineMs ?? DRAIN_DEADLINE_MS
   const noticeMs = options.noticeMs ?? DRAIN_NOTICE_MS
   const retryAfterMs = options.retryAfterMs ?? DRAIN_RETRY_AFTER_MS
@@ -196,10 +197,15 @@ export async function drainServer(options: DrainOptions): Promise<DrainReport> {
   server.beginDraining()
 
   const { told, ticketed } = tellPeers({ rooms: server.rooms, resume, retryAfterMs })
-  log(
-    `drain: ${rooms} rooms, ${told} peers told, ${ticketed} with a resume ticket` +
-      `${resume.enabled ? '' : ' (no RESUME_SECRET — this deploy cannot resume a match)'}`,
-  )
+  log('drain.started', {
+    rooms,
+    told,
+    ticketed,
+    canResume: resume.enabled,
+    ...(resume.enabled
+      ? {}
+      : { detail: 'no RESUME_SECRET — this deploy cannot resume the matches it is ending' }),
+  })
 
   if (told > 0) await sleep(noticeMs)
 
@@ -223,7 +229,12 @@ export async function drainServer(options: DrainOptions): Promise<DrainReport> {
 
   const waitedMs = clock.nowMs() - startedMs
   if (timedOut) {
-    log(`drain: gave up after ${waitedMs} ms with ${server.sessions} sockets still open`)
+    log('drain.deadline', {
+      level: 'warn',
+      waitedMs: Math.round(waitedMs),
+      openSockets: server.sessions,
+      deadlineMs,
+    })
   }
   return { reason: 'drain', rooms, told, ticketed, waitedMs, timedOut }
 }
@@ -237,7 +248,7 @@ export type SignalHandlerOptions = {
   readonly signals?: readonly string[]
   /** What to do once. The second signal does not wait for it. */
   readonly drain: (signal: string) => Promise<unknown>
-  readonly log?: (line: string) => void
+  readonly log?: Log
 }
 
 /**
@@ -251,13 +262,13 @@ export type SignalHandlerOptions = {
  */
 export function installSignalHandlers(options: SignalHandlerOptions): void {
   const signals = options.signals ?? ['SIGTERM', 'SIGINT']
-  const log = options.log ?? (() => undefined)
+  const log = options.log ?? NO_LOG
   let draining = false
 
   for (const signal of signals) {
     options.process.on(signal, () => {
       if (draining) {
-        log(`${signal} again — not waiting for the drain, exiting now`)
+        log('shutdown.forced', { level: 'warn', signal })
         // `return`, because a real `process.exit` never comes back and the code
         // below must not run if one ever does.
         return options.process.exit(1)
@@ -267,7 +278,10 @@ export function installSignalHandlers(options: SignalHandlerOptions): void {
         .drain(signal)
         .then(() => options.process.exit(0))
         .catch((error: unknown) => {
-          log(`drain failed: ${error instanceof Error ? error.message : String(error)}`)
+          log('drain.failed', {
+            level: 'error',
+            error: error instanceof Error ? error.message : String(error),
+          })
           options.process.exit(1)
         })
     })

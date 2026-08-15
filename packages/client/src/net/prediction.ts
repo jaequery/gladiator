@@ -46,6 +46,11 @@ import {
 } from '@gladiator/sim'
 
 import {
+  createMispredictLedger,
+  vitalsOf,
+  type MispredictLedger,
+} from './mispredict.ts'
+import {
   CorrectionBand,
   type Correction,
   type PendingCommand,
@@ -91,6 +96,8 @@ export type PredictionStats = {
   readonly noticeable: number
   /** The worst correction of the session, in units. */
   readonly worstUnits: number
+  /** The most recent one, in units. What a live readout shows. */
+  readonly lastUnits: number
   /** Snapshots this build could not read. A version skew, never a network fault. */
   readonly rejected: number
   /** Commands the ring dropped because nothing was acknowledged for 8 seconds. */
@@ -106,6 +113,15 @@ export type Predictor = {
   /** Commands sent and not yet acknowledged. */
   readonly pending: number
   readonly stats: PredictionStats
+  /**
+   * The self-splash mispredict counter. `net/mispredict.ts`.
+   *
+   * Owned here because it is fed from both halves of prediction — the live
+   * ticks and the replayed ones — and a counter assembled from two call sites
+   * outside this module would be a counter that misses whichever one somebody
+   * forgets. The host feeds it the sim's `onSelfSplash` events.
+   */
+  readonly mispredicts: MispredictLedger
   /**
    * Advance one tick with `cmd` and remember it. Returns the state hash, which
    * is what the hash echo compares against (`net/client.ts`).
@@ -155,6 +171,7 @@ export function createPredictor(options: PredictorOptions): Predictor {
   const pending: PendingCommand[] = []
 
   const previousOrigin: [number, number, number] = originOf(state, slot) ?? [0, 0, 0]
+  const mispredicts = createMispredictLedger(slot)
 
   const stats = {
     predicted: 0,
@@ -166,6 +183,7 @@ export function createPredictor(options: PredictorOptions): Predictor {
     snaps: 0,
     noticeable: 0,
     worstUnits: 0,
+    lastUnits: 0,
     rejected: 0,
     overflowed: 0,
   }
@@ -183,6 +201,7 @@ export function createPredictor(options: PredictorOptions): Predictor {
   return {
     state,
     previousOrigin,
+    mispredicts,
 
     get tick() {
       return state.tick
@@ -206,6 +225,7 @@ export function createPredictor(options: PredictorOptions): Predictor {
 
       simTick(state, inputsFor(cmd), world)
       stats.predicted += 1
+      mispredicts.predicted(state.tick, vitalsOf(state, slot))
 
       if (pending.length >= capacity) {
         pending.shift()
@@ -227,7 +247,18 @@ export function createPredictor(options: PredictorOptions): Predictor {
       }
       if (acked > 0) pending.splice(0, acked)
 
-      const correction = reconcile({ state, world, slot, snapshot, pending })
+      const correction = reconcile({
+        state,
+        world,
+        slot,
+        snapshot,
+        pending,
+        // The server's answer for this tick, readable for exactly as long as it
+        // takes the replay below to overwrite it. `net/mispredict.ts`.
+        onAdopt: (adopted) => mispredicts.authoritative(adopted.tick, vitalsOf(adopted, slot)),
+        onReplayTick: (replayed) =>
+          mispredicts.predicted(replayed.tick, vitalsOf(replayed, slot)),
+      })
       if (correction === null) {
         stats.rejected += 1
         return null
@@ -235,6 +266,7 @@ export function createPredictor(options: PredictorOptions): Predictor {
 
       stats.reconciled += 1
       stats.replayed += correction.replayed
+      stats.lastUnits = correction.distance
       if (correction.distance > stats.worstUnits) stats.worstUnits = correction.distance
       if (correction.distance > NOTICEABLE_CORRECTION_UNITS) stats.noticeable += 1
 

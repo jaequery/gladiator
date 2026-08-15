@@ -120,6 +120,7 @@ describe('the /healthz body', () => {
     jitter: { intervalMs: 8, samples: 1000, meanMs: 0.1, p50Ms: 0, p99Ms: 2, maxMs: 9 },
     traffic: { bytesIn: 10, bytesOut: 20, messagesIn: 1, messagesOut: 2 },
     canResume: true,
+    recording: false,
   }
 
   it('answers 200 when ready and 503 when not', () => {
@@ -135,6 +136,9 @@ describe('the /healthz body', () => {
       notReady: [],
       build: 'abc1234',
       canResume: true,
+      // Both of the "is this deploy set up for the thing I turned on" answers,
+      // so neither needs a socket opened to find out. `demoFile.ts`, `resume.ts`.
+      recording: false,
       uptimeSeconds: 90,
       sessions: 6,
     })

@@ -152,6 +152,8 @@ export type HealthInput = ReadinessInput & {
   readonly traffic: TrafficStats
   /** Whether this deploy can hand out resume tickets. `resume.ts`. */
   readonly canResume: boolean
+  /** Whether this machine is recording matches. `demoFile.ts`. */
+  readonly recording: boolean
 }
 
 export type HealthReport = {
@@ -179,6 +181,7 @@ export function healthReport(input: HealthInput): HealthReport {
     build: input.build,
     protocol: PROTOCOL_VERSION,
     canResume: input.canResume,
+    recording: input.recording,
     // Served so that "is the client on the right arena" is answerable with
     // curl, without opening a socket and reading a welcome frame.
     map: input.map,
