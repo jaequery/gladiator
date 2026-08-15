@@ -12,7 +12,13 @@ import {
 import { JITTER_BUFFER_TICKS } from '@gladiator/server/inputQueue'
 import { describe, expect, it } from 'vitest'
 
-import { createNetClient, joinUrl, mustHoldStill, resolveServerUrl } from './client.ts'
+import {
+  createNetClient,
+  joinUrl,
+  mustHoldStill,
+  quickMatchRequested,
+  resolveServerUrl,
+} from './client.ts'
 
 /**
  * A stand-in for the pipe, enough of one for this module: it records what was
@@ -113,6 +119,28 @@ describe('joinUrl', () => {
   it('keeps whatever else the socket URL already carried', () => {
     expect(joinUrl('ws://localhost:8787/?x=1', '?room=H7K2Q9')).toBe(
       'ws://localhost:8787/?x=1&room=H7K2Q9',
+    )
+  })
+
+  it('asks to be matched with a stranger for a page that asked for one', () => {
+    expect(joinUrl('wss://gladiator.fly.dev', '?queue=1')).toBe(
+      'wss://gladiator.fly.dev/?queue=1',
+    )
+    // Normalised rather than echoed: the host only asks whether the parameter
+    // is there, so one shape of request goes on the wire.
+    expect(joinUrl('wss://gladiator.fly.dev', '?queue=yes')).toBe(
+      'wss://gladiator.fly.dev/?queue=1',
+    )
+    expect(quickMatchRequested('?queue=1')).toBe(true)
+    expect(quickMatchRequested('?room=H7K2Q9')).toBe(false)
+  })
+
+  it('lets a code beat the queue, the way the host does', () => {
+    // Six characters somebody typed is a request for a *particular* match, and
+    // putting that player in front of a stranger instead would be the worst
+    // possible way to answer it.
+    expect(joinUrl('wss://gladiator.fly.dev', '?room=H7K2Q9&queue=1')).toBe(
+      'wss://gladiator.fly.dev/?room=H7K2Q9',
     )
   })
 })
@@ -485,5 +513,99 @@ describe('clock sync over the wire', () => {
     const { client } = ticking()
     expect(client.snapshot().serverTickEstimate).toBe(null)
     expect(client.snapshot().pings).toBe(0)
+  })
+})
+
+describe('the quick-match line', () => {
+  /** A connected client whose `performance.now()` a test owns. */
+  function queueing() {
+    const transport = new FakeTransport()
+    let nowMs = 0
+    const client = createNetClient({
+      transport,
+      endpoint: 'ws://test',
+      build: 'test-build',
+      mapHash: MAP_HASH,
+      now: () => nowMs,
+    })
+    client.connect()
+    transport.open()
+    return {
+      transport,
+      client,
+      at(ms: number) {
+        nowMs = ms
+      },
+    }
+  }
+
+  it('is null for a session that never asked to be in one', () => {
+    // Which is what the panel branches on: a duel between two friends must not
+    // grow a "looking for an opponent" spinner because one of them is late.
+    const { transport, client } = queueing()
+    transport.deliver({
+      t: 'welcome',
+      protocol: PROTOCOL_VERSION,
+      build: 'srv',
+      session: 's1',
+      mapHash: MAP_HASH,
+      room: ROOM,
+    })
+    expect(client.snapshot().queue).toBeNull()
+  })
+
+  it('keeps the wait running between frames', () => {
+    // The host says "you have waited 0 ms" once and then says nothing until
+    // something happens. A readout that printed that verbatim would be a
+    // stopped clock in front of the one player who is watching a clock.
+    const { transport, client, at } = queueing()
+    transport.deliver({ t: 'queue', state: 'waiting', room: ROOM, waitedMs: 0, timeoutMs: 60_000 })
+    expect(client.snapshot().queue).toEqual({
+      state: 'waiting',
+      room: ROOM,
+      waitedMs: 0,
+      timeoutMs: 60_000,
+      sinceMs: 0,
+    })
+
+    at(12_500)
+    expect(client.snapshot().queue).toMatchObject({ waitedMs: 12_500, sinceMs: 12_500 })
+  })
+
+  it('stops the wait when the wait is over, and keeps counting since', () => {
+    const { transport, client, at } = queueing()
+    transport.deliver({
+      t: 'queue',
+      state: 'matched',
+      room: ROOM,
+      waitedMs: 4_000,
+      timeoutMs: 0,
+    })
+    at(3_000)
+    // Four seconds is what the *other* player waited, and it is finished. What
+    // goes on running is how long ago they were told — which is what takes
+    // "opponent found" off the screen by itself (`ui/queue.ts`).
+    expect(client.snapshot().queue).toMatchObject({
+      state: 'matched',
+      waitedMs: 4_000,
+      sinceMs: 3_000,
+    })
+  })
+
+  it('carries the room code out of a wait that ran out', () => {
+    // The whole point of the timeout frame: this player is holding six
+    // characters somebody can be sent.
+    const { transport, client } = queueing()
+    transport.deliver({
+      t: 'queue',
+      state: 'timeout',
+      room: ROOM,
+      waitedMs: 60_000,
+      timeoutMs: 0,
+    })
+    expect(client.snapshot().queue).toMatchObject({ state: 'timeout', room: ROOM })
+    // And a queue frame is not a connection error: the socket is fine and the
+    // session is still live.
+    expect(client.snapshot().status).not.toBe('error')
   })
 })
