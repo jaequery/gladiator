@@ -1,14 +1,80 @@
-import { quakeToEngine } from '@gladiator/sim'
-import type { Vec3 } from '@gladiator/sim'
+/* --------------------------------------------------------------------------
+ * The bot — GLAD-V7CMHR
+ *
+ * A seeded stream, a perception layer and a brain that reads what the
+ * perception layer believes. `bot.ts` is the shape of it; the argument for the
+ * boundary — and the four channels that are allowed to cross it — is
+ * `perception/worldModel.ts`. Movement is GLAD-TSED8V and combat is
+ * GLAD-HK3ATM; both fill in `BotDecision` rather than reaching past it.
+ * ----------------------------------------------------------------------- */
 
-/**
- * Placeholder so the package has a resolvable entry point and the workspace
- * link is exercised by `pnpm typecheck`. The bot itself lands in GLAD-V7CMHR
- * (perception), GLAD-TSED8V (movement) and GLAD-HK3ATM (combat).
- */
-export function debugAxisMap(q: Vec3): Vec3 {
-  return quakeToEngine(q)
-}
+export { botCommand, createBot } from './bot.ts'
+export type { Bot } from './bot.ts'
+
+export {
+  BRAIN_INTERVAL_TICKS,
+  ENGAGE_RANGE,
+  MAX_TURN_UNITS,
+  MOVE_DEADZONE,
+  TURN_RATE_DEGREES,
+  command,
+  createBrain,
+  decide,
+  pitchUnitsToward,
+  think,
+  wrapDelta,
+  wrapUnits,
+  yawUnitsToward,
+} from './brain.ts'
+export type { BotBrain, BotDecision } from './brain.ts'
+
+export { createPerception, observe } from './perception/perceive.ts'
+export type { Ground, Perception } from './perception/perceive.ts'
+
+export { ageContact } from './perception/memory.ts'
+export { coneCosine, inCone, lineOfSight, visibilityFraction } from './perception/sight.ts'
+export { hearContact } from './perception/sound.ts'
+
+export {
+  ACQUIRE_VISIBILITY,
+  ALERT_FOV_DEGREES,
+  ALERT_TICKS,
+  DAMAGE_ASSUMED_RANGE,
+  DAMAGE_CONFIDENCE,
+  FIRE_HEARING_RANGE,
+  FOOTSTEP_HEARING_RANGE,
+  FOOTSTEP_INTERVAL_TICKS,
+  FOOTSTEP_SPEED,
+  MAX_THREATS,
+  MEMORY_TICKS,
+  MIN_SHOVE,
+  NEVER_TICK,
+  SIGHT_FOV_DEGREES,
+  SIGHT_HOLD_TICKS,
+  SIGHT_RANGE,
+  SIGHT_SAMPLES,
+  SOUND_BEARING_ERROR_DEGREES,
+  SOUND_CONFIDENCE,
+  SOUND_DISTANCE_ERROR,
+  SOUND_UNCERTAINTY_FRACTION,
+  UNCERTAINTY_GROWTH,
+  clearContact,
+  confidenceOf,
+  createContact,
+  createWorldModel,
+  fovDegrees,
+  hasContact,
+  isAlert,
+  isRemembered,
+} from './perception/worldModel.ts'
+export type {
+  ContactSource,
+  EnemyContact,
+  MatchModel,
+  SelfModel,
+  ThreatContact,
+  WorldModel,
+} from './perception/worldModel.ts'
 
 /* --------------------------------------------------------------------------
  * Navigation data — GLAD-OB46VC
