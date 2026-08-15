@@ -43,6 +43,7 @@ rather than part of `pnpm run ci`.
 
 ```sh
 pnpm run map:bake            # compile maps/*.ts to maps/baked/*.json
+pnpm run nav:bake            # compile maps/*.nav.ts to maps/baked/*.nav.json
 pnpm run map:bake --check    # verify the committed artifacts, write nothing
 ```
 
@@ -51,6 +52,13 @@ solid, a spawn with no headroom, two spawns too close together and an
 unreferenced surface all fail the bake — hashes them, and writes JSON that both
 the client and the server load. The baked artifacts are committed, and a test
 fails if they are stale. `docs/physics-spec.md` §4.
+
+The bot's navigation data is hand-authored the same way, beside the map it is
+for. `pnpm run nav:bake` validates every node against the real player box and
+every `walk` link by walking it with the real movement, then precomputes
+all-pairs routing and a node-to-node visibility bitset — so at run time a path
+query and a line-of-sight query are each one array read. `AGENTS.md`, "The
+bot's navigation data".
 
 Requires Node ≥ 20.19 (CI runs the version in [`.nvmrc`](./.nvmrc)) and pnpm 10.
 
@@ -61,8 +69,9 @@ packages/sim      the deterministic simulation — zero dependencies, no clock
 packages/bot      single-player opposition; emits UserCmds like a human does
 packages/client   Babylon renderer, prediction, input
 packages/server   authoritative tick loop, rooms, WebSocket transport
-maps/             hand-authored maps, and the baked JSON both ends load
-tools/            bake-map.ts   — compiles, validates and hashes maps/*.ts
+maps/             hand-authored maps and nav graphs, and the baked JSON they compile to
+tools/            bake-map.ts    — compiles, validates and hashes maps/*.ts
+                  nav-bake.ts    — validates and precomputes maps/*.nav.ts
                   synth-audio.ts — synthesises the sound set, bit-reproducibly
 scripts/          guardrails.mjs        — proves the boundaries reject violations
                   no-physics-plugin.mjs — fails if a physics engine is installed

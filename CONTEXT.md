@@ -277,6 +277,35 @@ is deliberately *not* the sim state (GLAD-V7CMHR).
 **Navigation data** — precomputed routing baked from the map, so the bot's
 pathfinding is a lookup rather than a search (GLAD-OB46VC).
 
+**Nav graph** — the navigation data as authored: `maps/<map>.nav.ts`, a list of
+nodes and the directed links between them, hand-placed rather than generated.
+`packages/bot/src/nav/schema.ts` argues why.
+
+**Nav node** — one place worth standing, at the player's feet. The bake *drops*
+it on to the surface underneath, because an axis-aligned box rests on its
+uphill edge and a coordinate read off a ramp in the map file is always a little
+wrong.
+
+**Link kind** — how a body gets from one nav node to the next: `walk`, `jump`,
+`drop` or `teleport`. Directed, always — a ledge you can drop off and cannot
+climb back on to is the commonest shape in an arena and an undirected graph
+cannot say it. Each kind maps to exactly one traversal controller in the bot's
+movement (GLAD-TSED8V). `rocketjump` is a v2 kind.
+
+**Ground / perch** — the two routing classes a nav node can be in. Every
+`ground` node has to route to every other one and the bake refuses a graph
+where one does not; a `perch` is a position no v1 link reaches — a balcony, the
+tower — which the bot can see from and fall off but not route to.
+
+**Next-hop table** — the all-pairs routing Floyd-Warshall computes at bake
+time. `nextHop[from][to]` is where to move *now*, so a path follower asks again
+every time it arrives and recovers from being knocked off its route without
+replanning.
+
+**Visibility bitset** — which nav nodes can see which, eye to eye, computed
+once and stored a bit per pair. Symmetric by construction. It is what makes
+breaking line of sight an O(1) question (GLAD-V7CMHR).
+
 **Fairness harness** — the tests that assert the bot cannot see, hear or aim
 better than the rules allow.
 
@@ -297,6 +326,11 @@ data) into the compact form the sim loads (GLAD-G2M8QQ, GLAD-OB46VC).
 **Baked map** — what `pnpm map:bake` writes: `maps/baked/<name>.json`, carrying
 the format version, the map, and the content hash. Committed, so a build needs
 no bake step in front of it. `docs/physics-spec.md` §4.
+
+**Baked nav** — what `pnpm nav:bake` writes: `maps/baked/<name>.nav.json`,
+carrying the graph, the routing and visibility tables, and **two** hashes — its
+own, and the hash of the map it was baked against. The second one is what stops
+a graph that describes yesterday's geometry from loading (GLAD-OB46VC).
 
 **Baked sound** — what `pnpm audio:bake` writes: `packages/client/public/audio/*.wav`,
 synthesised from arithmetic by `tools/synth-audio.ts` rather than downloaded.
