@@ -1,4 +1,10 @@
-import { BUTTON_JUMP, MAX_PITCH_UNITS, yawUnitsFromDegrees } from '@gladiator/sim'
+import {
+  BUTTON_ATTACK,
+  BUTTON_JUMP,
+  MAX_PITCH_UNITS,
+  Weapon,
+  yawUnitsFromDegrees,
+} from '@gladiator/sim'
 import { describe, expect, it } from 'vitest'
 
 import { commandFrom } from './controller.ts'
@@ -16,6 +22,15 @@ describe('commandFrom', () => {
   it('maps space onto the jump button', () => {
     expect(commandFrom(new Set(['Space']), LEVEL).buttons).toBe(BUTTON_JUMP)
     expect(commandFrom(new Set(), LEVEL).buttons).toBe(0)
+  })
+
+  it('maps the left mouse button onto attack, and 1 and 2 onto the weapons', () => {
+    expect(commandFrom(new Set(['Mouse0']), LEVEL).buttons).toBe(BUTTON_ATTACK)
+    expect(commandFrom(new Set(['Mouse0', 'Space']), LEVEL).buttons).toBe(
+      BUTTON_ATTACK | BUTTON_JUMP,
+    )
+    expect(commandFrom(new Set(), LEVEL).weapon).toBe(Weapon.RocketLauncher)
+    expect(commandFrom(new Set(), LEVEL, Weapon.Railgun).weapon).toBe(Weapon.Railgun)
   })
 
   it('cancels opposing keys instead of letting one win', () => {

@@ -75,6 +75,24 @@ export function addScaledVec3(out: MutVec3, a: Vec3, b: Vec3, s: number): MutVec
 }
 
 /**
+ * Round every component to the nearest whole unit, in place. Quake's
+ * `SnapVector`.
+ *
+ * Quake snapped so that a vector would survive being sent as an integer, and
+ * this repo keeps it for a different reason: the movement constants were tuned
+ * *through* the rounding, and a muzzle point or a rocket's velocity that is a
+ * whole number on both peers is one fewer thing for two machines to disagree
+ * about in the last bit. `pmove/snap.ts` has the full argument, including why
+ * it is round-to-nearest rather than the C cast's truncation, and why the
+ * `+ 0` is not decoration.
+ */
+export function snapVector(v: MutVec3): void {
+  v[0] = Math.round(v[0]) + 0
+  v[1] = Math.round(v[1]) + 0
+  v[2] = Math.round(v[2]) + 0
+}
+
+/**
  * `out = a x b`. Returns `out`.
  *
  * `SlideMove` needs this for exactly one thing: the crease between two clip

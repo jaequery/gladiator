@@ -29,19 +29,23 @@
  * simulation boundary.
  */
 
+import { snapVector } from '../math.ts'
 import type { MutVec3 } from '../math.ts'
 
 /**
  * Round every component of `velocity` to the nearest whole unit, in place.
  *
- * The `+ 0` is not decoration: `Math.round(-0.4)` is `-0`, and while the state
- * hash folds `-0` to `+0` before digesting (`encoding.ts`), a `-0` sitting in
- * the live state still makes `Object.is` comparisons and test assertions
- * disagree with the arithmetic. `-0 + 0` is `+0` in IEEE 754, exactly, so one
- * addition removes the whole class of surprise.
+ * The rounding itself is `snapVector` in `math.ts` — Quake's `SnapVector`, which
+ * the weapons layer also applies to a muzzle point and to a rocket's velocity.
+ * One implementation, because the day one of them stops rounding to nearest is
+ * a day somebody should have to decide about on purpose.
+ *
+ * The `+ 0` in there is not decoration: `Math.round(-0.4)` is `-0`, and while
+ * the state hash folds `-0` to `+0` before digesting (`encoding.ts`), a `-0`
+ * sitting in the live state still makes `Object.is` comparisons and test
+ * assertions disagree with the arithmetic. `-0 + 0` is `+0` in IEEE 754,
+ * exactly, so one addition removes the whole class of surprise.
  */
 export function snapVelocity(velocity: MutVec3): void {
-  velocity[0] = Math.round(velocity[0]) + 0
-  velocity[1] = Math.round(velocity[1]) + 0
-  velocity[2] = Math.round(velocity[2]) + 0
+  snapVector(velocity)
 }

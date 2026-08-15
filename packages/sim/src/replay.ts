@@ -23,6 +23,7 @@ import { advanceHost, advanceTicks, createKernel } from './kernel.ts'
 import type { CommandSource, TickInputs } from './kernel.ts'
 import { vec3 } from './math.ts'
 import { EntityFlag, EntityKind, createGameState, hashState, spawnEntity } from './state.ts'
+import { Weapon } from './weapon.ts'
 import type { GameState } from './state.ts'
 import { TICK_INTERVAL_MS, TICK_RATE } from './tick.ts'
 import { SURFACE_CLIP_EPSILON } from './trace.ts'
@@ -45,6 +46,11 @@ export type ScriptFrame = {
   readonly yawDeg: number
   readonly pitchDeg: number
   readonly buttons: number
+  /**
+   * The weapon held. Omitted means the rocket launcher, so every replay
+   * written before there was a second weapon still says what it meant.
+   */
+  readonly weapon?: Weapon
 }
 
 /**
@@ -149,6 +155,7 @@ function cmdFrom(frame: ScriptFrame): UserCmd {
     yaw: yawUnitsFromDegrees(frame.yawDeg),
     pitch: pitchUnitsFromDegrees(frame.pitchDeg),
     buttons: frame.buttons,
+    weapon: frame.weapon ?? Weapon.RocketLauncher,
   }
 }
 

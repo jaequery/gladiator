@@ -8,6 +8,7 @@ import {
   sanitizeUserCmd,
   yawUnitsFromDegrees,
 } from './usercmd.ts'
+import { Weapon } from './weapon.ts'
 
 describe('angle quantisation', () => {
   it('wraps yaw into [0, ANGLE_UNITS)', () => {
@@ -33,7 +34,14 @@ describe('angle quantisation', () => {
 
 describe('sanitizeUserCmd', () => {
   it('passes a legal command through unchanged', () => {
-    const legal = { forwardMove: 1, sideMove: -1, yaw: 12345, pitch: -400, buttons: 1 }
+    const legal = {
+      forwardMove: 1,
+      sideMove: -1,
+      yaw: 12345,
+      pitch: -400,
+      buttons: 1,
+      weapon: Weapon.Railgun,
+    }
     expect(sanitizeUserCmd(legal)).toEqual(legal)
   })
 
@@ -68,7 +76,14 @@ describe('sanitizeUserCmd', () => {
   it('survives junk', () => {
     for (const junk of [null, undefined, 'hello', 42, [], { t: 'nope' }]) {
       const clean = sanitizeUserCmd(junk)
-      expect(clean).toEqual({ forwardMove: 0, sideMove: 0, yaw: 0, pitch: 0, buttons: 0 })
+      expect(clean).toEqual({
+        forwardMove: 0,
+        sideMove: 0,
+        yaw: 0,
+        pitch: 0,
+        buttons: 0,
+        weapon: Weapon.RocketLauncher,
+      })
     }
   })
 })

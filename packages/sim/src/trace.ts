@@ -185,6 +185,67 @@ export function traceRay(
 }
 
 /**
+ * How far along `start -> end` a ray first enters the box
+ * `[origin + mins, origin + maxs]`, or `1` if it never does.
+ *
+ * The entity half of tracing. `CollisionWorld` holds level geometry and nothing
+ * else — players and rockets are `GameState`, and level data has no business
+ * knowing about them — so a shot that has to hit a *player* is this function,
+ * asked once per candidate, rather than a brush the world would have to be
+ * rebuilt to move.
+ *
+ * The slab test, which is the same interval intersection {@link traceBox} does
+ * against a brush's planes, specialised to six axis-aligned ones. A ray that
+ * starts inside the box returns `0`.
+ */
+export function rayBoxFraction(
+  start: Vec3,
+  end: Vec3,
+  origin: Vec3,
+  mins: Vec3,
+  maxs: Vec3,
+): number {
+  slab[0] = 0
+  slab[1] = 1
+
+  if (!clipSlab(start[0], end[0], origin[0] + mins[0], origin[0] + maxs[0])) return 1
+  if (!clipSlab(start[1], end[1], origin[1] + mins[1], origin[1] + maxs[1])) return 1
+  if (!clipSlab(start[2], end[2], origin[2] + mins[2], origin[2] + maxs[2])) return 1
+
+  return slab[0]
+}
+
+/** `[enter, leave]` for the slab test above. Module scope; see `traceBox`. */
+const slab: [number, number] = [0, 1]
+
+/**
+ * Narrow `slab` to the interval of `from -> to` that lies between `low` and
+ * `high`. Returns `false` once the interval is empty, which is a miss.
+ */
+function clipSlab(from: number, to: number, low: number, high: number): boolean {
+  const delta = to - from
+
+  if (delta === 0) {
+    // Parallel to this pair of faces: either between them for the whole move,
+    // or never.
+    return from >= low && from <= high
+  }
+
+  const inverse = 1 / delta
+  let near = (low - from) * inverse
+  let far = (high - from) * inverse
+  if (near > far) {
+    const swap = near
+    near = far
+    far = swap
+  }
+
+  if (near > slab[0]) slab[0] = near
+  if (far < slab[1]) slab[1] = far
+  return slab[0] <= slab[1]
+}
+
+/**
  * Clip a swept box against one convex brush, tightening `out` if it hits
  * sooner than whatever is already recorded there.
  *

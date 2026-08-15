@@ -56,6 +56,8 @@ function entity(patch: EntityPatch = {}): EntityState {
     lastFireTick: patch.lastFireTick ?? NEVER_FIRED,
     knockbackTicks: 0,
     ownerId: 0,
+    nextFireTick: 0,
+    trBase: [0, 0, 0],
     spawnTick: 0,
     expireTick: NEVER_EXPIRES,
   }

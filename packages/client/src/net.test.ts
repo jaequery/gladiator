@@ -1,4 +1,4 @@
-import { NULL_CMD, PROTOCOL_VERSION } from '@gladiator/sim'
+import { NULL_CMD, PROTOCOL_VERSION, Weapon } from '@gladiator/sim'
 import { describe, expect, it } from 'vitest'
 
 import { createNetClient, mustHoldStill, resolveServerUrl } from './net.ts'
@@ -207,8 +207,8 @@ describe('net client', () => {
       t: 'cmds',
       startTick: 5,
       cmds: [
-        [0, 0, 0, 0, 0],
-        [1, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, Weapon.RocketLauncher],
+        [1, 0, 0, 0, 0, Weapon.RocketLauncher],
       ],
     })
   })
