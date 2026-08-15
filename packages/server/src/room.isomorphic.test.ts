@@ -104,7 +104,17 @@ describe('the host is isomorphic', () => {
     // purpose. `inputQueue.ts` joined it with the tick scheduler: a room drains
     // one command per peer per sub-step, and the buffer that holds them has to
     // run in a tab as well.
-    expect(names).toEqual(['clock.ts', 'clockSync.ts', 'inputQueue.ts', 'room.ts', 'session.ts'])
+    // `log.ts` joined it with structured logging, and it is on this side of the
+    // line for the same reason `clock.ts` is: the sink and the wall-clock are
+    // injected, so the module itself names neither `console` nor `Date.now`.
+    expect(names).toEqual([
+      'clock.ts',
+      'clockSync.ts',
+      'inputQueue.ts',
+      'log.ts',
+      'room.ts',
+      'session.ts',
+    ])
   })
 
   it('names nothing that would pin it to one runtime', () => {
