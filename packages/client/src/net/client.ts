@@ -61,6 +61,7 @@ import {
   PROTOCOL_VERSION,
   TransportState,
   UNKNOWN_RTT,
+  type ServerDrain,
   type ServerLifecycle,
   type ServerMessage,
   type ServerSnapshot,
@@ -230,6 +231,14 @@ export type NetSnapshot = {
   /** Failed dials since the last one that worked. `reconnect.ts`. */
   readonly retries: number
   /**
+   * The host's "I am deploying" notice, once it has arrived.
+   *
+   * Kept after the socket closes on purpose: it is what tells the difference
+   * between a duel that ended and a duel whose machine went away, and the
+   * resume ticket in it is the only copy of the score.
+   */
+  readonly drain: ServerDrain | null
+  /**
    * Bytes of snapshot frames received, and the rate over the last second.
    *
    * Snapshots specifically, not every frame: they are the whole state of the
@@ -337,6 +346,19 @@ export type NetOptions = {
    * snapshot as gospel. `main.ts`.
    */
   readonly onResume?: () => void
+  /**
+   * Called when the host says it is deploying, before the socket closes.
+   *
+   * The seam the reconnect policy hangs off (GLAD-DVDV6P): the frame carries
+   * the room code, how long to wait, and this peer's signed resume ticket, and
+   * a client that reconnects with `?room=<room>&resume=<ticket>` is put back
+   * into the same duel at the same score on the machine that replaced this one.
+   * `server/shutdown.ts` sends it.
+   *
+   * The redial below acts on all three without being told to — this is for a
+   * caller that wants to *say* something about a deploy, not to survive one.
+   */
+  readonly onDrain?: (notice: ServerDrain) => void
 }
 
 /** What a redial needs to know to reach the same seat again. */
@@ -345,6 +367,15 @@ export type RedialContext = {
   readonly room: string | null
   /** This seat's token, or `null` if the session never got as far as a welcome. */
   readonly token: string | null
+  /**
+   * The resume ticket from a drain notice, or `null` outside a deploy.
+   *
+   * The seat token and this are answers to different questions and both go on
+   * the URL: a token asks the machine that is still holding the seat, and a
+   * ticket tells a machine that was not there what the score was. During a
+   * deploy the token names a room that has gone, so the ticket is what is left.
+   */
+  readonly resume: string | null
   /** Which attempt this is, from 1. Diagnostics; the policy is `reconnect.ts`. */
   readonly attempt: number
 }
@@ -407,6 +438,12 @@ export function rejoinUrl(joined: string, context: RedialContext): string {
   const url = new URL(joined)
   if (context.room !== null) url.searchParams.set('room', context.room)
   if (context.token !== null) url.searchParams.set('token', context.token)
+  // An empty ticket is a legal drain frame and means "this deploy could not
+  // sign one" (`server/resume.ts`), so it is dropped rather than sent as a
+  // parameter the next machine would have to parse to learn it says nothing.
+  if (context.resume !== null && context.resume !== '') {
+    url.searchParams.set('resume', context.resume)
+  }
   return url.toString()
 }
 
@@ -452,6 +489,7 @@ export function createNetClient(options: NetOptions): NetClient {
   let compared = 0
   let mismatched = 0
   let dropped = 0
+  let drain: ServerDrain | null = null
 
   // What the host told us about this session, and therefore what a reconnect has
   // to present to get back into it. The token is deliberately not in the
@@ -527,6 +565,12 @@ export function createNetClient(options: NetOptions): NetClient {
       status = 'live'
       retry.succeed()
       redialAtMs = null
+      // The deploy is behind us. Forgotten rather than kept for the record,
+      // because everything downstream reads a non-null `drain` as "a deploy is
+      // happening now": a stale one would put a spent ticket on the next
+      // redial's URL and swallow the message of an ordinary disconnect an hour
+      // later.
+      drain = null
       message = `connected to build ${parsed.build}, protocol ${parsed.protocol}, arena ${parsed.mapHash}, room ${parsed.room}`
       if (resuming) {
         resuming = false
@@ -562,6 +606,18 @@ export function createNetClient(options: NetOptions): NetClient {
     if (parsed.t === 'fault') {
       status = 'error'
       message = `server rejected this session: ${parsed.code} — ${parsed.detail}`
+      return
+    }
+
+    if (parsed.t === 'drain') {
+      // The host is deploying. Kept rather than acted on: this module owns one
+      // socket and has no opinion about opening another, and the close that
+      // follows in a moment sets the status. What it does owe is that the
+      // ticket is not thrown away — it is the whole of the match's score, and
+      // there is exactly one copy of it (`server/resume.ts`).
+      drain = parsed
+      message = `the server is deploying — rejoin ${parsed.room} in a moment`
+      options.onDrain?.(parsed)
       return
     }
 
@@ -659,12 +715,25 @@ export function createNetClient(options: NetOptions): NetClient {
         // A mismatch closes the pipe on purpose; keep the useful message.
         if (status === 'version-mismatch' || status === 'map-mismatch') return
 
-        const wait = options.redial === undefined ? null : retry.next(code, now())
-        if (wait === null) {
+        const backoff = options.redial === undefined ? null : retry.next(code, now())
+        if (backoff === null) {
           status = 'closed'
-          message = `disconnected (code ${code}${reason === '' ? '' : `: ${reason}`})`
+          // A deploy already said what happened and where the match went, and
+          // "disconnected (code 1001)" on top of it is how a diagnosable event
+          // becomes a mystery.
+          if (drain === null) {
+            message = `disconnected (code ${code}${reason === '' ? '' : `: ${reason}`})`
+          }
           return
         }
+
+        // A drain notice is the host telling us how long it will be gone, and
+        // it outranks the backoff whenever it asks for longer: the machine is
+        // being replaced, and dialling it every 250 ms until it is back is a
+        // client generating load precisely when there is nothing to answer it.
+        // The backoff still wins when *it* is longer — a deploy that runs over
+        // its estimate must not be retried at a fixed rate forever.
+        const wait = drain === null ? backoff : Math.max(backoff, drain.retryAfterMs)
 
         // Everything in the outbox was predicted into a socket that no longer
         // exists, and every command in it is labelled in a tick space this
@@ -700,7 +769,9 @@ export function createNetClient(options: NetOptions): NetClient {
       // A new pipe, and a new generation with it: whatever the dead socket
       // says from here is about a session that has moved on.
       generation += 1
-      const next = options.redial?.({ room, token, attempt: retry.attempts }) ?? null
+      const next =
+        options.redial?.({ room, token, resume: drain?.resume ?? null, attempt: retry.attempts }) ??
+        null
       if (next === null) {
         status = 'closed'
         message = 'there is nowhere left to reconnect to'
@@ -774,6 +845,7 @@ export function createNetClient(options: NetOptions): NetClient {
       graceLeftMs: graceLeftMs(),
       reconnects,
       retries: retry.attempts,
+      drain,
       snapshotBytes,
       snapshotBytesPerSecond,
       bytesIn,

@@ -181,8 +181,17 @@ export type Lifecycle = {
    * unknown token is *not* an error — it is a stale one from a room that no
    * longer exists, and its holder is treated as a newcomer rather than turned
    * away from a seat that is free.
+   *
+   * `prefer` asks for a particular slot and is honoured when that slot is still
+   * {@link SeatPhase.Open}. It exists for a resumed match (`resume.ts`): the
+   * score is indexed by slot, so two players who came back in the other order
+   * would find the scoreline had swapped with them. It is only ever a
+   * preference — a taken seat falls back to the first free one, because
+   * refusing a player a room has space for would be worse than a mirrored
+   * scoreline. A token beats it outright: that names a seat rather than asking
+   * for one.
    */
-  arrive(peerId: string, token: string | null, nowMs: number): Arrival
+  arrive(peerId: string, token: string | null, nowMs: number, prefer?: number | null): Arrival
   /**
    * A peer's socket has gone.
    *
@@ -286,7 +295,7 @@ export function createLifecycle(options: LifecycleOptions = {}): Lifecycle {
       return ended
     },
 
-    arrive(peerId: string, token: string | null, nowMs: number): Arrival {
+    arrive(peerId: string, token: string | null, nowMs: number, prefer?: number | null): Arrival {
       const refused = (verdict: Admission): Arrival => ({
         verdict,
         slot: NO_SLOT,
@@ -334,7 +343,16 @@ export function createLifecycle(options: LifecycleOptions = {}): Lifecycle {
 
       if (ended) return refused(Admission.Ended)
 
-      const open = seats.find((seat) => seat.phase === SeatPhase.Open)
+      // The asked-for seat when it is free, the first free one otherwise. The
+      // fallback is not a detail: a resume whose preferred slot is taken is a
+      // player whose opponent got back first, which is the ordinary case and
+      // not a reason to refuse anybody.
+      const isOpen = (seat: Seat): boolean => seat.phase === SeatPhase.Open
+      const wanted =
+        prefer === undefined || prefer === null
+          ? undefined
+          : seats.find((seat) => seat.slot === prefer)
+      const open = wanted !== undefined && isOpen(wanted) ? wanted : seats.find(isOpen)
       if (open === undefined) return refused(Admission.Full)
 
       const minted = mintSeatToken(random)

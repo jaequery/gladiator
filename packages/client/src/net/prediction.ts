@@ -41,6 +41,7 @@ import {
   type CollisionWorld,
   type GameState,
   type ServerSnapshot,
+  type TickHooks,
   type UserCmd,
   type Vec3,
 } from '@gladiator/sim'
@@ -172,12 +173,24 @@ export type PredictorOptions = {
   readonly world: CollisionWorld
   /** The player slot this client steers. */
   readonly slot: number
+  /**
+   * Who this peer is, for both the live tick and the replay
+   * (`sim/src/kernel.ts`).
+   *
+   * A client's half of it is one thing: whether it may apply its own rocket's
+   * splash to itself before the host has confirmed it
+   * (`net/rocketPredict.ts`). There is no rewind here — a client has no
+   * authority to judge a hitscan shot with, and predicts one against the world
+   * it has.
+   */
+  readonly hooks?: TickHooks | null
   readonly capacity?: number
 }
 
 export function createPredictor(options: PredictorOptions): Predictor {
   const { state, world, slot } = options
   const capacity = options.capacity ?? PENDING_CAPACITY
+  const hooks = options.hooks ?? null
 
   // A plain array used as a queue rather than an index-wrapped ring. The
   // acknowledged prefix is spliced off the front, which is O(n) in a handful of
@@ -238,7 +251,7 @@ export function createPredictor(options: PredictorOptions): Predictor {
         previousOrigin[2] = before[2]
       }
 
-      simTick(state, inputsFor(cmd), world)
+      simTick(state, inputsFor(cmd), world, null, hooks)
       stats.predicted += 1
       mispredicts.predicted(state.tick, vitalsOf(state, slot))
 
@@ -274,6 +287,7 @@ export function createPredictor(options: PredictorOptions): Predictor {
         slot,
         snapshot,
         pending,
+        hooks,
         // The server's answer for this tick, readable for exactly as long as it
         // takes the replay below to overwrite it. `net/mispredict.ts`.
         onAdopt: (adopted) => mispredicts.authoritative(adopted.tick, vitalsOf(adopted, slot)),

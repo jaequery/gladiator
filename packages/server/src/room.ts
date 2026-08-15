@@ -64,6 +64,7 @@ import {
   DUEL_SLOTS,
   LifecycleEvent,
   MatchPhase,
+  NEW_MATCH_SCORE,
   NO_SLOT,
   NO_WINNER,
   SKELETON_SEED,
@@ -84,8 +85,10 @@ import {
   type GameState,
   type LoadedMap,
   type MatchRules,
+  type MatchScore,
   type ServerMessage,
   type SpawnPlan,
+  type TickHooks,
   type Transport,
   type TransportMessage,
   type UserCmd,
@@ -94,6 +97,7 @@ import {
 import type { Clock } from './clock.ts'
 import { createClockSync, type ServerClockSync } from './clockSync.ts'
 import { createInputQueue, type InputQueue } from './inputQueue.ts'
+import { createLagCompensation, type LagCompStats } from './lagcomp.ts'
 import { NO_LOG, scopeToRoom, type Log } from './log.ts'
 import {
   Admission,
@@ -163,6 +167,17 @@ export type RoomOptions = {
   /** The match this room plays. Defaults to the Rocket Arena best-of-five. */
   readonly rules?: MatchRules
   /**
+   * The scoreline this room's match begins at. Nil-nil unless it is a resume.
+   *
+   * A room rebuilt on the machine that replaced the one a deploy took away
+   * (`resume.ts`, `shutdown.ts`): the two clients bring back a signed score, so
+   * the duel continues at 2-1 instead of starting again. It is applied at the
+   * same moment a fresh match would have started — when the second player
+   * arrives — because a room with one player in it is not a match yet whichever
+   * way it got here.
+   */
+  readonly score?: MatchScore
+  /**
    * Where a round may stand its players.
    *
    * A function of the map, so it costs `spawns² × 9` traces to build and is
@@ -224,6 +239,15 @@ export type RoomPeer = {
   /** Commands buffered for this peer and not yet executed. */
   readonly queued: number
   readonly open: boolean
+  /**
+   * Send this peer one frame, from outside the room.
+   *
+   * The room says everything it has to say by itself; this exists for the one
+   * thing that is true of the *machine* rather than of the match — that it is
+   * about to go away (`shutdown.ts`). Per peer rather than per room because the
+   * frame it carries is per peer: a resume ticket names a seat.
+   */
+  send(message: ServerMessage): void
   close(code?: number, reason?: string): void
 }
 
@@ -244,6 +268,8 @@ export type RoomSnapshot = {
   readonly held: number
   /** Whether this match is decided and cannot be rejoined. */
   readonly ended: boolean
+  /** What lag compensation has done in this room. `lagcomp.ts`. */
+  readonly lagcomp: LagCompStats
 }
 
 export type Room = {
@@ -266,7 +292,9 @@ export type Room = {
    *
    * `request.token` is a seat token from a previous welcome, which is what turns
    * an arrival into a *reconnect*: the same slot, the same score, the same body
-   * standing where it was left. Everything it can mean is `lifecycle.ts`.
+   * standing where it was left. `request.prefer` is the weaker form of the same
+   * wish — a slot a resumed match would like back (`resume.ts`) rather than one
+   * its holder can prove. Everything either can mean is `lifecycle.ts`.
    */
   join(transport: Transport, request?: JoinRequest): RoomPeer
   /**
@@ -305,6 +333,13 @@ export type Room = {
 export type JoinRequest = {
   /** The seat token from a previous welcome, for a peer that is coming back. */
   readonly token?: string | null
+  /**
+   * The slot a resumed match would like back, honoured when it is free.
+   *
+   * A wish, where {@link JoinRequest.token} is a claim: a token names the seat
+   * its holder already had, so when both are present the token decides.
+   */
+  readonly prefer?: number | null
 }
 
 type PeerRecord = {
@@ -378,6 +413,29 @@ export function createRoom(options: RoomOptions): Room {
   let closing = false
 
   /**
+   * A second of the world's recent past, and the rewind a hitscan shot is judged
+   * through. `lagcomp.ts`.
+   *
+   * The round trip it reads is the one *this room* measured from a ping it
+   * minted itself — never a number a client sent, because a client that could
+   * report its own round trip could report a bigger one and be rewound further.
+   * A peer that has left, or one nobody has timed yet, reports `UNKNOWN_RTT`,
+   * which still rewinds by the interpolation delay: a client draws the opponent
+   * in the past from its very first snapshot, ping or no ping.
+   */
+  const lagcomp = createLagCompensation({
+    rttMsForSlot: (slot) =>
+      peers.find((peer) => peer.slot === slot)?.clockSync.rttMs ?? UNKNOWN_RTT,
+  })
+
+  /** Who this peer is, as far as a sub-step is concerned: the host. */
+  const hooks: TickHooks = { rewind: lagcomp.rewind }
+
+  // Tick zero, so a shot in the first sub-steps of a room has somewhere to
+  // rewind to rather than being judged against the present by accident.
+  lagcomp.record(state)
+
+  /**
    * The commands for one sub-step, reused.
    *
    * A room ticks 125 times a second for the length of a match and `tick()`
@@ -387,6 +445,10 @@ export function createRoom(options: RoomOptions): Room {
    */
   const inputs: (UserCmd | null)[] = [null, null]
 
+  // `freeSlot` used to live here, and does not any more: `lifecycle.arrive`
+  // decides which seat an arrival gets, and a room that also had an opinion
+  // would be two answers to one question — the second of which knows nothing
+  // about a seat being *held* for somebody who is still coming back.
   const viewOf = (record: PeerRecord): RoomPeer => ({
     id: record.id,
     slot: record.slot,
@@ -404,6 +466,9 @@ export function createRoom(options: RoomOptions): Room {
     },
     get open() {
       return record.open
+    },
+    send(message: ServerMessage) {
+      record.transport.send(frameOf(message))
     },
     close(code = CloseReason.Normal, reason = '') {
       record.transport.close(code, reason)
@@ -558,12 +623,22 @@ export function createRoom(options: RoomOptions): Room {
   const startWhenFull = (): void => {
     if (state.match.phase !== MatchPhase.Warmup) return
     if (peers.filter(playing).length < capacity) return
-    log('room.match_start', { peers: peers.length, capacity })
+    // Nil-nil unless this room was rebuilt after a deploy, in which case the
+    // duel continues at the score both clients brought back (`resume.ts`).
+    const score = options.score ?? NEW_MATCH_SCORE
+    log('room.match_start', {
+      peers: peers.length,
+      capacity,
+      score: `${score.wins[0]}-${score.wins[1]}`,
+      resumed: score !== NEW_MATCH_SCORE,
+    })
     // Recorded before the edge is taken, because a replay has to take it at the
     // same tick — `startMatch` is the one thing that happens to a world that is
-    // not in the command stream. `sim/src/demo.ts`.
+    // not in the command stream. The score goes in the demo's header rather
+    // than here: a room plays one match, so what it started from is a property
+    // of the recording. `sim/src/demo.ts`.
     recorder?.matchStarted(state.tick)
-    startMatch(state, plan)
+    startMatch(state, plan, score)
   }
 
   /**
@@ -614,7 +689,7 @@ export function createRoom(options: RoomOptions): Room {
       joined += 1
       const peerId = options.peerId?.(joined) ?? `${id}-${joined}`
       const nowMs = clock.nowMs()
-      const arrival = lifecycle.arrive(peerId, request.token ?? null, nowMs)
+      const arrival = lifecycle.arrive(peerId, request.token ?? null, nowMs, request.prefer)
 
       if (arrival.verdict === Admission.Full || arrival.verdict === Admission.Ended) {
         const full = arrival.verdict === Admission.Full
@@ -656,6 +731,7 @@ export function createRoom(options: RoomOptions): Room {
           rttMs: UNKNOWN_RTT,
           queued: 0,
           open: false,
+          send: (message: ServerMessage) => transport.send(frameOf(message)),
           close: (code = CloseReason.Normal, reason = '') => transport.close(code, reason),
         }
       }
@@ -789,7 +865,16 @@ export function createRoom(options: RoomOptions): Room {
         // the *input* stream, so what is recorded is what `tick()` is handed
         // rather than what it produced. `sim/src/demo.ts`.
         recorder?.record(state, inputs)
-        simTick(state, inputs, world, plan)
+
+        simTick(state, inputs, world, plan, hooks)
+
+        // The lag-compensation history goes the other way round, *after* the
+        // sub-step, so the entry filed under tick *t* is where everybody was at
+        // the *end* of tick *t* — the same moment the snapshot for tick *t*
+        // describes, and therefore the same moment the shooter was drawing when
+        // they aimed. Recording it before the tick would put every rewind
+        // exactly one sub-step out.
+        lagcomp.record(state)
       }
 
       report()
@@ -856,6 +941,7 @@ export function createRoom(options: RoomOptions): Room {
       starved,
       held: lifecycle.held,
       ended: lifecycle.ended,
+      lagcomp: lagcomp.stats,
     }),
 
     demo: () => recorder?.finish(state) ?? null,

@@ -292,6 +292,39 @@ describe('net client', () => {
     expect(client.snapshot().message).toContain('ws://test')
   })
 
+  it('keeps the drain notice, ticket and all, when the host is deploying', () => {
+    // The frame that says a socket is about to close *because of a deploy*, and
+    // where the match went. The ticket in it is the only copy of the score
+    // (`server/resume.ts`), so a client that read the frame and kept nothing
+    // would be a client whose duel ended at the next deploy.
+    const transport = new FakeTransport()
+    const seen: unknown[] = []
+    const client = createNetClient({
+      transport,
+      endpoint: 'ws://test',
+      build: 'test-build',
+      mapHash: MAP_HASH,
+      now: () => 0,
+      onDrain: (notice) => seen.push(notice),
+    })
+    client.connect()
+    transport.open()
+    transport.deliver({ t: 'drain', room: ROOM, retryAfterMs: 3000, resume: 'g1.abc.def' })
+
+    expect(seen).toEqual([{ t: 'drain', room: ROOM, retryAfterMs: 3000, resume: 'g1.abc.def' }])
+    expect(client.snapshot().drain).toMatchObject({ room: ROOM, resume: 'g1.abc.def' })
+    expect(client.snapshot().message).toContain(ROOM)
+
+    // And it survives the close that follows — both the notice and the sentence
+    // it put on the screen. "The machine went away" and "the duel ended" are
+    // the same event on the socket and two very different things to read
+    // mid-match.
+    transport.hangUp(1001, 'server is deploying')
+    expect(client.snapshot().drain).not.toBeNull()
+    expect(client.snapshot().status).toBe('closed')
+    expect(client.snapshot().message).toContain(ROOM)
+  })
+
   it('batches queued commands into one frame per flush', () => {
     const { transport, client } = connected()
     client.queue(5, NULL_CMD)

@@ -85,7 +85,16 @@ export {
   createKernel,
   tick,
 } from './kernel.ts'
-export type { CommandSource, Kernel, TickInputs, TickObserver } from './kernel.ts'
+export type { CommandSource, Kernel, TickHooks, TickInputs, TickObserver } from './kernel.ts'
+
+export {
+  INTERP_DELAY_MS,
+  INTERP_DELAY_TICKS,
+  MAX_REWIND_MS,
+  rewindMsFor,
+  rewindTicksFor,
+} from './lagcomp.ts'
+export type { HitscanRewind } from './lagcomp.ts'
 
 export {
   createMapWorld,
@@ -182,12 +191,15 @@ export {
 export type { MatchRules, MatchState } from './match/match.ts'
 
 export {
+  NEW_MATCH_SCORE,
   advanceMatch,
   damageReserve,
   forfeitMatch,
+  isPlayableScore,
   roundOutcome,
   startMatch,
 } from './match/round.ts'
+export type { MatchScore } from './match/round.ts'
 
 export {
   ARMOR_PROTECTION,
@@ -279,6 +291,7 @@ export type { WireState } from './netstate.ts'
 export {
   LifecycleEvent,
   MAX_CMDS_PER_BATCH,
+  MAX_RESUME_TICKET_CHARS,
   PROTOCOL_VERSION,
   UNKNOWN_RTT,
   decodeCmd,
@@ -293,6 +306,7 @@ export type {
   ClientHello,
   ClientMessage,
   ClientPong,
+  ServerDrain,
   ServerFault,
   ServerHash,
   ServerLifecycle,
@@ -371,6 +385,14 @@ export {
 export type { ClipPlanes, MoveBody } from './slidemove.ts'
 
 export { snapshotFrame } from './snapshot.ts'
+
+export {
+  CLEARANCE_MAXS,
+  CLEARANCE_MINS,
+  SELF_SPLASH_CLEARANCE,
+  segmentClearsPlayer,
+} from './splash.ts'
+export type { SelfSplashPolicy } from './splash.ts'
 
 export {
   EntityFlag,

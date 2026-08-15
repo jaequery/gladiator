@@ -132,14 +132,41 @@ describe('the backoff', () => {
 
 describe('rejoinUrl', () => {
   it('puts the room and the seat key on the URL that was dialled', () => {
-    const context: RedialContext = { room: ROOM, token: TOKEN, attempt: 1 }
+    const context: RedialContext = { room: ROOM, token: TOKEN, resume: null, attempt: 1 }
     expect(rejoinUrl('wss://host/', context)).toBe(`wss://host/?room=${ROOM}&token=${TOKEN}`)
+  })
+
+  it('carries the resume ticket from a drain notice as well as the seat key', () => {
+    // The two answer different questions and both go on the URL: the token asks
+    // the machine still holding the seat, and the ticket tells a machine that
+    // was never there what the score was (`server/resume.ts`).
+    const url = rejoinUrl('wss://host/', {
+      room: ROOM,
+      token: TOKEN,
+      resume: 'g1.abc.def',
+      attempt: 2,
+    })
+    expect(new URL(url).searchParams.get('resume')).toBe('g1.abc.def')
+    expect(new URL(url).searchParams.get('token')).toBe(TOKEN)
+  })
+
+  it('leaves an unsigned ticket off the URL entirely', () => {
+    // An empty ticket is a legal drain frame and means "this deploy had no
+    // signing secret". Sending it would make the next machine parse a parameter
+    // to discover it says nothing.
+    const url = rejoinUrl('wss://host/', { room: ROOM, token: TOKEN, resume: '', attempt: 1 })
+    expect(new URL(url).searchParams.has('resume')).toBe(false)
   })
 
   it("prefers the host's own code to whatever the player typed", () => {
     // A player may have typed it with a hyphen in it; the host folds it and
     // answers with the canonical form (`@gladiator/server/roomCode.ts`).
-    const url = rejoinUrl('wss://host/?room=h7k-2q9', { room: ROOM, token: TOKEN, attempt: 1 })
+    const url = rejoinUrl('wss://host/?room=h7k-2q9', {
+      room: ROOM,
+      token: TOKEN,
+      resume: null,
+      attempt: 1,
+    })
     expect(new URL(url).searchParams.get('room')).toBe(ROOM)
   })
 
@@ -147,7 +174,7 @@ describe('rejoinUrl', () => {
     // A socket that died during the handshake has no seat and no code of its
     // own, and dialling the bare URL again would open a *new* room rather than
     // retrying the one the player was sent a link to.
-    const url = rejoinUrl('wss://host/?room=ABC123', { room: null, token: null, attempt: 1 })
+    const url = rejoinUrl('wss://host/?room=ABC123', { room: null, token: null, resume: null, attempt: 1 })
     expect(new URL(url).searchParams.get('room')).toBe('ABC123')
     expect(new URL(url).searchParams.get('token')).toBeNull()
   })

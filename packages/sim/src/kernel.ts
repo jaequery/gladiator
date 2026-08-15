@@ -46,6 +46,7 @@
 import { SKELETON_ARENA } from './arena.ts'
 import { PLAYER_MAXS, PLAYER_MINS } from './bbox.ts'
 import type { CollisionWorld } from './collide.ts'
+import type { HitscanRewind } from './lagcomp.ts'
 import { acceptsCommands } from './match/match.ts'
 import { advanceMatch } from './match/round.ts'
 import type { SpawnPlan } from './match/spawn.ts'
@@ -54,6 +55,7 @@ import { createPmoveBody, pmove } from './pmove/index.ts'
 import type { PmoveBody } from './pmove/index.ts'
 import { moveProjectiles } from './projectile.ts'
 import { advanceRng } from './rng.ts'
+import type { SelfSplashPolicy } from './splash.ts'
 import { EntityFlag, EntityKind } from './state.ts'
 import type { EntityState, GameState } from './state.ts'
 import { MAX_HOST_FRAME_MS, TICK_DT, TICK_INTERVAL_MS } from './tick.ts'
@@ -86,6 +88,38 @@ export type CommandSource = (tick: number) => TickInputs
 /** Called after every sub-step. See `advanceHost`. */
 export type TickObserver = (state: GameState) => void
 
+/**
+ * Which peer is running this sub-step, expressed as the two things only one
+ * side of the wire may do.
+ *
+ * The third thing `tick()` is handed and never writes, alongside the
+ * `CollisionWorld` and the `SpawnPlan` — but where those two are functions of
+ * the *map*, this is a function of *who you are*. A host may rewind the world to
+ * judge a hitscan shot, because it is the only peer whose answer counts; a
+ * client may decline to predict its own splash, because it is the only peer that
+ * can be wrong about one. Neither is something the other can do, and neither is
+ * something the simulation can decide for itself, so both arrive from outside.
+ *
+ * Every field is optional and the whole thing may be `null`. That default is the
+ * simulation as it was before any of this existed: no rewind, every splash
+ * applied. It is what the golden replay, every physics test and every offline
+ * kernel run take, which is why adding this parameter did not move a single hash
+ * in `determinism.test.ts`.
+ */
+export type TickHooks = {
+  /**
+   * How to put the world back the way a shooter saw it, for the duration of one
+   * hitscan trace. `lagcomp.ts`; the host's implementation is
+   * `server/src/lagcomp.ts`.
+   */
+  readonly rewind?: HitscanRewind | null
+  /**
+   * Whether this peer may apply a rocket's splash to the player who fired it.
+   * `splash.ts`; the client's implementation is `client/net/rocketPredict.ts`.
+   */
+  readonly selfSplash?: SelfSplashPolicy | null
+}
+
 export type Kernel = {
   state: GameState
   /**
@@ -108,6 +142,12 @@ export type Kernel = {
    */
   plan: SpawnPlan | null
   /**
+   * Which peer this kernel belongs to, or `null` for one that is nobody in
+   * particular — a replay, a physics test, the golden trace. See
+   * {@link TickHooks}.
+   */
+  hooks: TickHooks | null
+  /**
    * Wall-clock milliseconds accumulated but not yet worth a sub-step.
    *
    * Always in `[0, TICK_INTERVAL_MS)`. Exactly, not approximately: `TICK_INTERVAL_MS` is 8, a
@@ -123,8 +163,9 @@ export function createKernel(
   state: GameState,
   world: CollisionWorld = SKELETON_ARENA,
   plan: SpawnPlan | null = null,
+  hooks: TickHooks | null = null,
 ): Kernel {
-  return { state, world, plan, remainderMs: 0, steps: 0 }
+  return { state, world, plan, hooks, remainderMs: 0, steps: 0 }
 }
 
 /* --------------------------------------------------------------------------
@@ -179,7 +220,7 @@ export function advanceHost(
   kernel.remainderMs = accumulated - steps * TICK_INTERVAL_MS
 
   for (let i = 0; i < steps; i++) {
-    tick(kernel.state, commands(kernel.state.tick + 1), kernel.world, kernel.plan)
+    tick(kernel.state, commands(kernel.state.tick + 1), kernel.world, kernel.plan, kernel.hooks)
     if (onTick !== undefined) onTick(kernel.state)
   }
 
@@ -215,6 +256,7 @@ export function tick(
   inputs: TickInputs,
   world: CollisionWorld = SKELETON_ARENA,
   plan: SpawnPlan | null = null,
+  hooks: TickHooks | null = null,
 ): void {
   state.tick += 1
 
@@ -232,8 +274,8 @@ export function tick(
   const steering = acceptsCommands(state.match)
 
   movePlayers(state, inputs, world, steering)
-  if (steering) fireWeapons(state, inputs, world)
-  moveProjectiles(state, world)
+  if (steering) fireWeapons(state, inputs, world, hooks)
+  moveProjectiles(state, world, hooks)
   expire(state)
   advanceMatch(state, plan)
 }
@@ -358,7 +400,7 @@ export function advanceTicks(
   onTick?: TickObserver,
 ): void {
   for (let i = 0; i < count; i++) {
-    tick(kernel.state, commands(kernel.state.tick + 1), kernel.world, kernel.plan)
+    tick(kernel.state, commands(kernel.state.tick + 1), kernel.world, kernel.plan, kernel.hooks)
     if (onTick !== undefined) onTick(kernel.state)
   }
   kernel.steps += count

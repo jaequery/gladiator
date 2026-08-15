@@ -3,8 +3,11 @@
 The client is a static bundle on **Vercel**. The server is a long-lived Node
 process on **Fly.io**. They talk over `wss://`.
 
-This document is the runbook and the record of the decisions the deploy forced.
-Hardening — regions, graceful drain, a real origin policy — is GLAD-G41FQ9.
+This document is the **runbook**: what to run, in what order, and what each
+setting is for. The decisions behind it — which region and the latency budget by
+geography, how loose the origin allowlist is, which machine class and what it
+costs, and what a deploy does to a match in progress — are recorded in
+[`NOTES.md`](../NOTES.md), with the numbers they were made from.
 
 ---
 
@@ -70,7 +73,23 @@ no cause, and the page just does not work.
 ```sh
 flyctl launch --no-deploy --copy-config      # reads the committed fly.toml
 flyctl deploy --build-arg GLADIATOR_BUILD="$(git rev-parse --short HEAD)"
+```
+
+Three secrets, and the deploy is wrong in a different way without each of them:
+
+```sh
+# The production origin. Without it, only previews can connect.
 flyctl secrets set ALLOWED_ORIGINS=https://gladiator.vercel.app
+
+# The Vercel account slug preview hostnames end with. Without it, no preview
+# can connect at all — deliberately: `origin.ts` fails closed rather than
+# falling back to a pattern that is not a control.
+flyctl secrets set VERCEL_SCOPE=<team-slug>
+
+# Signs the resume tickets a drain hands out. It must be the SAME on every
+# machine, because the machine that reads a ticket is never the one that minted
+# it. Without it, every deploy ends every live match.
+flyctl secrets set RESUME_SECRET="$(openssl rand -hex 32)"
 ```
 
 Then check it:
@@ -78,6 +97,58 @@ Then check it:
 ```sh
 curl -sf https://gladiator.fly.dev/healthz | jq
 ```
+
+`ready` must be `true` and `canResume` must be `true`. Both, plus the build and
+the live jitter budget, are what `scripts/verify-deploy.sh` checks — run it after
+every deploy:
+
+```sh
+./scripts/verify-deploy.sh https://gladiator.fly.dev "$(git rev-parse --short HEAD)"
+```
+
+It exits non-zero when the machine is up but not fit to serve, and warns without
+failing on the two things a rollback would not fix. **It is not wired into CI
+yet** — see "Wiring the gate into CI" below.
+
+### Wiring the gate into CI
+
+`flyctl deploy` exiting 0 says a machine started. It does not say the machine is
+serving *this* commit, that it can hold a tick rate, or that a deploy will not
+end every match on it — and those are the three ways this deploy is known to be
+able to go wrong, so the deploy job should read `/healthz` rather than trust an
+exit code.
+
+The change is two steps at the end of the `deploy-server` job in
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml), and it is **not
+applied yet**: modifying a workflow file needs a token with GitHub's `workflow`
+scope, which the agent that wrote this did not have. Paste it in:
+
+```yaml
+      - name: Deploy
+        id: deploy                                  # ← add this line
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          if [ -z "${FLY_API_TOKEN}" ]; then
+            echo "::warning::FLY_API_TOKEN is not set — skipping the Fly deploy."
+            echo "Set it with: flyctl tokens create deploy | gh secret set FLY_API_TOKEN"
+            echo "deployed=false" >> "$GITHUB_OUTPUT"     # ← and this line
+            exit 0
+          fi
+          flyctl deploy \
+            --remote-only \
+            --wait-timeout 300 \
+            --build-arg "GLADIATOR_BUILD=$(git rev-parse --short HEAD)"
+          echo "deployed=true" >> "$GITHUB_OUTPUT"        # ← and this one
+
+      # Reads the machine rather than the exit code. `scripts/verify-deploy.sh`.
+      - name: Verify the deployed machine
+        if: steps.deploy.outputs.deployed == 'true'
+        run: ./scripts/verify-deploy.sh https://gladiator.fly.dev "$(git rev-parse --short HEAD)"
+```
+
+Until that lands, run the script by hand after a deploy — it is the same
+command either way.
 
 ### `auto_stop_machines = "off"` is load-bearing
 
@@ -111,15 +182,16 @@ on the internet can open a socket to this server unless the server checks. That
 is cross-site WebSocket hijacking, and the check at upgrade is the whole
 defence.
 
-Three things are allowed, and the reasoning for each is in
+Three things are allowed. The decision — and the trap in the obvious version of
+it — is [`NOTES.md` §2](../NOTES.md); the code is
 `packages/server/src/origin.ts`:
 
-1. **Anything in `ALLOWED_ORIGINS`** — the production domain.
-2. **`^https://gladiator(-[a-z0-9-]+)?\.vercel\.app$`** — the project's preview
-   deployments. Deliberately project-scoped: a bare `*.vercel.app` pattern would
-   admit every Vercel user on earth, and an allowlist with no preview pattern at
-   all means every preview silently fails to connect, which looks exactly like
-   the server being down.
+1. **Anything in `ALLOWED_ORIGINS`** — the production domain, verbatim.
+2. **`^https://gladiator-[a-z0-9][a-z0-9-]*-<scope>\.vercel\.app$`** — this
+   project's preview deployments *in this Vercel account*. The scope is what
+   makes it a control: anybody may create a project called `gladiator-x` and be
+   handed `gladiator-x.vercel.app`, which a project-only pattern would admit.
+   With `VERCEL_SCOPE` unset there is no preview pattern at all.
 3. **`http://localhost:*`, and only when `NODE_ENV !== 'production'`.**
 
 A missing `Origin` header is refused. A browser always sends one; something that
@@ -128,6 +200,37 @@ does not is not a browser, and this server has no non-browser clients.
 None of this is authentication — `Origin` is set by browsers, not by people, and
 a native client can send whatever it likes. It stops browser-based abuse and
 nothing else. GLAD-V7M6PQ owns the rest.
+
+---
+
+## Health, readiness, and what a deploy does to a live match
+
+Two endpoints, because "is this process alive" and "should new players be sent
+here" are different questions and a checker that conflates them makes exactly
+the wrong call at least once (`packages/server/src/health.ts`):
+
+| URL | Question | Fails when |
+| --- | -------- | ---------- |
+| `/healthz` | should new players be sent here? | draining, full, or the tick scheduler has not run a frame in 2 s — `503` with `notReady` naming which |
+| `/livez` | is this process alive? | never on purpose; the only correct response to it failing is to kill the process, and this process is holding duels |
+
+Fly's health check reads the first, so a `503` takes the machine out of rotation
+for *new* connections and leaves the open WebSockets alone. That asymmetry is
+what makes a graceful deploy possible at all.
+
+On SIGTERM (`packages/server/src/shutdown.ts`) the machine stops being ready,
+hands every seated player a signed **resume ticket** naming their room, seat and
+the scoreline, closes the rooms with a **1001 "going away"**, and waits for the
+sockets — all inside 20 s, against a 30 s `kill_timeout`. The client comes back
+with `?room=<code>&resume=<ticket>` and the next machine rebuilds the room at
+that score. The reasoning, and the one secret it needs, are
+[`NOTES.md` §4](../NOTES.md).
+
+```sh
+# watch a deploy from the outside
+watch -n1 'curl -s -o /dev/null -w "%{http_code}\n" https://gladiator.fly.dev/healthz'
+flyctl logs --app gladiator | grep -E 'drain|draining|resume'
+```
 
 ## Transport settings
 
@@ -199,6 +302,7 @@ is over budget, so it can be a gate rather than a reading.
 | ----- | ---- | ------ | --- | --- | --- | ------- | ------- | ---- |
 | Dev box — Linux x64, Node 20.20.2, 8 cores idle | 8 rooms | 1250 | 0.000 ms | 1.851 ms | 2.955 ms | 0 | 0 ms | 125.0 Hz |
 | Dev box — same, with 4 busy-loops competing | 50 rooms | 3745 | 0.000 ms | 2.330 ms | 11.976 ms | 3 | 0 ms | 125.0 Hz |
+| Dev box — same, ~17 concurrent processes | 8 rooms | 1875 | 0.000 ms | 3.824 ms | 7.683 ms | 0 | 0 ms | 125.0 Hz |
 | Fly `shared-cpu-1x` | — | — | — | — | — | — | — | — |
 
 The bare timer on the same runs was p99 3.4 ms idle and 7.4 ms under
@@ -275,9 +379,13 @@ that which shards. A registry in Redis would tell a second machine which code
 belonged to which room and then have nothing useful to do with the answer. So
 v1 pins to one machine — `min_machines_running = 1` with
 `auto_stop_machines = "off"` — and the registry is an in-memory `Map`, which is
-definitionally consistent because there is only one of it. Scaling out needs a
-room-to-machine directory and a way to route an upgrade at it, and that is
-GLAD-G41FQ9's.
+definitionally consistent because there is only one of it. Scaling out — to a
+second region, which is the only reason this deploy would want it — needs a
+room-to-machine directory and a way to route an upgrade at it; the sketch and
+what would justify building it are [`NOTES.md` §1](../NOTES.md).
+
+It is also why a deploy has to hand the score to the players rather than to the
+next machine: there is nowhere else to put it. [`NOTES.md` §4](../NOTES.md).
 
 Rooms do not leak: one with no peers in it for a minute is closed and forgotten
 (`EMPTY_ROOM_TTL_MS`). That is deliberately blunt, and it is now downstream of a
@@ -400,9 +508,12 @@ pnpm exec playwright install --with-deps chromium
 
 ## Open questions
 
-- **Which Fly region.** `primary_region = "iad"` is the owner's nearest, not a
-  decision. A room-code game means the other player may be on another continent
-  and one of the two eats the whole round-trip. GLAD-G41FQ9 owns picking
-  properly, with a latency budget by geography.
+- **The Fly jitter row is still empty.** Every other number here was measured on
+  a laptop, and a laptop measures a laptop. The machine class is a decision made
+  from the contended dev-box row and has to be confirmed against the real one
+  the first time there are players on it. [`NOTES.md` §3](../NOTES.md).
+- **The latency table is nominal.** The round trips by geography that chose
+  `iad` are published typicals, not measurements from this deploy; the first
+  cross-continent playtest replaces them. [`NOTES.md` §1](../NOTES.md).
 - **Client asset budget.** The bundle is ~980 kB (~234 kB gzipped), essentially
   all Babylon. GLAD-PGS73O owns the budget.
