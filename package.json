@@ -20,6 +20,8 @@
     "no-physics": "node scripts/no-physics-plugin.mjs",
     "e2e": "node scripts/e2e.mjs",
     "map:bake": "tsx tools/bake-map.ts",
+    "audio:bake": "tsx tools/synth-audio.ts",
+    "audio:verify": "node scripts/audio-check.mjs",
     "ci": "pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run build && pnpm run no-physics && pnpm run guardrails"
   },
   "devDependencies": {
