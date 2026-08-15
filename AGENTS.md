@@ -10,7 +10,9 @@ Vocabulary is in [`CONTEXT.md`](./CONTEXT.md). Physics numbers are in
 reasoning are in [`docs/renderer.md`](./docs/renderer.md); the audio
 architecture and the sounds themselves are in
 [`docs/audio.md`](./docs/audio.md); the asset pipeline, the size budget and the
-licence rules are in [`docs/assets.md`](./docs/assets.md). Asset licences are
+licence rules are in [`docs/assets.md`](./docs/assets.md); the input-to-photon
+budget and what it is made of are in
+[`docs/latency.md`](./docs/latency.md). Asset licences are
 recorded in [`credits.json`](./credits.json) and rendered to
 [`CREDITS.md`](./CREDITS.md), and a file that is not in there does not ship.
 
@@ -34,8 +36,10 @@ recorded in [`credits.json`](./credits.json) and rendered to
 | `pnpm run audio:verify`| the audio acceptance checks in a real browser — own CI job |
 | `pnpm run assets:build` | compresses `assets/` into `packages/client/public/` and regenerates the credits (`--check` verifies) |
 | `pnpm run assets:budget` | fails if a committed asset is over 5 MB, or all of them over 24 MB |
-| `pnpm run ci`        | all seven, in that order — the whole gate in one command |
+| `pnpm latency`       | the input-to-photon budget, measured and printed — `docs/latency.md` |
+| `pnpm run ci`        | all eight, in that order — the whole gate in one command |
 | `pnpm run e2e`       | the browser smoke test — needs Chromium, own CI job    |
+| `pnpm demo`          | record a match to a file, and replay one — `record`, `replay <file>`, `check` |
 
 Two more exist and are not part of `ci`, because both write files that are then
 reviewed: `pnpm run assets:vendor` re-fetches the KTX2 transcoders on a Babylon
@@ -475,6 +479,10 @@ and this package does not have one.
 rounding is precisely what would hide a slow drift. It does normalise `-0` to
 `+0` and every NaN to one NaN; see `encoding.ts` for why both are necessary.
 
+`demo.ts` is the same machinery pointed at a *real* match rather than a
+committed fixture: same command-stream-plus-hash-trace shape, same
+`firstDivergence` reading the result. See **Observability**.
+
 ---
 
 ## The host
@@ -515,7 +523,8 @@ is exactly why `ServerSnapshot.ack` is a separate field from `state[0]`.
 
 No `node:` import, no `process`, no `Buffer`, no `ws`, no `setInterval`, no
 `Date.now()`. Everything from outside arrives as a constructor argument: the
-map, a `Clock`, a peer-id generator, and every peer as a `Transport`.
+map, a `Clock`, a peer-id generator, a `Log`, an optional `DemoRecorder`, and
+every peer as a `Transport`.
 
 Two layers hold that up. `room.isomorphic.test.ts` walks the import graph from
 `room.ts` and fails on any of those names — the same reasoning as
@@ -1032,6 +1041,89 @@ Layout is checked rather than eyeballed: every element carrying `data-hud-box`
 is measured by `pnpm run e2e` at 16:9, 21:9 and 4:3, and must be on screen and
 overlapping nothing. That set includes the diagnostics panel and the pointer
 prompt, because "nothing overlaps" has to mean nothing.
+
+---
+
+## Observability
+
+GLAD-2E6PUO. Four instruments, and one rule they share: **an instrument that
+costs what it measures is not an instrument.** Nothing below reads back from the
+GPU, none of it is on by default in a way a player pays for, and the two that
+run every frame write only when a value changed.
+
+### Demos: the command stream, not the state stream
+
+`packages/sim/src/demo.ts` is the format and the playback; `Room` records
+(`RoomOptions.recorder`); `packages/server/src/demoFile.ts` is the disk;
+`pnpm demo` is the program. `packages/server/src/demoTool.test.ts` plays a duel
+through a real host, writes the file, reads it back and requires the replayed
+hash trace to equal the recorded one.
+
+**A demo is the inputs, because the world is a function of them.** That is what
+`tick()` being deterministic *means*, and it is why a minute of duel is 120 KB
+rather than 40 MB. Recording states would also record the *answer*, which makes
+a demo useless as a determinism check — so a demo carries a hash trace on
+exactly the schedule `replay.ts` samples, and "this replays" is `verifyDemo`
+rather than a claim.
+
+Two things are not in the command stream and are recorded separately, because
+both are decisions the *host* takes between sub-steps: the seed and rules
+(which decide the spawn draw and when a round ends), and the ticks `startMatch`
+fired on. A replay that dropped the second would run the whole recording in
+warmup and still look plausible.
+
+Capture is off unless somebody asks: `GLADIATOR_DEMO_DIR` on the server,
+`?dev=1` beside `?local=1` in a tab (and then `window.__gladiator.demo()`).
+
+### The two counters that should never move
+
+`packages/sim/src/counters.ts` installs both observation seams and tallies them.
+The sim has no `console` and no counters, so each is a seam a host fills in —
+`onSpeedClamp` in `pmove/index.ts`, `onSelfSplash` in `damage.ts`.
+
+- **The speed clamp** is a 3000 qu/s rail on a game whose best rocket jump peaks
+  near 1000, and Quake has no clamp at all. Ours firing means something upstream
+  produced a velocity movement cannot.
+- **Self-splash mispredicts** (`client/src/net/mispredict.ts`) are the sharper
+  canary, and the reason is that self-splash is a **predicate** rather than a
+  trajectory: you either ate your own rocket or you did not. A correction
+  distance is continuous and always non-zero, so a prediction that missed an
+  explosion looks like a prediction that is 0.4 units out until it is far enough
+  along to hard-snap. The ledger compares the local player's health and armour
+  at a tick against the authoritative state for that tick, and attributes the
+  difference to a splash only when one is close enough to explain it.
+
+### Structured logs
+
+`packages/server/src/log.ts`. One JSON object per line, and **`room` and `tick`
+on every entry, including the entries that have neither** — null rather than
+absent, so a consumer never has to branch on whether the key is there. A bug
+report arrives as "room 7QK4M2, about a minute in", and those are the two
+coordinates that turns into. The tick is read at write time from the room's live
+world, which is why `scopeToRoom` takes a function.
+
+It is on the isomorphic side of the line (`room.ts` imports it), so the sink and
+the wall-clock are injected: `console.log` and `Date.now` in `index.ts`, an
+array in a test, and nothing at all in a browser tab.
+
+### The dev HUD, and the latency budget
+
+`?dev=1` mounts `packages/client/src/ui/devHud.ts`: tick, round trip, pending
+commands, the last predicted-versus-server error in units, snapshot bytes per
+second, frame pacing, and the two counters. Opt-in and deliberately unmarked —
+it carries no `data-hud-box`, because the aspect-ratio check in
+`scripts/e2e.mjs` is about the readout a *player* sees.
+
+`docs/latency.md` is the input-to-photon budget and `pnpm latency` is the
+measurement, inside `pnpm run ci` so the number is in a log somebody can read.
+Three of its six stages are ours and are measured; three are the player's
+hardware and are declared. The one worth knowing before touching the frame loop:
+**the drawn world trails wall-clock by exactly one sub-step**, by construction,
+because the accumulator holds precisely the time the simulation has not run
+(`client/src/loop.test.ts` proves it). The other: input is sampled once per
+frame, so the wait for it is length-biased and its tail is the *frame-time*
+tail — which makes frame pacing, not frame rate, the lever on how the game
+feels.
 
 ---
 

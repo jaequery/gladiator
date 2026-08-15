@@ -78,4 +78,13 @@ describe('readConfig', () => {
     expect(readConfig({ ALLOWED_ORIGINS: ' https://a.example , https://b.example ,, ' })
       .allowedOrigins).toEqual(['https://a.example', 'https://b.example'])
   })
+
+  it('records nothing unless GLADIATOR_DEMO_DIR names somewhere', () => {
+    // Off by default and off for the empty string, because a machine holding
+    // two hundred rooms should not be holding two hundred growing arrays
+    // because somebody exported a variable and left it blank. `demoFile.ts`.
+    expect(readConfig({}).demoDir).toBeNull()
+    expect(readConfig({ GLADIATOR_DEMO_DIR: '  ' }).demoDir).toBeNull()
+    expect(readConfig({ GLADIATOR_DEMO_DIR: ' /data/demos ' }).demoDir).toBe('/data/demos')
+  })
 })

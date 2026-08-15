@@ -33,6 +33,7 @@
 import { CloseReason, hashString } from '@gladiator/sim'
 
 import type { Clock } from './clock.ts'
+import { NO_LOG, type Log } from './log.ts'
 import type { Room } from './room.ts'
 import { mintRoomCode, normalizeRoomCode, type Uint32Source } from './roomCode.ts'
 
@@ -139,16 +140,32 @@ export type RoomRegistryOptions = {
   readonly create: (code: string) => Room
   /** Injected, so a test can fix the draw. `roomCode.ts`. */
   readonly random?: Uint32Source
+  /**
+   * Called with a room the instant before it is closed and forgotten.
+   *
+   * The seam demo capture hangs off: a recording is only worth writing once the
+   * match it recorded is over, and this is the one place every ending goes
+   * through — reaped, removed, or the whole machine shutting down. It runs
+   * *before* the close so the room's peers and world are still readable.
+   */
+  readonly onClosing?: (code: string, room: Room) => void
   readonly maxRooms?: number
   readonly emptyTtlMs?: number
-  readonly log?: (line: string) => void
+  /**
+   * Where the registry's own events go. One JSON object per event (`log.ts`).
+   *
+   * Passed straight through to every room this registry opens, which is what
+   * makes a room's lines carry its code without the registry having to know
+   * that they do.
+   */
+  readonly log?: Log
 }
 
 export function createRoomRegistry(options: RoomRegistryOptions): RoomRegistry {
   const clock = options.clock
   const maxRooms = options.maxRooms ?? MAX_ROOMS
   const emptyTtlMs = options.emptyTtlMs ?? EMPTY_ROOM_TTL_MS
-  const log = options.log ?? (() => undefined)
+  const log = options.log ?? NO_LOG
 
   type Live = {
     readonly code: string
@@ -171,13 +188,28 @@ export function createRoomRegistry(options: RoomRegistryOptions): RoomRegistry {
 
   const drop = (live: Live, closeCode: number, reason: string): void => {
     rooms.delete(live.code)
+    // Before the close, so whoever is listening still has a world to read. A
+    // throw in here would take a shutdown down with it, and writing a demo to a
+    // full disk is not a reason to lose the other hundred rooms.
+    try {
+      options.onClosing?.(live.code, live.room)
+    } catch (cause) {
+      log('registry.on_closing_failed', {
+        level: 'error',
+        room: live.code,
+        tick: live.room.tick,
+        error: String(cause),
+      })
+    }
     live.room.close(closeCode, reason)
   }
 
   return {
     create(): RoomEntry | null {
       if (rooms.size >= maxRooms) {
-        log(`registry: refused a new room, ${rooms.size}/${maxRooms} in use`)
+        // No room and no world, so both index fields are null — see `log.ts`
+        // on why they are written rather than left out.
+        log('registry.full', { level: 'warn', live: rooms.size, capacity: maxRooms })
         return null
       }
 
@@ -196,12 +228,12 @@ export function createRoomRegistry(options: RoomRegistryOptions): RoomRegistry {
         }
         rooms.set(code, live)
         created += 1
-        log(`registry: opened room ${code}, ${rooms.size} live`)
+        log('registry.opened', { room: code, tick: 0, live: rooms.size, capacity: maxRooms })
         return viewOf(live)
       }
 
       // Unreachable in practice; see MINT_ATTEMPTS. Refusing beats looping.
-      log(`registry: gave up minting a code after ${MINT_ATTEMPTS} collisions`)
+      log('registry.mint_failed', { level: 'error', attempts: MINT_ATTEMPTS, live: rooms.size })
       return null
     },
 
@@ -249,7 +281,12 @@ export function createRoomRegistry(options: RoomRegistryOptions): RoomRegistry {
           continue
         }
         if (nowMs - live.emptySinceMs >= emptyTtlMs) {
-          log(`registry: reaping room ${live.code}, empty for ${emptyTtlMs} ms`)
+          log('registry.reaped', {
+            room: live.code,
+            tick: live.room.tick,
+            emptyMs: Math.round(nowMs - live.emptySinceMs),
+            ttlMs: emptyTtlMs,
+          })
           reaped += 1
           drop(live, CloseReason.Normal, 'room expired')
         }

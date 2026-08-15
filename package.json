@@ -24,11 +24,13 @@
     "audio:bake": "tsx tools/synth-audio.ts",
     "lightmap:bake": "tsx tools/bake-lightmap.ts",
     "audio:verify": "node scripts/audio-check.mjs",
+    "demo": "pnpm --filter @gladiator/server run demo",
+    "latency": "tsx tools/latency-harness.ts",
     "assets:build": "tsx tools/assets-build.ts",
     "assets:budget": "tsx tools/assets-budget.ts",
     "assets:vendor": "tsx tools/assets-vendor.ts",
     "assets:placeholders": "tsx tools/assets-placeholders.ts",
-    "ci": "pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run build && pnpm run no-physics && pnpm run guardrails && pnpm run assets:budget"
+    "ci": "pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run build && pnpm run no-physics && pnpm run guardrails && pnpm run assets:budget && pnpm run latency"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
