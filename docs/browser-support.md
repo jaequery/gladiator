@@ -232,3 +232,39 @@ reason `pnpm run e2e` is: a browser download has no business slowing down a
 typecheck. An engine that will not start on the machine is recorded as *not
 measured* rather than as a verdict — an incomplete run must not read as a
 finding.
+
+### The CI job it wants
+
+Not committed, because the token that opened the pull request this arrived in
+had no `workflow` scope and GitHub refuses the push outright. It is four minutes
+of somebody's time and belongs in `.github/workflows/ci.yml` beside the
+`e2e` job:
+
+```yaml
+  # Does a browser actually hand a page raw mouse deltas? Measured on every push
+  # rather than assumed. It reports rather than gates, and the reason is in the
+  # table above: raw input is a property of the browser *and* the operating
+  # system, so a Linux runner can only ever confirm the Linux rows.
+  raw-input:
+    name: raw mouse input matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Install browsers
+        run: pnpm exec playwright install --with-deps chromium firefox webkit
+      - name: Probe
+        run: pnpm run raw-input | tee -a "$GITHUB_STEP_SUMMARY"
+```
+
+`--check` rather than a bare run would gate it, and it is safe to: the check
+compares *verdicts* and only for engines both the runner and the document have
+one for, so a Playwright upgrade that moves a build number does not turn the
+build red.
