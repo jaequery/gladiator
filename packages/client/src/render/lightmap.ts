@@ -122,3 +122,22 @@ export function applyLightmap(
   }
   attach(material, lightmap, mesh.name)
 }
+
+/**
+ * Take a lightmap back off, because it never arrived.
+ *
+ * The failure this exists for is not cosmetic. A `BaseTexture` that fails to
+ * load stays not-ready forever, `StandardMaterial.isReadyForSubMesh` waits on
+ * `isReadyOrNotBlocking()`, and `scene.isReady(true)` is the client's loading
+ * gate — so a 404 on one `.ktx2` would leave a player looking at a loading
+ * screen that never finishes, over a game that was otherwise ready to play.
+ *
+ * Detaching turns that into an arena drawn at its albedo with no baked light in
+ * it: darker and flatter than it should be, and *playable*. That is the right
+ * trade every time.
+ */
+export function detachLightmap(materials: readonly Material[]): void {
+  for (const material of materials) {
+    if (isLightmappable(material)) material.lightmapTexture = null
+  }
+}

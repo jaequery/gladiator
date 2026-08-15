@@ -24,7 +24,12 @@ import { CreateBox } from '@babylonjs/core/Meshes/Builders/boxBuilder'
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 
 import { ensureGltfLoader } from './gltf.ts'
-import { LIGHTMAP_UV_SET, LIGHTMAP_VERTEX_KIND, applyLightmap } from './lightmap.ts'
+import {
+  LIGHTMAP_UV_SET,
+  LIGHTMAP_VERTEX_KIND,
+  applyLightmap,
+  detachLightmap,
+} from './lightmap.ts'
 
 /* --------------------------------------------------------------------------
  * A glTF with two UV sets, assembled by hand
@@ -255,5 +260,19 @@ describe('applyLightmap over a list of materials', () => {
     const mesh = await loadQuad(false)
     const material = new StandardMaterial('lit', scene)
     expect(() => applyLightmap(mesh, new Texture(null, scene), [material])).toThrow(/no uv2/)
+  })
+
+  it('can be taken back off when the bake never arrives', async () => {
+    // A texture that fails to load stays not-ready forever, and
+    // `scene.isReady(true)` is the loading gate — so a 404 on one `.ktx2` would
+    // otherwise leave a player watching a loading screen over a playable game.
+    const mesh = await loadQuad(true)
+    const material = new StandardMaterial('lit', scene)
+    const texture = new Texture(null, scene)
+    applyLightmap(mesh, texture, [material])
+    expect(material.lightmapTexture).toBe(texture)
+
+    detachLightmap([material])
+    expect(material.lightmapTexture).toBeNull()
   })
 })

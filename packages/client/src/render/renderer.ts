@@ -53,7 +53,7 @@ import {
 } from './frameStats.ts'
 import { type FxCounts, type FxEvent, type FxSystem, type RocketView, createFx } from './fx.ts'
 import { configureKtx2 } from './ktx2.ts'
-import { applyLightmap } from './lightmap.ts'
+import { applyLightmap, detachLightmap } from './lightmap.ts'
 import { type MapMesh, buildMapMesh } from './mapMesh.ts'
 import { type SurfaceTextures, createSurfaceTextures } from './materials.ts'
 import { type PlayerRoster, createPlayerRoster } from './playerModel.ts'
@@ -141,13 +141,23 @@ export type Renderer = {
  * Load the map's bake and hand it to the arena's materials.
  *
  * Returns the texture so the renderer can dispose it, or `null` when there is
- * no bake to load. Failure is *not* fatal and is deliberately not awaited: a
- * missing lightmap is a dark arena, and a dark arena a player can still duel in
- * beats a black page with a stack trace on it.
+ * no bake to load. Nothing is awaited: the load is already inside the
+ * `scene.isReady(true)` gate everything else waits behind.
+ *
+ * A failure detaches it rather than propagating. A texture that never loads
+ * stays not-ready forever and `isReadyOrNotBlocking()` would hold that gate
+ * open, so a 404 on one `.ktx2` would leave a player on a loading screen that
+ * never finishes — over a game that was otherwise ready to play. `lightmap.ts`
+ * makes the same argument at more length.
  */
 function attachLightmap(scene: Scene, arena: MapMesh, url: string | undefined): Texture | null {
   if (url === undefined) return null
-  const texture = new Texture(url, scene)
+  const texture = new Texture(url, scene, {
+    onError: (message) => {
+      console.warn(`gladiator: no lightmap for this map (${url}): ${message ?? 'load failed'}`)
+      detachLightmap(arena.lightmapped)
+    },
+  })
   // A lightmap is one atlas covering the whole level exactly once. Tiling it
   // would wrap one wall's light on to another, so the address mode says so
   // rather than relying on every UV staying inside `[0, 1]`.
