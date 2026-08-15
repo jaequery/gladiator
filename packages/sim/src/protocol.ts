@@ -58,22 +58,33 @@ import { sanitizeUserCmd, type UserCmd } from './usercmd.ts'
  * — which is survivable and is precisely the experience being replaced. Being
  * told to reload is better than silently getting the old one.
  *
- * Version 8 is the connection lifecycle (GLAD-DVDV6P). {@link ServerWelcome}
+ * Version 8 adds {@link ServerQueue} (GLAD-ZHRFBK): where a player who asked to
+ * be matched with a stranger stands — waiting, matched, or timed out with the
+ * room code they can send a friend instead. A version-7 client never asks for
+ * the queue and so is never sent one, which is exactly why the bump is here
+ * rather than argued about: this file's rule is that the number moves whenever
+ * the shapes do, and a rule with an exception in it is a rule nobody can check.
+ *
+ * Version 9 is the connection lifecycle (GLAD-DVDV6P). {@link ServerWelcome}
  * grew a `token` — the one thing a returning client can prove a seat with — and
  * {@link ServerLifecycle} is new, because "your opponent's connection died and
  * they have 27 seconds to come back" is a sentence no other frame could carry. A
- * version-7 client is handed a `life` frame it cannot parse and treats the host
+ * version-8 client is handed a `life` frame it cannot parse and treats the host
  * as speaking a language it does not know, and, worse, has no token to come back
  * with: it would reconnect as a stranger and be told the room is full.
  *
- * That this is 8 and not 7 is the rule working. Both tickets were built against
- * version 6 and both called themselves 7; G41FQ9 merged first, and a merge to
- * `main` deploys, so a live client already speaks a 7 that has `drain` in it and
- * no `life`. Handing that client a `life` frame under a number it believes it
- * understands is the one failure this constant exists to prevent — so the
- * shipped meaning of 7 stands, and the frames that had not shipped move up.
+ * This ticket has now been renumbered twice — it was 7 until G41FQ9 landed a
+ * different 7, and 8 until ZHRFBK landed a different 8 — and both times for the
+ * same reason. `main` is what reaches production: the deploy job runs on a push
+ * to it, so a number that has landed there is spoken for, and a branch still
+ * holding that number is holding somebody else's frames. Handing a client a
+ * `life` frame under a version it believes it understands is the one failure
+ * this constant exists to prevent, and it costs nothing to avoid and cannot be
+ * undone once a client has it. Whoever lands next should expect to do this
+ * again: renumber at the merge rather than guess further ahead, because the
+ * guess is the part that keeps being wrong.
  */
-export const PROTOCOL_VERSION = 8
+export const PROTOCOL_VERSION = 9
 
 /**
  * The most commands one frame may carry. The client's accumulator clamps a
@@ -304,6 +315,56 @@ export type ServerDrain = {
 }
 
 /**
+ * Where a player who asked to be matched with a stranger stands.
+ *
+ * Quick match (GLAD-ZHRFBK) is `?queue=1` on the upgrade: the host either seats
+ * this peer in the room somebody else is already waiting in, or opens one and
+ * parks them in it until the next arrival. Either way they are in a real room
+ * with a real code from the first instant — the queue is a line of *rooms*, not
+ * of sockets (`server/queue.ts`) — so this frame is a status, never a promise.
+ *
+ * It exists because the alternative is a spinner with nothing behind it. A
+ * player who is waiting has to be told that they are waiting, roughly how long
+ * they may be kept, and what happened when the wait ends — and "nobody came"
+ * is an outcome with an action attached to it, which is why
+ * {@link ServerQueue.room} is on every one of these and not only on the
+ * welcome: the code is what turns a failed match into a link to send a friend.
+ */
+export type ServerQueue = {
+  readonly t: 'queue'
+  /**
+   * `waiting` — parked, nobody to pair with yet.
+   * `matched` — the other seat has just been taken; the match is starting.
+   * `timeout` — the wait ran out; this peer is out of the line and holding a
+   * room of its own. See {@link ServerQueue.room}.
+   */
+  readonly state: QueueState
+  /**
+   * The room this peer is sitting in, canonical. The same string as
+   * {@link ServerWelcome.room}, repeated because a `queue` frame can arrive
+   * before the welcome does — the host parks a peer the moment the socket is
+   * up, and the welcome is an answer to a `hello` that has not landed yet.
+   */
+  readonly room: string
+  /** How long this peer has been in the line, in whole milliseconds. */
+  readonly waitedMs: number
+  /**
+   * How long the wait may last in total, in whole milliseconds. Zero once the
+   * wait is over, either way it ended — there is no longer a deadline to draw.
+   */
+  readonly timeoutMs: number
+}
+
+/** The three things that can be true of a peer in the quick-match line. */
+export const QueueState = {
+  Waiting: 'waiting',
+  Matched: 'matched',
+  Timeout: 'timeout',
+} as const
+
+export type QueueState = (typeof QueueState)[keyof typeof QueueState]
+
+/**
  * The server's half of clock sync: "it is tick `tick` here, the last round trip
  * took `rttMs`, and I am holding `queued` of your commands".
  *
@@ -395,6 +456,7 @@ export type ServerMessage =
   | ServerMapMismatch
   | ServerFault
   | ServerDrain
+  | ServerQueue
 
 /** No round trip has completed yet, so there is nothing to report. */
 export const UNKNOWN_RTT = -1
@@ -594,6 +656,22 @@ export function parseServerMessage(raw: string): ServerMessage | null {
     const detail = asString(record['detail'], 256)
     if (code === null || detail === null) return null
     return { t: 'fault', code, detail }
+  }
+
+  if (record['t'] === 'queue') {
+    const state = record['state']
+    const room = asString(record['room'], 32)
+    const waitedMs = asFiniteInteger(record['waitedMs'])
+    const timeoutMs = asFiniteInteger(record['timeoutMs'])
+    if (room === null || waitedMs === null || timeoutMs === null) return null
+    if (waitedMs < 0 || timeoutMs < 0) return null
+    // Checked against the three the union allows rather than cast: a state
+    // nobody wrote is a state the UI has no sentence for, and a frame that got
+    // this far with one would put an empty panel on the screen.
+    if (state !== QueueState.Waiting && state !== QueueState.Matched && state !== QueueState.Timeout) {
+      return null
+    }
+    return { t: 'queue', state, room, waitedMs, timeoutMs }
   }
 
   if (record['t'] === 'drain') {

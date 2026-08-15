@@ -25,6 +25,7 @@ import {
   ANGLE_UNITS_PER_DEGREE,
   EntityFlag,
   EntityKind,
+  MatchPhase,
   SKELETON_SEED,
   TICK_INTERVAL_MS,
   TICK_RATE,
@@ -94,6 +95,7 @@ import { createDevHud, devMode, type DevHudModel } from './ui/devHud.ts'
 import { createFeedbackTracker } from './ui/feedback.ts'
 import { createMatchHud } from './ui/hud.ts'
 import { type HudModel, hudModel } from './ui/hudModel.ts'
+import { createQueuePanel, queueReadout } from './ui/queue.ts'
 
 const BUILD = import.meta.env.VITE_BUILD ?? 'dev'
 
@@ -407,6 +409,11 @@ async function boot(): Promise<void> {
   // laid out so as not to collide, which `scripts/e2e.mjs` checks at three
   // aspect ratios.
   const matchHud = createMatchHud(overlay)
+  // Where a player waiting for a stranger finds out that they are waiting.
+  // Mounted whatever this page is doing and shown only when the host has
+  // something to say about a queue, which for a room-code match is never —
+  // `ui/queue.ts`.
+  const queuePanel = createQueuePanel(overlay)
   const feedback = createFeedbackTracker()
   const shot = shotMode(window.location.search)
   if (shot) overlay.hidden = true
@@ -1112,6 +1119,15 @@ async function boot(): Promise<void> {
         mispredicted: predictor.mispredicts.stats.selfSplash,
       },
     })
+
+    // The quick-match panel, on the same beat: a wait is quoted in whole
+    // seconds, so ten reads of it a second is nine more than it can show.
+    // It comes off the screen the moment there is a match to play — which is
+    // not the same event as being matched, because a player whose wait timed
+    // out can still be joined by a friend with the code minutes later.
+    queuePanel.update(
+      queueReadout(netNow.queue, readout.match.phase !== MatchPhase.Warmup),
+    )
 
     // On the same 10 Hz beat as the panel above and for the same measured
     // reason: every value on it changes every frame, so throttling the *write*

@@ -283,6 +283,15 @@ export type Room = {
   /** The two sides of the duel and what each is doing. `lifecycle.ts`. */
   readonly seats: readonly Seat[]
   /**
+   * Whether this match is decided and cannot be rejoined.
+   *
+   * The same boolean {@link RoomSnapshot.ended} carries, reachable without
+   * building a snapshot — that one hashes the whole world, which is a strange
+   * price for a caller that only wants to know whether it may send somebody
+   * here. `queue.ts` is that caller.
+   */
+  readonly ended: boolean
+  /**
    * Seat a peer.
    *
    * Takes the transport already open — a loopback always is, and a `ws` socket
@@ -926,6 +935,10 @@ export function createRoom(options: RoomOptions): Room {
 
     get seats() {
       return lifecycle.seats
+    },
+
+    get ended() {
+      return lifecycle.ended
     },
 
     snapshot: () => ({

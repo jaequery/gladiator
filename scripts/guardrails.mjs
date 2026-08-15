@@ -29,13 +29,23 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 /**
  * Where a deliberately-violating probe is written.
  *
- * One per boundary: the simulation's, the renderer's, and the lockfile the
- * physics-plugin check reads. All three are deleted immediately, whether the
- * check passed or threw.
+ * One per boundary: the simulation's, the renderer's, the bot's fairness line
+ * (on both sides of it, because the exemption is half the claim), and the
+ * lockfile the physics-plugin check reads. All of them are deleted
+ * immediately, whether the check passed or threw.
  */
 const PROBES = {
   sim: join(ROOT, 'packages', 'sim', 'src', '__guardrail_probe__.ts'),
   client: join(ROOT, 'packages', 'client', 'src', '__guardrail_probe__.ts'),
+  bot: join(ROOT, 'packages', 'bot', 'src', '__guardrail_probe__.ts'),
+  botPerception: join(
+    ROOT,
+    'packages',
+    'bot',
+    'src',
+    'perception',
+    '__guardrail_probe__.ts',
+  ),
   lockfile: join(ROOT, '__guardrail_lock__.yaml'),
 }
 const PROBE_REL = relative(ROOT, PROBES.sim)
@@ -181,7 +191,7 @@ const CASES = [
   {
     layer: 'lint',
     label: 'a cross-package import fails lint with the reason, not just a resolver error',
-    probe: ["export { debugAxisMap } from '@gladiator/bot'", ''].join('\n'),
+    probe: ["export { createBot } from '@gladiator/bot'", ''].join('\n'),
     command: ['pnpm', 'run', 'lint'],
     expect: 'fail',
     match: [/may not import '@gladiator\/bot'/],
@@ -282,6 +292,57 @@ const CASES = [
       /`FxaaPostProcess` is banned in packages\/client/,
     ],
   },
+  /* ------------------------------------------------------------------
+   * The bot's fairness boundary. GLAD-V7CMHR.
+   *
+   * Only `packages/bot/src/perception/` may look at the world. The pair below
+   * is the interesting part: the *same* file is a lint error one directory up
+   * and clean inside `perception/`, which is what proves the exemption is a
+   * boundary rather than a hole.
+   * ------------------------------------------------------------------ */
+  {
+    layer: 'lint',
+    label: 'the bot cannot read the simulation entity list outside perception/',
+    probeAt: 'bot',
+    probe: [
+      "import { findPlayer } from '@gladiator/sim'",
+      "import type { EntityState, GameState } from '@gladiator/sim'",
+      '',
+      'export function cheat(state: GameState, slot: number): number {',
+      '  const them: EntityState | null = findPlayer(state, slot)',
+      '  for (const entity of state.entities) if (entity.id === 0) return 0',
+      '  return them === null ? 0 : them.health + them.armor',
+      '}',
+      '',
+    ].join('\n'),
+    command: ['pnpm', 'run', 'lint'],
+    expect: 'fail',
+    match: [
+      /`GameState` is banned in packages\/bot outside perception\//,
+      /`EntityState` is banned in packages\/bot outside perception\//,
+      /`findPlayer` is banned in packages\/bot outside perception\//,
+      /`\.entities` is banned in packages\/bot outside perception\//,
+    ],
+  },
+  {
+    layer: 'lint',
+    label: 'control: the same code is fine inside perception/, which is the one place that looks',
+    probeAt: 'botPerception',
+    probe: [
+      "import { findPlayer } from '@gladiator/sim'",
+      "import type { EntityState, GameState } from '@gladiator/sim'",
+      '',
+      'export function look(state: GameState, slot: number): number {',
+      '  const them: EntityState | null = findPlayer(state, slot)',
+      '  for (const entity of state.entities) if (entity.id === 0) return 0',
+      '  return them === null ? 0 : them.health + them.armor',
+      '}',
+      '',
+    ].join('\n'),
+    command: ['pnpm', 'run', 'lint'],
+    expect: 'pass',
+  },
+
   {
     layer: 'lockfile',
     label: 'a physics engine in the lockfile fails the build',
@@ -362,7 +423,7 @@ removeProbe()
 
 let failures = 0
 console.log(
-  `guardrails: ${CASES.length} deliberate violations, via ${PROBE_REL} and two like it\n`,
+  `guardrails: ${CASES.length} deliberate violations, via ${PROBE_REL} and four like it\n`,
 )
 
 for (const testCase of CASES) {

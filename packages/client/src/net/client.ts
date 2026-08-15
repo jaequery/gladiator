@@ -59,11 +59,13 @@
 import {
   LifecycleEvent,
   PROTOCOL_VERSION,
+  QueueState,
   TransportState,
   UNKNOWN_RTT,
   type ServerDrain,
   type ServerLifecycle,
   type ServerMessage,
+  type ServerQueue,
   type ServerSnapshot,
   type Transport,
   type UserCmd,
@@ -146,6 +148,36 @@ export function isFatal(status: NetStatus): boolean {
   return (
     status === 'version-mismatch' || status === 'map-mismatch' || status === 'unconfigured'
   )
+}
+
+/**
+ * Where this session stands in the quick-match line, as of now.
+ *
+ * The server's {@link ServerQueue} frame with one thing changed: `waitedMs`
+ * keeps running between frames. The host says "you have waited 0 ms" once, when
+ * it parks you, and then says nothing until something happens — so a readout
+ * that printed the frame verbatim would be a stopped clock in front of a player
+ * who is specifically waiting. The elapsed time is added here, from the same
+ * `now` everything else in this module is measured on, and it is cosmetic:
+ * nothing decides anything from it, which is why the client is allowed to keep
+ * it at all.
+ */
+export type QueueStatus = {
+  readonly state: QueueState
+  /** The room this session is in. Something to send a friend when it times out. */
+  readonly room: string
+  readonly waitedMs: number
+  /** How long the wait may last in total. Zero once it is over. */
+  readonly timeoutMs: number
+  /**
+   * How long ago the host last said this, in milliseconds.
+   *
+   * A different question from {@link QueueStatus.waitedMs}, which is why it is
+   * a second number rather than the same one read twice: the wait stops when
+   * the wait ends, and this does not. It is what lets "opponent found" leave
+   * the screen by itself a couple of seconds later (`ui/queue.ts`).
+   */
+  readonly sinceMs: number
 }
 
 export type NetSnapshot = {
@@ -238,6 +270,14 @@ export type NetSnapshot = {
    * resume ticket in it is the only copy of the score.
    */
   readonly drain: ServerDrain | null
+  /**
+   * The quick-match line, or `null` for a session that never asked to be in one.
+   *
+   * `null` is therefore "this is a room-code match", which is what the panel
+   * branches on: a duel between two friends must not grow a "looking for an
+   * opponent" spinner because one of them has not arrived yet.
+   */
+  readonly queue: QueueStatus | null
   /**
    * Bytes of snapshot frames received, and the rate over the last second.
    *
@@ -401,10 +441,18 @@ export function resolveServerUrl(
 }
 
 /**
- * The socket URL for this page's `?room=`, or a plain one to open a new match.
+ * The socket URL for this page's `?room=` or `?queue=1`, or a plain one to open
+ * a new match.
  *
  * `wss://host/` asks the host for a new room and the code it mints comes back
- * in the welcome; `wss://host/?room=ABC123` joins the match that code names.
+ * in the welcome; `wss://host/?room=ABC123` joins the match that code names;
+ * `wss://host/?queue=1` asks to be matched with whoever is waiting
+ * (`server/queue.ts`).
+ *
+ * A code beats the queue when a page somehow carries both, which is the same
+ * order the host reads them in: six characters somebody typed is a request for
+ * a *particular* match, and quietly putting that player in front of a stranger
+ * instead would be the worst possible way to answer it.
  *
  * A code is carried through verbatim rather than validated here: the host is
  * the only thing that knows which codes exist, it folds the ones a human typed
@@ -414,15 +462,29 @@ export function resolveServerUrl(
  * does: an unknown code is answered with a `fault` frame, which lands in
  * {@link NetSnapshot.message} and goes on the screen verbatim.
  *
- * The menu that puts a shareable link in front of a player instead of a query
- * string is GLAD-NPCTU8.
+ * The menu that puts a shareable link and a "find a match" button in front of a
+ * player instead of a query string is GLAD-NPCTU8.
  */
 export function joinUrl(serverUrl: string, search: string): string {
-  const room = new URLSearchParams(search).get('room')
-  if (room === null || room === '') return serverUrl
+  const params = new URLSearchParams(search)
+  const room = params.get('room')
+  if (room !== null && room !== '') {
+    const url = new URL(serverUrl)
+    url.searchParams.set('room', room)
+    return url.toString()
+  }
+  if (!params.has('queue')) return serverUrl
   const url = new URL(serverUrl)
-  url.searchParams.set('room', room)
+  // Normalised to `1` rather than echoed: the host only asks whether the
+  // parameter is there, and a page that arrived with `?queue=yes` should put
+  // one shape of request on the wire.
+  url.searchParams.set('queue', '1')
   return url.toString()
+}
+
+/** `?queue=1` — ask the host to match this player with a stranger. */
+export function quickMatchRequested(search: string): boolean {
+  return new URLSearchParams(search).has('queue')
 }
 
 /**
@@ -433,6 +495,14 @@ export function joinUrl(serverUrl: string, search: string): string {
  * the player asked for instead of quietly opening a new one. Once a welcome has
  * landed, the host's own canonical code replaces whatever the player typed —
  * they may have typed it with a hyphen in it (`server/roomCode.ts`).
+ *
+ * Building from the original URL also means a quick match keeps its `?queue=1`
+ * across a redial, and both halves of that are wanted (GLAD-ZHRFBK). A socket
+ * that died while still waiting for a stranger has no room to name, so the retry
+ * asks for the queue again, which is the only sensible thing it could ask for.
+ * Once a welcome has landed there is a code, and the host reads `?room=` first
+ * and never consults the queue — so the stale parameter rides along inert rather
+ * than being stripped by a second opinion here about what the host prefers.
  */
 export function rejoinUrl(joined: string, context: RedialContext): string {
   const url = new URL(joined)
@@ -490,6 +560,10 @@ export function createNetClient(options: NetOptions): NetClient {
   let mismatched = 0
   let dropped = 0
   let drain: ServerDrain | null = null
+  // The last thing the host said about the queue, and when it said it. The two
+  // together are what keep the wait counting between frames — see
+  // {@link QueueStatus}.
+  let queued: { readonly frame: ServerQueue; readonly atMs: number } | null = null
 
   // What the host told us about this session, and therefore what a reconnect has
   // to present to get back into it. The token is deliberately not in the
@@ -543,6 +617,27 @@ export function createNetClient(options: NetOptions): NetClient {
     snapshotBytesPerSecond = elapsedMs > 0 ? (windowBytes * 1000) / elapsedMs : 0
     windowStartMs = nowMs
     windowBytes = 0
+  }
+
+  /**
+   * The queue frame with the wait brought up to date, or `null`.
+   *
+   * Only a wait that is still running keeps counting: once the host has said
+   * `matched` or `timeout`, the number it sent is the final one, and a readout
+   * that went on incrementing it would be telling a player they are still
+   * waiting for something that has already happened.
+   */
+  const queueStatus = (): QueueStatus | null => {
+    if (queued === null) return null
+    const { frame, atMs } = queued
+    const since = Math.max(0, now() - atMs)
+    return {
+      state: frame.state,
+      room: frame.room,
+      waitedMs: frame.waitedMs + (frame.state === QueueState.Waiting ? since : 0),
+      timeoutMs: frame.timeoutMs,
+      sinceMs: since,
+    }
   }
 
   const onServerMessage = (raw: string) => {
@@ -618,6 +713,15 @@ export function createNetClient(options: NetOptions): NetClient {
       drain = parsed
       message = `the server is deploying — rejoin ${parsed.room} in a moment`
       options.onDrain?.(parsed)
+      return
+    }
+
+    if (parsed.t === 'queue') {
+      // Kept, not acted on. This module owns one socket and has no opinion
+      // about matchmaking; what it owes the player is that the answer to "am I
+      // still waiting" is on the screen, which is `ui/queue.ts`'s job from
+      // here. The stamp is what makes the wait tick over between frames.
+      queued = { frame: parsed, atMs: now() }
       return
     }
 
@@ -846,6 +950,7 @@ export function createNetClient(options: NetOptions): NetClient {
       reconnects,
       retries: retry.attempts,
       drain,
+      queue: queueStatus(),
       snapshotBytes,
       snapshotBytesPerSecond,
       bytesIn,

@@ -65,6 +65,11 @@ playback: `replay` compares the hash trace it produces against the one the file
 carries. Set `GLADIATOR_DEMO_DIR` and the server records every match; add
 `?dev=1` and a tab hosting single-player records its own. `docs/deploy.md`.
 
+`?room=ABC123` joins the match that code names; `?queue=1` asks to be matched
+with whoever else is waiting, and says how long it will keep looking before it
+gives up and hands back a code to send a friend instead. A code beats the queue
+when a page carries both. `AGENTS.md`, "Quick match is a line of rooms".
+
 `?dev=1` also puts the netcode panel on screen: tick, round trip, unacknowledged
 commands, prediction error in units, snapshot bytes per second, and two counters
 that should never move. `docs/latency.md` is what the response time is made of

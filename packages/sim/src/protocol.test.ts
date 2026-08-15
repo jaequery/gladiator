@@ -4,6 +4,7 @@ import {
   LifecycleEvent,
   MAX_CMDS_PER_BATCH,
   PROTOCOL_VERSION,
+  QueueState,
   UNKNOWN_RTT,
   decodeCmd,
   describeMapMismatch,
@@ -354,6 +355,42 @@ describe('parseServerMessage', () => {
     ]) {
       const raw = JSON.stringify({ ...good, ...patch })
       expect(parseServerMessage(raw), `accepted ${JSON.stringify(patch).slice(0, 40)}`).toBe(null)
+    }
+  })
+
+  it('parses a queue frame, in each of the three things it can say', () => {
+    for (const state of [QueueState.Waiting, QueueState.Matched, QueueState.Timeout]) {
+      const raw = JSON.stringify({
+        t: 'queue',
+        state,
+        room: 'H7K2Q9',
+        waitedMs: 4_000,
+        timeoutMs: 60_000,
+      })
+      expect(parseServerMessage(raw)).toEqual({
+        t: 'queue',
+        state,
+        room: 'H7K2Q9',
+        waitedMs: 4_000,
+        timeoutMs: 60_000,
+      })
+    }
+  })
+
+  it('refuses a queue frame in a state nobody wrote', () => {
+    // A state the panel has no sentence for would put an empty box on the
+    // screen, which is the failure this frame exists to prevent.
+    const good = { t: 'queue', state: 'waiting', room: 'H7K2Q9', waitedMs: 0, timeoutMs: 60_000 }
+    for (const patch of [
+      { state: 'searching' },
+      { state: 1 },
+      { room: 1 },
+      { waitedMs: -1 },
+      { waitedMs: 1.5 },
+      { timeoutMs: -1 },
+    ]) {
+      const raw = JSON.stringify({ ...good, ...patch })
+      expect(parseServerMessage(raw), `accepted ${JSON.stringify(patch)}`).toBe(null)
     }
   })
 

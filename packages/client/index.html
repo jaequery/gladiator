@@ -465,6 +465,65 @@
         border-radius: 50% 50% 0 0 / 100% 100% 0 0;
       }
 
+      /* The quick-match panel. Centred low, where a loading line goes and
+         where nothing else on the overlay is: the diagnostics panel is top
+         left, the score top centre and the vitals bottom left, and a player
+         waiting for a stranger is looking at the middle of an empty arena. */
+      .queue-panel {
+        position: absolute;
+        left: 50%;
+        bottom: 18%;
+        transform: translateX(-50%);
+        min-width: 280px;
+        max-width: min(420px, 60vw);
+        padding: 12px 16px;
+        border: 1px solid #30363d;
+        border-radius: 6px;
+        background: var(--panel);
+        text-align: center;
+      }
+
+      .queue-panel[hidden] {
+        display: none;
+      }
+
+      .queue-headline {
+        margin: 0 0 4px;
+        font-size: 14px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+      }
+
+      .queue-detail {
+        margin: 0;
+        color: var(--dim);
+      }
+
+      /* The wait, drawn. A bar rather than a spinner on purpose: a spinner says
+         "something is happening" and this has to say "for this much longer". */
+      .queue-track {
+        margin-top: 10px;
+        height: 3px;
+        border-radius: 2px;
+        background: #30363d;
+        overflow: hidden;
+      }
+
+      .queue-bar {
+        height: 100%;
+        width: 0;
+        background: var(--armour);
+      }
+
+      /* Both ways a wait can end read as an answer rather than as a failure. */
+      .queue-panel[data-queue='matched'] .queue-bar {
+        background: var(--match);
+      }
+
+      .queue-panel[data-queue='timeout'] .queue-bar {
+        background: var(--health-low);
+      }
+
       /* The credits screen. `pointer-events` is turned back on because it is
          the one overlay a player is meant to click: every entry links to where
          the asset came from. */

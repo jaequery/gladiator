@@ -15,6 +15,7 @@ import {
   healthReport,
   readinessOf,
 } from './health.ts'
+import type { QueueStats } from './queue.ts'
 import type { RegistryStats } from './rooms.ts'
 import type { SchedulerStats } from './scheduler.ts'
 
@@ -25,6 +26,14 @@ const ROOMS: RegistryStats = {
   created: 9,
   reaped: 6,
   missed: 1,
+}
+
+const QUEUE: QueueStats = {
+  waiting: 1,
+  parked: 4,
+  paired: 3,
+  timedOut: 1,
+  dropped: 0,
 }
 
 const TICKING: SchedulerStats = {
@@ -111,6 +120,7 @@ describe('the /healthz body', () => {
   const input = {
     draining: false,
     rooms: ROOMS,
+    queue: QUEUE,
     scheduler: TICKING,
     nowMs: NOW,
     build: 'abc1234',

@@ -127,6 +127,55 @@ const TRANSCENDENTAL_BANS = [
 }))
 
 /**
+ * What the bot may not know.
+ *
+ * The bot is fair because it perceives rather than reads: `packages/bot/src/
+ * perception/` looks at the world and writes a `WorldModel`, and every layer
+ * above it — the brain, the movement, the combat — is written against that
+ * model. `perception/worldModel.ts` argues the design; this is the fence.
+ *
+ * The names below are the *carriers*. An opponent's health, armour, refire
+ * timer and view angles cannot be reached without one of them, so banning the
+ * carriers is a complete ban on the leaves without having to ban `.health` —
+ * which the bot legitimately reads about *itself*, off its own model.
+ *
+ * `.entities` is here separately because it is the one that reads as innocent:
+ * a `for (const entity of state.entities)` in a dodge routine is two lines, it
+ * works, and it is exactly the omniscience `perception/fairness.test.ts` exists
+ * to refuse.
+ *
+ * The rule is off inside `perception/` — that directory's whole job is to be
+ * the one place that looks — and `scripts/guardrails.mjs` writes a probe on
+ * both sides of that line to prove the boundary is where this says it is.
+ *
+ * @type {Array<{ selector: string, message: string }>}
+ */
+const GROUND_TRUTH_BANS = [
+  ...[
+    'GameState',
+    'EntityState',
+    'EntityInit',
+    'EntityKind',
+    'EntityFlag',
+    'createGameState',
+    'cloneGameState',
+    'cloneEntity',
+    'spawnEntity',
+    'removeEntity',
+    'findEntity',
+    'findPlayer',
+  ].map((name) => ({
+    selector: `Identifier[name='${name}']`,
+    message: `gladiator: \`${name}\` is banned in packages/bot outside perception/. The bot is fair because it perceives rather than reads: only packages/bot/src/perception/ may touch ground truth, and everything above it is written against the WorldModel it produces. An opponent's health, armour, refire timer and aim can only be reached through a name like this one, which is why the name is what is banned. Add what you need to the WorldModel, behind the channel that would plausibly have told a player about it.`,
+  })),
+  {
+    selector: "MemberExpression[property.name='entities']",
+    message:
+      'gladiator: `.entities` is banned in packages/bot outside perception/. Iterating the simulation entity list is the omniscience this package is arranged to prevent — it is how a bot ends up dodging a rocket it never saw. Visible rockets are `worldModel.threats`, and the opponent is `worldModel.enemy`; both are gated by `perception/perceive.ts` on the four channels a player has.',
+  },
+]
+
+/**
  * The post-processing chain, which is empty and stays that way.
  *
  * Every full-screen pass is input-to-photon latency, paid on every frame, to
@@ -318,6 +367,22 @@ export default tseslint.config(
     files: ['packages/bot/**/*.ts', 'packages/server/**/*.ts'],
     rules: {
       'gladiator/require-ts-extension': 'error',
+    },
+  },
+  /* ------------------------------------------------------------------
+   * packages/bot — the fairness boundary. GLAD-V7CMHR.
+   *
+   * `perception/` is the one directory allowed to look at the world; the
+   * `ignores` below is that exemption, and it is the whole enforcement. See
+   * GROUND_TRUTH_BANS, and `packages/bot/src/perception/worldModel.ts` for why
+   * a bot that could read `state.entities` would not be a bot anybody enjoys
+   * losing to.
+   * ------------------------------------------------------------------ */
+  {
+    files: ['packages/bot/**/*.ts'],
+    ignores: ['packages/bot/src/perception/**/*.ts'],
+    rules: {
+      'no-restricted-syntax': ['error', ...GROUND_TRUTH_BANS],
     },
   },
   {
