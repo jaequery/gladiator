@@ -173,6 +173,13 @@ function room(...brushes: MapBrush[]): MapSource {
     { kind: 'box', surface: 'shell', mins: [-576, -576, -64], maxs: [-512, 576, 576] },
     { kind: 'box', surface: 'shell', mins: [-576, 512, -64], maxs: [576, 576, 576] },
     { kind: 'box', surface: 'shell', mins: [-576, -576, -64], maxs: [576, -512, 576] },
+    // Something standing in the line between the two spawns. `map/validate.ts`
+    // refuses a map where no two spawns are both far enough apart and out of
+    // each other's sight, and a bare room is exactly that map. Floor to
+    // ceiling, so it adds no ledge for the reachability pass to have an opinion
+    // about, and off to one corner so it is clear of the brushes the tests
+    // below put around the origin.
+    { kind: 'box', surface: 'shell', mins: [224, 288, 0], maxs: [352, 416, 512] },
   ]
   return {
     name: 'fixture',

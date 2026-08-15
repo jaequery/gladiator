@@ -50,16 +50,18 @@ describe('sections', () => {
     expect(sections.map((section) => section.heading)).toEqual([
       'Models',
       'Textures',
+      'Audio',
       'Vendored code',
     ])
   })
 
   it('never drops a credit it has no heading for', () => {
-    // Audio arrives in GLAD-26Q67K. Until then its kind is one this screen does
-    // not know, and a credit silently dropped is the failure that matters here.
+    // Fonts have no heading yet, and a credit silently dropped is the failure
+    // that matters here — a licence obligation nobody can see is one nobody
+    // honours.
     const sections = creditsSections({
       entries: [
-        { id: 'a', title: 'A', author: 'x', source: 'https://x', licence: 'CC0-1.0', kind: 'audio' },
+        { id: 'a', title: 'A', author: 'x', source: 'https://x', licence: 'CC0-1.0', kind: 'font' },
       ],
     })
     expect(sections).toHaveLength(1)

@@ -22,6 +22,7 @@
 
 import { PLAYER_HALF_WIDTH, PLAYER_MAXS, PLAYER_MINS } from '../bbox.ts'
 import { boxPenetration } from '../collide.ts'
+import { buildSpawnPlan } from '../match/spawn.ts'
 import { createTrace, traceBox } from '../trace.ts'
 import { createMapWorld, rampLowHeight } from './collide.ts'
 import { MAX_CLIMB, TECHNIQUES, analyzeReachability } from './reachability.ts'
@@ -315,6 +316,18 @@ function geometricDiagnostics(map: MapSource): MapDiagnostic[] {
         detail: `spawns[${i}] and spawns[${j}] are ${distance.toFixed(1)} units apart; the minimum is ${MIN_SPAWN_SEPARATION}. Two players who can shoot each other before they have moved are not duelling.`,
       })
     }
+  }
+
+  // Distance is a floor, not the rule. A round starts on a *pair* of points
+  // that are far enough apart **and** cannot see each other, and a map where no
+  // such pair exists cannot start a round at all — `selectSpawnPair` throws on
+  // it. Better to find that out at the bake than at the first round.
+  if (buildSpawnPlan(map, world).pairs.length === 0) {
+    found.push({
+      code: 'no-blind-spawn-pair',
+      where: 'spawns',
+      detail: `no two spawns are both at least ${MIN_SPAWN_SEPARATION} units apart and out of each other's sight, so there is no pair a round could start on. Put something in the line between two of them — the arena's own answer is a tower in the middle.`,
+    })
   }
 
   return found

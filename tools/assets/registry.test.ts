@@ -117,6 +117,27 @@ describe('rendering', () => {
     expect(markdown).toContain('`assets/textures/floor.png`')
   })
 
+  it('gives every row a table cell, a licence URL, and the Mixamo warning', () => {
+    // `tools/audio-assets.test.ts` reads this table row by row and requires all
+    // three. Pinning them here means a change to the renderer fails in the file
+    // that made it rather than in somebody else's.
+    const markdown = renderCreditsMarkdown({ entries: [CC0] })
+    const row = markdown.split('\n').find((line) => line.includes('assets/textures/floor.png'))
+    expect(row?.startsWith('|')).toBe(true)
+    expect(row).toMatch(/https?:\/\/\S+/)
+    expect(markdown).toMatch(/Mixamo/)
+  })
+
+  it('gives a compressed artifact a row of its own', () => {
+    // Otherwise "every asset in the tree has a row" is only true of the sources,
+    // and the files that actually ship are the ones that do not.
+    const markdown = renderCreditsMarkdown(
+      { entries: [CC0] },
+      new Map([['floor', ['packages/client/public/textures/floor.ktx2']]]),
+    )
+    expect(markdown).toContain('`packages/client/public/textures/floor.ktx2`')
+  })
+
   it('keeps the build fields out of what the player is shown', () => {
     const published: unknown = JSON.parse(renderPublicCredits({ entries: [CC0] }))
     const first = (published as { entries: Array<Record<string, unknown>> }).entries[0]

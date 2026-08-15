@@ -18,6 +18,7 @@
  * would be a second opinion about what a frame is.
  */
 import {
+  ANGLE_UNITS_PER_DEGREE,
   EntityFlag,
   SKELETON_SEED,
   TICK_RATE,
@@ -32,6 +33,18 @@ import {
   tick as simTick,
 } from '@gladiator/sim'
 
+import {
+  type AudioBufferLike,
+  type AudioEngine,
+  type AudioSnapshot,
+  NO_AUDIO,
+  createAudioEngine,
+  createBrowserAudioContext,
+} from './audio/engine.ts'
+import { createCueTracker, playCues } from './audio/cues.ts'
+import { armGesture } from './audio/gesture.ts'
+import { type OfflineHost, renderHrtfProbe, renderOnset } from './audio/probe.ts'
+import { ALL_SOUNDS, SoundId } from './audio/sounds.ts'
 import { createCreditsScreen, creditsRequested } from './credits.ts'
 import { dummyMode, dummyOpponent } from './dummyOpponent.ts'
 import { createHud } from './hud.ts'
@@ -102,13 +115,44 @@ export type DebugSnapshot = {
   readonly locked: boolean
   readonly raw: boolean
   readonly render: RenderSnapshot
+  readonly audio: AudioSnapshot
   readonly net: ReturnType<ReturnType<typeof createNetClient>['snapshot']>
+}
+
+/**
+ * The audio side of the debug surface.
+ *
+ * `scripts/audio-check.mjs` drives a real browser and has to be able to answer
+ * "did anything decode after loading", "how far ahead of the audio clock did
+ * that shot schedule" and "does a source behind the listener render differently
+ * from one in front" — none of which can be scraped off a page.
+ *
+ * It ships in production for the same reason the frame capture does: audio
+ * latency and HRTF quality are properties of the *device*, and the machine that
+ * sounds wrong is the one the measurement needs to run on.
+ */
+export type AudioDebug = {
+  snapshot(): AudioSnapshot
+  /** Play every sound in the catalogue once. Returns how many started. */
+  playAll(): number
+  /** Render the HRTF probe offline. `capture` also returns the samples. */
+  probe(capture?: boolean): Promise<unknown>
+  /** How long after being scheduled a feedback voice becomes audible. */
+  onset(): Promise<unknown>
+  /**
+   * Suspend the context, putting the page back in the state a browser hands it
+   * to us in before any gesture. `scripts/audio-check.mjs` uses it to make the
+   * gesture check mean something in a headless browser, which has no autoplay
+   * policy to be held back by.
+   */
+  suspend(): void
 }
 
 declare global {
   interface Window {
     __gladiator?: {
       snapshot(): DebugSnapshot
+      audio: AudioDebug
       /** Judge the frames since {@link resetFrameStats} against a budget. */
       frameVerdict(budgetMs: number): FrameVerdict
       resetFrameStats(): void
@@ -201,6 +245,30 @@ function dummyAt(tick: number, alpha: number): PlayerNetState {
   )
 }
 
+/**
+ * The audio engine, or `null` if this browser will not give us one.
+ *
+ * Loading is started and deliberately not awaited: a page that cannot fetch its
+ * sounds is a quiet game, not a broken one, so the failure path is a warning and
+ * a counter in the snapshot rather than a `hud.fail`. Every sound is decoded
+ * before it is ever played — `audio/engine.ts` explains why there is no lazy
+ * path.
+ */
+function startAudio(): AudioEngine | null {
+  try {
+    const engine = createAudioEngine({ context: createBrowserAudioContext() })
+    engine.load().catch((cause: unknown) => {
+      console.warn(`gladiator: audio failed to load: ${String(cause)}`)
+    })
+    return engine
+  } catch (cause) {
+    // Every browser this game supports has Web Audio; a context can still be
+    // refused — an exhausted context limit, a hardened privacy setting.
+    console.warn(`gladiator: no audio context: ${String(cause)}`)
+    return null
+  }
+}
+
 async function boot(): Promise<void> {
   const app = document.querySelector<HTMLElement>('#app')
   if (app === null) throw new Error('no #app element to mount into')
@@ -242,7 +310,28 @@ async function boot(): Promise<void> {
   }
 
   const input = createInputController(canvas)
-  if (!shot) canvas.addEventListener('click', () => input.requestLock())
+
+  // Audio, and the one gesture that starts it.
+  //
+  // The context is created now — suspended, which is what a browser gives you
+  // before a gesture — and the whole catalogue is fetched and decoded straight
+  // away, in the background. Nothing waits for it: a page that cannot load its
+  // sounds is a quiet game, not a broken one, so the failure path is a warning
+  // and a counter in the snapshot rather than a `hud.fail`.
+  //
+  // `armGesture` is what makes the first shot audible: it resumes the context on
+  // the *same* click that takes pointer lock, rather than on some other gesture
+  // a player who clicked straight into the canvas never makes. `audio/gesture.ts`
+  // is the whole argument.
+  const audio = shot ? null : startAudio()
+  const cues = createCueTracker()
+
+  if (!shot) {
+    armGesture(canvas, {
+      resume: () => audio?.resume(),
+      requestLock: () => input.requestLock(),
+    })
+  }
   window.addEventListener('resize', () => renderer.resize())
 
   // The credits, rendered from the file `pnpm assets:build` generates. Mounted
@@ -283,6 +372,20 @@ async function boot(): Promise<void> {
   // from the same artifact. `SKELETON_ARENA` stays as the sim's own default and
   // as the golden replay's world.
   const state = createMapState(CLIENT_MAP.source, SKELETON_SEED)
+
+  // Adopt the yaw the spawn point was authored with.
+  //
+  // The camera is a puppet of the simulation, but *view angles* are the one
+  // piece of float state the client is authoritative over — they go into the
+  // `UserCmd` the server lag-compensates against, which is why the input
+  // controller owns them (`input/controller.ts`). The kernel writes an
+  // entity's angles from whatever command arrives next, so a spawn's facing is
+  // an instruction the state carries and the peer with a mouse on it has to
+  // obey: without this line the first command a player sends spins them back
+  // to due north on the frame after they spawn. Policy is `match/spawn.ts`.
+  const spawned = findPlayer(state, LOCAL_SLOT)
+  if (spawned !== null) input.angles.yawDegrees = spawned.angles[1] / ANGLE_UNITS_PER_DEGREE
+
   // `tick()` advances the world in place, so the frame before is a *copy* —
   // `AGENTS.md` says this out loud because holding a reference instead is a bug
   // that only shows up as a rendering stutter.
@@ -316,6 +419,29 @@ async function boot(): Promise<void> {
     }
   }
 
+  /**
+   * Run an offline render of a decoded sound.
+   *
+   * The offline context has to be created at the live one's sample rate: a
+   * buffer decoded for a 48 kHz device and rendered into a 44.1 kHz context is
+   * resampled on the way in, and the measurement becomes partly a measurement
+   * of the resampler.
+   */
+  const offline = <T>(
+    render: (
+      buffer: AudioBufferLike,
+      createContext: (channels: number, length: number, sampleRate: number) => OfflineHost,
+    ) => Promise<T>,
+  ): Promise<T> => {
+    if (audio === null) return Promise.reject(new Error('no audio context'))
+    const buffer = audio.buffer(SoundId.RocketFire)
+    if (buffer === null) return Promise.reject(new Error('rocket-fire is not loaded'))
+    return render(
+      buffer,
+      (channels, length, sampleRate) => new OfflineAudioContext(channels, length, sampleRate),
+    )
+  }
+
   window.__gladiator = {
     snapshot: () => ({
       build: BUILD,
@@ -329,8 +455,41 @@ async function boot(): Promise<void> {
       locked: input.locked,
       raw: input.raw,
       render: renderSnapshot(),
+      audio: audio?.snapshot() ?? NO_AUDIO,
       net: net.snapshot(),
     }),
+    audio: {
+      snapshot: () => audio?.snapshot() ?? NO_AUDIO,
+      playAll: () => {
+        if (audio === null) return 0
+        // Both buses, so the check exercises the panner path as well as the
+        // direct one — and `allowedOn` refuses the feedback-only sounds on the
+        // world bus, which is the rule being checked rather than a special case
+        // in the checker.
+        let started = 0
+        for (const spec of ALL_SOUNDS) {
+          if (audio.playFeedback(spec.id) !== null) started += 1
+          if (audio.playWorld(spec.id, [256, 0, 50]) !== null) started += 1
+        }
+        return started
+      },
+      probe: (capture = false) =>
+        offline((buffer, createContext) =>
+          renderHrtfProbe({
+            buffer,
+            sampleRate: audio?.context.sampleRate ?? 0,
+            capture,
+            createContext,
+          }),
+        ),
+      onset: () =>
+        offline((buffer, createContext) =>
+          renderOnset({ buffer, sampleRate: audio?.context.sampleRate ?? 0, createContext }),
+        ),
+      suspend: () => {
+        audio?.context.suspend?.()
+      },
+    },
     frameVerdict: (budgetMs: number) => renderer.verdict(budgetMs),
     resetFrameStats: () => renderer.resetFrameStats(),
     capture: (width: number, height: number) => {
@@ -397,13 +556,26 @@ async function boot(): Promise<void> {
     const self = netStateOf(state, LOCAL_SLOT)
     const opponents = dummy ? [dummyAt(state.tick, alpha)] : []
 
+    // The eye, interpolated once and used twice: the camera is put here and so
+    // is the listener. Literally the same vector, because ears half a tick from
+    // the picture would put every sound at a slightly different angle than the
+    // thing making it.
+    const eye = interpolateOrigin({ origin: originOf(previous) }, { origin: originOf(state) }, alpha)
+
+    // Both are written from simulation state rather than read back from
+    // anything (`audio/positional.ts`), and the netstates the renderer is about
+    // to draw are the ones folded into sound cues. Not "the audio system
+    // watches the renderer": the two are siblings reading one source, which is
+    // what keeps a dropped snapshot from making the picture and the sound
+    // disagree about what happened.
+    if (audio !== null) {
+      audio.listen({ origin: eye, yawUnits: cmd.yaw, pitchUnits: cmd.pitch })
+      playCues(audio, cues.observe({ self, others: opponents }))
+    }
+
     renderer.render(
       {
-        origin: interpolateOrigin(
-          { origin: originOf(previous) },
-          { origin: originOf(state) },
-          alpha,
-        ),
+        origin: eye,
         // The view angle is the freshest thing the frame has; interpolating it
         // would add latency to aim. `render/view.ts`.
         yawUnits: cmd.yaw,

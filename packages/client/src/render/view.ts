@@ -208,9 +208,12 @@ export function cameraPose(view: RenderView): CameraPose {
 /**
  * Quake's unit forward vector for a view, in the Quake frame.
  *
- * Only the renderer's tests use it — `pmove` derives its own basis from the
- * command inside the simulation — but it is the definition both agree on, so
- * it lives beside the camera rather than being written out twice.
+ * `pmove` derives its own basis from the command inside the simulation, but
+ * everything on this side of the boundary that needs to know which way the
+ * player is facing takes it from here rather than writing it out again: the
+ * renderer's tests, and the audio listener (`audio/positional.ts`), whose
+ * forward vector has to agree with the camera's to the degree or the sound
+ * field sits at an angle to the picture.
  */
 export function viewForwardQuake(yawRadians: number, pitchRadians: number): Vec3 {
   const cosPitch = Math.cos(pitchRadians)

@@ -433,13 +433,15 @@ try {
   await tab.waitForTimeout(1000)
   await tab.keyboard.up('w')
   const afterRun = await tab.evaluate(() => window.__gladiator?.snapshot())
-  const ran = Math.abs(afterRun.origin[0] - before.origin[0])
-  // A second at 320 qu/s, minus whatever the first frames cost.
-  check(
-    'holding W runs the box across the plane',
-    ran > 150,
-    `moved ${ran.toFixed(1)} qu along +x in a second`,
+  // Horizontal distance, not distance along +x: a player now spawns facing the
+  // way the map's spawn point says (`match/spawn.ts`), so "forward" is whatever
+  // yaw that was and projecting it on to one axis would be measuring the map.
+  const ran = Math.hypot(
+    afterRun.origin[0] - before.origin[0],
+    afterRun.origin[1] - before.origin[1],
   )
+  // A second at 320 qu/s, minus whatever the first frames cost.
+  check('holding W runs the box across the plane', ran > 150, `moved ${ran.toFixed(1)} qu in a second`)
 
   // --- jumping ------------------------------------------------------------
   let peak = 0

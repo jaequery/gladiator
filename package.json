@@ -20,6 +20,8 @@
     "no-physics": "node scripts/no-physics-plugin.mjs",
     "e2e": "node scripts/e2e.mjs",
     "map:bake": "tsx tools/bake-map.ts",
+    "audio:bake": "tsx tools/synth-audio.ts",
+    "audio:verify": "node scripts/audio-check.mjs",
     "assets:build": "tsx tools/assets-build.ts",
     "assets:budget": "tsx tools/assets-budget.ts",
     "assets:vendor": "tsx tools/assets-vendor.ts",

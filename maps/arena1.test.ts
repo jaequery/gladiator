@@ -30,11 +30,15 @@ import {
   angleVectors,
   boxPenetration,
   buildReachabilityGraph,
+  buildSpawnPlan,
+  createGameState,
   createMapWorld,
   createPmoveBody,
   createTrace,
   parseMapSource,
   pmove,
+  spawnRound,
+  spawnSeparation,
   traceBox,
   traceRay,
   validateMap,
@@ -141,6 +145,41 @@ describe('the two spawns', () => {
       const towards = -spawn.origin[0] * forward[0] - spawn.origin[1] * forward[1]
       expect(towards).toBeGreaterThan(0)
     }
+  })
+})
+
+/* --------------------------------------------------------------------------
+ * Round starts on this arena
+ * ----------------------------------------------------------------------- */
+
+/** How many seeded round starts the spawn system is exercised over here. */
+const ROUND_STARTS = 1000
+
+describe('a thousand seeded round starts on Crucible', () => {
+  const plan = buildSpawnPlan(arena, world)
+
+  it('finds exactly one pair to start on, and it is the two opposite corners', () => {
+    expect(plan.pairs).toEqual([[0, 1]])
+  })
+
+  it('never seats both players on the same point, and never inside the separation', () => {
+    for (let seed = 0; seed < ROUND_STARTS; seed += 1) {
+      const state = createGameState(seed)
+      const [a, b] = spawnRound(state, plan)
+      expect(a.point).not.toBe(b.point)
+      const [pa, pb] = [arena.spawns[a.point], arena.spawns[b.point]]
+      if (pa === undefined || pb === undefined) throw new Error('a spawn that is not there')
+      expect(spawnSeparation(pa, pb)).toBeGreaterThanOrEqual(MIN_SPAWN_SEPARATION)
+    }
+  })
+
+  it('flips which end each player gets, so nobody owns a corner', () => {
+    const seats = new Set<string>()
+    for (let seed = 0; seed < ROUND_STARTS; seed += 1) {
+      const [a] = spawnRound(createGameState(seed), plan)
+      seats.add(String(a.point))
+    }
+    expect([...seats].sort()).toEqual(['0', '1'])
   })
 })
 

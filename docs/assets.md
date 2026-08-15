@@ -261,6 +261,12 @@ covered by an entry, and every entry must name a file that is committed. Both
 directions fail the build: the first stops an uncredited asset shipping, the
 second stops the registry rotting into a list of things that used to exist.
 
+That covers the sounds too, which have no build step here — `pnpm audio:bake`
+synthesises them from `tools/synth-audio.ts` straight into `public/audio/`
+([`docs/audio.md`](./audio.md)). They are in the registry anyway, because "which
+licence is that under" is one question and it should have one answer, in one
+file, rendered to one table.
+
 ---
 
 ## §7 The size budget

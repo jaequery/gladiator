@@ -32,6 +32,7 @@ export const CREDITS_URL = '/credits.json'
 const HEADINGS: ReadonlyArray<readonly [kind: string, heading: string]> = [
   ['model', 'Models'],
   ['texture', 'Textures'],
+  ['audio', 'Audio'],
   ['vendored', 'Vendored code'],
 ]
 

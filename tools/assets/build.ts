@@ -132,11 +132,33 @@ export async function buildArtifacts(
   }
 
   artifacts.push(
-    textArtifact(CREDITS_MARKDOWN, renderCreditsMarkdown(credits), 'generated from credits.json'),
+    textArtifact(
+      CREDITS_MARKDOWN,
+      renderCreditsMarkdown(credits, derivedByEntry(plan)),
+      'generated from credits.json',
+    ),
     textArtifact(CREDITS_PUBLIC, renderPublicCredits(credits), 'generated from credits.json'),
   )
 
   return { plan, artifacts }
+}
+
+/**
+ * What the pipeline produces from each entry, so `CREDITS.md` can carry a row
+ * for the compressed file as well as the source it came from.
+ *
+ * A vendored entry names files that are already where they are served from, so
+ * they are already in `files` and are skipped here rather than listed twice.
+ */
+export function derivedByEntry(plan: Plan): Map<string, string[]> {
+  const derived = new Map<string, string[]>()
+  for (const [output, entry] of plan.outputs) {
+    if (entry.files.includes(output)) continue
+    const existing = derived.get(entry.id)
+    if (existing === undefined) derived.set(entry.id, [output])
+    else existing.push(output)
+  }
+  return derived
 }
 
 function equalBytes(a: Uint8Array, b: Uint8Array): boolean {
