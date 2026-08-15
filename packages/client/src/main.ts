@@ -29,11 +29,14 @@ import {
   TICK_INTERVAL_MS,
   TICK_RATE,
   createMapState,
+  createTrace,
   findPlayer,
   type GameState,
   hashState,
   mapGeometry,
   onSpeedClamp,
+  projectilePosition,
+  traceRay,
   type Transport,
   type Vec3,
 } from '@gladiator/sim'
@@ -63,6 +66,13 @@ import { createPredictor } from './net/prediction.ts'
 import { CorrectionBand, decayMsFor } from './net/reconcile.ts'
 import { websocketTransport } from './net/websocketTransport.ts'
 import { type PlayerNetState, playerNetState } from './render/animState.ts'
+import {
+  type FxMemory,
+  type FxTraceHit,
+  INITIAL_FX,
+  type RocketView,
+  advanceFx,
+} from './render/fx.ts'
 import { FRAME_BUDGET_MS, type FrameVerdict } from './render/frameStats.ts'
 import { createRenderOffset, withRenderOffset } from './render/renderOffset.ts'
 import { type Renderer, createRenderer } from './render/renderer.ts'
@@ -109,6 +119,10 @@ export type RenderSnapshot = {
   readonly drawnPlayers: number
   /** `Weapon` the first-person viewmodel is showing; 0 is no hands. */
   readonly viewmodelWeapon: number
+  /** Live particles, beams and marks. `render/fx.ts`. */
+  readonly particles: number
+  readonly beams: number
+  readonly marks: number
   readonly meanMs: number
   readonly medianMs: number
   readonly p99Ms: number
@@ -296,6 +310,26 @@ function dummyAt(tick: number, alpha: number): PlayerNetState {
 }
 
 /**
+ * The rockets in the air, at a fractional tick.
+ *
+ * A rocket is a *trajectory* in the simulation — `trBase`, `trDelta` and a
+ * spawn tick, evaluated in closed form — so there is nothing to interpolate
+ * between: the position at `tick + alpha` is the same expression the sim
+ * evaluates at a whole tick, asked a fraction later. That is why rockets are
+ * smooth at any frame rate for free, and why this reads the trajectory rather
+ * than remembering where the rocket was last frame.
+ */
+function rocketsIn(state: GameState, at: number, into: RocketView[]): readonly RocketView[] {
+  into.length = 0
+  for (const entity of state.entities) {
+    if (entity.kind !== EntityKind.Projectile) continue
+    const where = projectilePosition([0, 0, 0], entity, at)
+    into.push({ id: entity.id, origin: [where[0], where[1], where[2]] })
+  }
+  return into
+}
+
+/**
  * The audio engine, or `null` if this browser will not give us one.
  *
  * Loading is started and deliberately not awaited: a page that cannot fetch its
@@ -357,6 +391,11 @@ async function boot(): Promise<void> {
       // Derived from the collision brushes, never authored beside them:
       // `packages/sim/src/map/geometry.ts`.
       geometry: mapGeometry(CLIENT_MAP.source),
+      // The map's own bake, written by `pnpm lightmap:bake` and compressed by
+      // `pnpm assets:build`. Named after the map rather than configured, so a
+      // map that ships without one 404s under its own name instead of quietly
+      // borrowing another level's light.
+      lightmapUrl: `/textures/${CLIENT_MAP.source.name}_lightmap.ktx2`,
       ...(shot
         ? { adaptQuality: false, pixelRatio: 1, preserveDrawingBuffer: true, forceWebGL: true }
         : {}),
@@ -371,6 +410,22 @@ async function boot(): Promise<void> {
   }
 
   const input = createInputController(canvas)
+
+  // The effects fold, and the one thing it cannot derive: where a shot landed.
+  // It is handed the simulation's own hitscan over the map the client is
+  // ticking, so a rail beam stops at the wall the shot stopped at rather than
+  // at a wall the renderer guessed. `render/fx.ts`.
+  let fxMemory: FxMemory = INITIAL_FX
+  const fxRockets: RocketView[] = []
+  const fxTrace = createTrace()
+  const traceForFx = (from: Vec3, to: Vec3): FxTraceHit => {
+    traceRay(fxTrace, CLIENT_MAP.world, from, to)
+    return {
+      point: [fxTrace.endpos[0], fxTrace.endpos[1], fxTrace.endpos[2]],
+      normal: [fxTrace.planeNormal[0], fxTrace.planeNormal[1], fxTrace.planeNormal[2]],
+      hit: fxTrace.fraction !== 1,
+    }
+  }
 
   // Audio, and the one gesture that starts it.
   //
@@ -551,6 +606,9 @@ async function boot(): Promise<void> {
       triangles: renderer.triangles,
       drawnPlayers: renderer.drawnPlayers,
       viewmodelWeapon: renderer.viewmodelWeapon,
+      particles: renderer.effects.particles,
+      beams: renderer.effects.beams,
+      marks: renderer.effects.marks,
       meanMs: stats.meanMs,
       medianMs: stats.medianMs,
       p99Ms: stats.p99Ms,
@@ -722,11 +780,12 @@ async function boot(): Promise<void> {
 
     // Everyone else, from real data, on the interpolation clock — never
     // predicted, because this client has no knowledge of their future input.
-    // The scripted stand-in is only reached when nothing is sending snapshots,
-    // which is a page with no host on the other end of it.
-    // Players only. The buffer holds every entity that is not ours — a rocket
-    // we fired is one of them — and a rocket in flight is not a reason to stop
-    // drawing the scripted stand-in.
+    //
+    // Players only: the buffer holds every entity that is not ours, a rocket we
+    // fired included, and a rocket in flight is not a reason to stop drawing
+    // the scripted stand-in. That stand-in is reached when nobody else is in
+    // the snapshots at all, which is a page with no opponent on the other end
+    // of it.
     const drawnPlayers = opponentHistory
       .sample(opponentClock.renderTick)
       .entities.flatMap((entity) =>
@@ -763,6 +822,20 @@ async function boot(): Promise<void> {
       playCues(audio, cues.observe({ self, others: opponents }))
     }
 
+    // The effects, folded from the same netstates the renderer is about to draw
+    // and the same rockets. A sibling of `playCues` above rather than something
+    // downstream of it: both read one source, which is what keeps a dropped
+    // snapshot from making the picture and the sound disagree about what
+    // happened.
+    const rockets = rocketsIn(state, state.tick + alpha, fxRockets)
+    const fold = advanceFx(fxMemory, {
+      self,
+      others: opponents,
+      rockets,
+      trace: traceForFx,
+    })
+    fxMemory = fold.memory
+
     renderer.render(
       {
         origin: eye,
@@ -774,6 +847,8 @@ async function boot(): Promise<void> {
         alpha,
         ...(opponents.length > 0 ? { players: opponents } : {}),
         ...(self === null ? {} : { self }),
+        ...(rockets.length > 0 ? { rockets } : {}),
+        ...(fold.events.length > 0 ? { fx: fold.events } : {}),
       },
       elapsedMs,
     )

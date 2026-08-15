@@ -48,6 +48,7 @@ import {
 } from '@gladiator/sim'
 
 import type { PlayerNetState } from './animState.ts'
+import type { FxEvent, RocketView } from './fx.ts'
 
 /** The slice of a simulation tick the renderer reads. */
 export type RenderState = {
@@ -87,6 +88,20 @@ export type RenderView = {
    * which is what the reference screenshot and a spectator both want.
    */
   readonly self?: PlayerNetState
+  /**
+   * The rockets in the air, so each one can trail smoke behind it.
+   *
+   * Positions rather than entities: a rocket is a *trajectory* in the
+   * simulation (`sim/projectile.ts`), evaluated in closed form, so the renderer
+   * is handed the evaluation and never the trajectory.
+   */
+  readonly rockets?: readonly RocketView[]
+  /**
+   * What just happened, as effects to start. `render/fx.ts` folds these out of
+   * the netstates above; they arrive here as data so that the frame's picture
+   * and the frame's explosions come from one consistent moment.
+   */
+  readonly fx?: readonly FxEvent[]
 }
 
 /**

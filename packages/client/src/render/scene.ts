@@ -32,13 +32,13 @@
 import type { AbstractEngine } from '@babylonjs/core/Engines/abstractEngine'
 import { TargetCamera } from '@babylonjs/core/Cameras/targetCamera'
 import { HemisphericLight } from '@babylonjs/core/Lights/hemisphericLight'
-import { PointLight } from '@babylonjs/core/Lights/pointLight'
 import { ImageProcessingConfiguration } from '@babylonjs/core/Materials/imageProcessingConfiguration'
 import type { BaseTexture } from '@babylonjs/core/Materials/Textures/baseTexture'
+import type { AbstractMesh } from '@babylonjs/core/Meshes/abstractMesh'
 import { Color3, Color4 } from '@babylonjs/core/Maths/math.color'
 import { Vector3 } from '@babylonjs/core/Maths/math.vector'
 import { Scene } from '@babylonjs/core/scene'
-import { type MapSource, quakeToEngine } from '@gladiator/sim'
+import type { MapSource } from '@gladiator/sim'
 
 import type { CameraPose } from './view.ts'
 
@@ -83,12 +83,17 @@ export function createScene(engine: AbstractEngine): Scene {
   scene.useRightHandedSystem = true
 
   scene.clearColor = new Color4(0.03, 0.035, 0.045, 1)
-  // StandardMaterial multiplies its `ambientColor` by the scene's, so this is
-  // the floor under the darkest surface — and the reason it is set this high is
-  // gameplay rather than taste. A face turned away from every point light
-  // receives *nothing*, and a player who cannot make out the far side of the
-  // arena is losing to the lighting rather than to their opponent. Baked
-  // lighting (GLAD-O5ZQ5S) is what eventually earns the right to be darker.
+  // StandardMaterial multiplies its own `ambientColor` by this one, and
+  // Babylon's material default is black — so this is a floor under the
+  // materials that opt in, which is now only the things that *move*: the
+  // opponent's model and the viewmodel. A player who cannot make out a
+  // silhouette on the far side of the arena is losing to the lighting rather
+  // than to their opponent.
+  //
+  // The arena is not one of them any more. Its light is baked and its albedo
+  // rides in `emissiveColor`, deliberately outside this multiplier, so
+  // re-grading how a model reads in shadow cannot silently re-grade the level.
+  // `materials.ts` is the argument.
   scene.ambientColor = new Color3(0.5, 0.51, 0.56)
 
   const processing = scene.imageProcessingConfiguration
@@ -145,20 +150,6 @@ export function applyAnisotropy(texture: BaseTexture, engine: AbstractEngine): v
   texture.anisotropicFilteringLevel = available < MAX_ANISOTROPY ? available : MAX_ANISOTROPY
 }
 
-/** How many of a map's lights are drawn in real time. See {@link addLighting}. */
-export const MAX_MAP_LIGHTS = 4
-
-/**
- * What a map's `intensity: 1` is worth to this renderer.
- *
- * A map author writes a number that means "a normal light"; how bright that is
- * depends on the falloff model, the tone mapping curve and the exposure, none
- * of which a map file has any business knowing about (`map/schema.ts` carries
- * lights and never reads them). So the conversion lives here, with the rest of
- * the look, and re-tuning it is a renderer change rather than a map change.
- */
-export const LIGHT_INTENSITY_SCALE = 1.5
-
 /**
  * Which way the hemispheric fill leans, engine frame.
  *
@@ -168,36 +159,41 @@ export const LIGHT_INTENSITY_SCALE = 1.5
 const FILL_DIRECTION = new Vector3(0.42, 1, 0.26).normalize()
 
 /**
- * The map's lights, plus a hemispheric fill.
+ * The one real-time light in the game, and what it is *not* for.
  *
- * Real lighting is baked (GLAD-O5ZQ5S); this is enough to tell a floor from a
- * wall and to make the geometry read as three-dimensional. The fill exists
- * because a surface facing away from every point light would otherwise be
- * exactly the ambient colour, and a player cannot judge distance against a flat
- * shape.
+ * The arena's light is baked (`tools/bake-lightmap.ts`, `docs/renderer.md`
+ * §12), so the world needs no light at run time at all — its materials have
+ * `disableLighting` on and the bake multiplies their albedo. What is left is
+ * everything the bake cannot cover, because a bake is a function of a static
+ * level and these move: the opponent's model and your own hands.
+ *
+ * So there is exactly one light, it is a hemispheric fill, and **the arena is
+ * excluded from it**. That exclusion is the whole design in one line:
+ *
+ *   - lighting the arena with it as well would add a second, directional
+ *     opinion on top of a bake that already knows where every photon came from,
+ *     and the two would disagree in every corner the bake has an answer for
+ *   - and it would cost a light loop on every fragment of the biggest thing on
+ *     screen, which is precisely the cost this ticket exists to remove
+ *
+ * A map's `lights` are still authored and still used — by the baker, which can
+ * afford all of them and can trace a shadow from each. Nothing reads them here
+ * any more, which is why a map may now carry as many as it likes.
+ *
+ * `arena` is excluded rather than the light being given an inclusion list, so a
+ * mesh added later (a prop, a rocket, a decal) is lit by default and nobody has
+ * to remember to enrol it.
  */
-export function addLighting(scene: Scene, map: MapSource): void {
+export function addLighting(scene: Scene, _map: MapSource, arena?: AbstractMesh): void {
   // Tilted, not straight up. A hemispheric fill pointing at the ceiling gives
-  // *every* vertical surface exactly half its diffuse, so all four walls of a
-  // room come out the same value and a pillar standing in front of a wall
-  // vanishes into it. Leaning the fill over separates the orientations, which
-  // is the cheapest legible-geometry there is — no shadow map, no second pass.
+  // *every* vertical surface exactly half its diffuse, so both sides of a
+  // player's chest come out the same value and the model reads as a cardboard
+  // cut-out. Leaning the fill over separates the orientations, which is the
+  // cheapest legible-geometry there is — no shadow map, no second pass.
   const sky = new HemisphericLight('fill', FILL_DIRECTION, scene)
   sky.intensity = 0.85
   sky.diffuse = new Color3(0.78, 0.82, 0.92)
   sky.groundColor = new Color3(0.26, 0.25, 0.3)
   sky.specular = new Color3(0, 0, 0)
-
-  // Four is Babylon's default per-material limit, and every light past the
-  // first costs every fragment. A map that wants more wants baked lighting.
-  for (const [index, light] of map.lights.slice(0, MAX_MAP_LIGHTS).entries()) {
-    const [x, y, z] = quakeToEngine(light.origin)
-    const point = new PointLight(`light${index}`, new Vector3(x, y, z), scene)
-    point.diffuse = new Color3(light.color[0], light.color[1], light.color[2])
-    point.intensity = light.intensity * LIGHT_INTENSITY_SCALE
-    point.range = light.radius
-    // Specular from a point light on an untextured wall reads as a smear, and
-    // the materials here have no gloss to justify it.
-    point.specular = new Color3(0, 0, 0)
-  }
+  if (arena !== undefined) sky.excludedMeshes.push(arena)
 }

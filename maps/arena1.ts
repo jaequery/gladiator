@@ -99,6 +99,21 @@ const BALCONY = 128
 /** The crates. A jump from the floor, and a step towards a balcony. */
 const CRATE = 40
 
+/**
+ * The wall light panels: where they sit, how big they are, and how far the
+ * light itself stands out in front of one.
+ *
+ * They are `nonSolid` — drawn, never collided — because a fixture flush with a
+ * wall has nothing to collide *with*: a solid brush eight units proud of the
+ * wall is a ledge a rocket jump can catch on, and an invisible one is worse.
+ * This is the case `nonSolid` exists for, and it is the only one in this map.
+ */
+const PANEL_LOW = 288
+const PANEL_HIGH = 352
+const PANEL_HALF = 128
+const PANEL_DEPTH = 8
+const PANEL_STANDOFF = 40
+
 export default defineMap({
   name: 'arena1',
   title: 'Crucible',
@@ -108,7 +123,12 @@ export default defineMap({
     surface('floor', 'concrete', [0.3, 0.31, 0.33]),
     surface('wall', 'concrete', [0.22, 0.23, 0.26]),
     surface('metal', 'metal', [0.44, 0.41, 0.37]),
-    surface('accent', 'metal', [0.5, 0.28, 0.22]),
+    // `trim`, not `metal`: the crates are the one thing on the floor a player
+    // has to read at a glance from across the arena, and the trim look is the
+    // catalogue's high-contrast one. `render/materials.ts`.
+    surface('accent', 'trim', [0.5, 0.28, 0.22]),
+    // The one surface the bake does not touch, because nothing lights a light.
+    surface('lamp', 'light', [1, 0.94, 0.82]),
   ],
 
   brushes: [
@@ -151,15 +171,59 @@ export default defineMap({
      * is 88, which is still a rocket — it buys you the angle, not the height. */
     box('accent', [192, -448, 0], [288, -352, CRATE]),
     box('accent', [-288, 352, 0], [-192, 448, CRATE]),
+
+    /* Four light panels, one high on each wall, `nonSolid` so they change what
+     * the arena looks like and nothing about how it plays. Each one has a light
+     * standing in front of it — see `lights` below. */
+    box('lamp', [HALF - PANEL_DEPTH, -PANEL_HALF, PANEL_LOW], [HALF, PANEL_HALF, PANEL_HIGH], {
+      nonSolid: true,
+    }),
+    box('lamp', [-HALF, -PANEL_HALF, PANEL_LOW], [-HALF + PANEL_DEPTH, PANEL_HALF, PANEL_HIGH], {
+      nonSolid: true,
+    }),
+    box('lamp', [-PANEL_HALF, HALF - PANEL_DEPTH, PANEL_LOW], [PANEL_HALF, HALF, PANEL_HIGH], {
+      nonSolid: true,
+    }),
+    box('lamp', [-PANEL_HALF, -HALF, PANEL_LOW], [PANEL_HALF, -HALF + PANEL_DEPTH, PANEL_HIGH], {
+      nonSolid: true,
+    }),
   ],
 
   /* Opposite corners, each facing the middle. 995 units apart, and the tower
    * stands in the straight line between them. */
   spawns: [spawn([-352, -352, 0], 45), spawn([352, 352, 0], -135)],
 
+  /*
+   * Seven lights, and the arena can afford them because none of them is drawn.
+   *
+   * They are traced once by `pnpm lightmap:bake` into `arena1_lightmap.ktx2`
+   * and the renderer never sees them: the arena's materials have no light loop
+   * at all (`render/materials.ts`). Before the bake the renderer drew the first
+   * four and silently dropped the rest, so this list was a budget; now it is a
+   * description.
+   *
+   * The shape of it is one key and six fills, and the reason is what a bake
+   * gets wrong if you let it. A single lamp on the ceiling lights every floor
+   * in the map and no wall at all — every vertical surface sits at `N·L` of
+   * nearly zero, the tower goes black, and a player cannot tell the near face
+   * of a pillar from the far one. The four wall panels are what light the
+   * verticals, and they are placed level with the tower's upper half so the
+   * thing the whole map is built around is the thing best lit.
+   */
   lights: [
+    /* The key: high over the tower, warm, reaching every corner. */
     light([0, 0, 480], [1, 0.96, 0.88], 1, 1400),
+
+    /* The balconies, cool, so the two best positions read as their own place. */
     light([352, -352, 320], [0.9, 0.85, 1], 0.8, 900),
     light([-352, 352, 320], [0.9, 0.85, 1], 0.8, 900),
+
+    /* One in front of each wall panel. Warm, short-range, and standing off the
+     * wall so the panel is lit rather than being a bright rectangle on a dark
+     * one. */
+    light([HALF - PANEL_STANDOFF, 0, 320], [1, 0.92, 0.78], 0.7, 800),
+    light([-HALF + PANEL_STANDOFF, 0, 320], [1, 0.92, 0.78], 0.7, 800),
+    light([0, HALF - PANEL_STANDOFF, 320], [1, 0.92, 0.78], 0.7, 800),
+    light([0, -HALF + PANEL_STANDOFF, 320], [1, 0.92, 0.78], 0.7, 800),
   ],
 })

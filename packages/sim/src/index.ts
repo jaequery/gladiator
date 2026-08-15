@@ -95,7 +95,16 @@ export {
 export type { RampAxis } from './map/collide.ts'
 
 export { mapGeometry } from './map/geometry.ts'
-export type { MapGeometry, SurfaceGroup } from './map/geometry.ts'
+export type { FaceRange, MapGeometry, SurfaceGroup } from './map/geometry.ts'
+
+export {
+  DEFAULT_ATLAS_WIDTH,
+  DEFAULT_LUXEL_SIZE,
+  DEFAULT_MAX_ATLAS_HEIGHT,
+  DEFAULT_PADDING,
+  lightmapUnwrap,
+} from './map/lightmapUv.ts'
+export type { LightmapPatch, LightmapUnwrap, LightmapUvOptions } from './map/lightmapUv.ts'
 
 export {
   createMapState,

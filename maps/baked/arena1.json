@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "hash": "a484bc85",
+  "hash": "9847d8fe",
   "map": {
     "name": "arena1",
     "title": "Crucible",
@@ -9,7 +9,8 @@
       { "name": "floor", "material": "concrete", "tint": [0.3, 0.31, 0.33] },
       { "name": "wall", "material": "concrete", "tint": [0.22, 0.23, 0.26] },
       { "name": "metal", "material": "metal", "tint": [0.44, 0.41, 0.37] },
-      { "name": "accent", "material": "metal", "tint": [0.5, 0.28, 0.22] }
+      { "name": "accent", "material": "trim", "tint": [0.5, 0.28, 0.22] },
+      { "name": "lamp", "material": "light", "tint": [1, 0.94, 0.82] }
     ],
     "brushes": [
       { "kind": "box", "surface": "floor", "mins": [-576, -576, -64], "maxs": [576, 576, 0] },
@@ -45,13 +46,45 @@
       { "kind": "box", "surface": "floor", "mins": [288, -512, 0], "maxs": [512, -288, 128] },
       { "kind": "box", "surface": "floor", "mins": [-512, 288, 0], "maxs": [-288, 512, 128] },
       { "kind": "box", "surface": "accent", "mins": [192, -448, 0], "maxs": [288, -352, 40] },
-      { "kind": "box", "surface": "accent", "mins": [-288, 352, 0], "maxs": [-192, 448, 40] }
+      { "kind": "box", "surface": "accent", "mins": [-288, 352, 0], "maxs": [-192, 448, 40] },
+      {
+        "kind": "box",
+        "surface": "lamp",
+        "mins": [504, -128, 288],
+        "maxs": [512, 128, 352],
+        "nonSolid": true
+      },
+      {
+        "kind": "box",
+        "surface": "lamp",
+        "mins": [-512, -128, 288],
+        "maxs": [-504, 128, 352],
+        "nonSolid": true
+      },
+      {
+        "kind": "box",
+        "surface": "lamp",
+        "mins": [-128, 504, 288],
+        "maxs": [128, 512, 352],
+        "nonSolid": true
+      },
+      {
+        "kind": "box",
+        "surface": "lamp",
+        "mins": [-128, -512, 288],
+        "maxs": [128, -504, 352],
+        "nonSolid": true
+      }
     ],
     "spawns": [{ "origin": [-352, -352, 0], "yaw": 8192 }, { "origin": [352, 352, 0], "yaw": 40960 }],
     "lights": [
       { "origin": [0, 0, 480], "color": [1, 0.96, 0.88], "intensity": 1, "radius": 1400 },
       { "origin": [352, -352, 320], "color": [0.9, 0.85, 1], "intensity": 0.8, "radius": 900 },
-      { "origin": [-352, 352, 320], "color": [0.9, 0.85, 1], "intensity": 0.8, "radius": 900 }
+      { "origin": [-352, 352, 320], "color": [0.9, 0.85, 1], "intensity": 0.8, "radius": 900 },
+      { "origin": [472, 0, 320], "color": [1, 0.92, 0.78], "intensity": 0.7, "radius": 800 },
+      { "origin": [-472, 0, 320], "color": [1, 0.92, 0.78], "intensity": 0.7, "radius": 800 },
+      { "origin": [0, 472, 320], "color": [1, 0.92, 0.78], "intensity": 0.7, "radius": 800 },
+      { "origin": [0, -472, 320], "color": [1, 0.92, 0.78], "intensity": 0.7, "radius": 800 }
     ],
     "props": []
   }

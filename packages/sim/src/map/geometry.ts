@@ -63,6 +63,25 @@ export type SurfaceGroup = {
 }
 
 /**
+ * One brush face's run of the vertex buffer: a planar convex polygon.
+ *
+ * Recorded rather than rediscovered. The vertices of a face are contiguous and
+ * fan-triangulated, so a reader *could* infer the boundaries by watching the
+ * first index of each triangle repeat — and would be inferring a private detail
+ * of the loop below from the shape of its output. The lightmap unwrap
+ * (`map/lightmapUv.ts`) needs faces rather than triangles, because an atlas
+ * patch is per-face; this is that need written down instead of guessed.
+ */
+export type FaceRange = {
+  /** First vertex, in vertices — multiply by 3 for {@link MapGeometry.positions}. */
+  readonly vertexStart: number
+  /** How many vertices the polygon has. Always at least three. */
+  readonly vertexCount: number
+  /** Index into {@link MapSource.surfaces} of the surface this face is drawn with. */
+  readonly surface: number
+}
+
+/**
  * The whole map as one merged mesh, grouped by surface.
  *
  * One buffer rather than one mesh per brush: an arena is a few hundred brushes
@@ -80,6 +99,8 @@ export type MapGeometry = {
   readonly indices: Uint32Array
   /** In `MapSource.surfaces` order. A surface with no visible face is omitted. */
   readonly groups: readonly SurfaceGroup[]
+  /** Every polygon that went in, in the order its vertices were written. */
+  readonly faces: readonly FaceRange[]
 }
 
 /**
@@ -224,8 +245,9 @@ export function mapGeometry(map: MapSource): MapGeometry {
   const normals: number[] = []
   const indices: number[] = []
   const groups: SurfaceGroup[] = []
+  const faces: FaceRange[] = []
 
-  for (const surface of map.surfaces) {
+  for (const [surfaceIndex, surface] of map.surfaces.entries()) {
     const indexStart = indices.length
 
     for (const brushDef of map.brushes) {
@@ -267,6 +289,11 @@ export function mapGeometry(map: MapSource): MapGeometry {
           positions.push(winding[v] ?? 0, winding[v + 1] ?? 0, winding[v + 2] ?? 0)
           normals.push(face.normal[0], face.normal[1], face.normal[2])
         }
+        faces.push({
+          vertexStart: first,
+          vertexCount: winding.length / 3,
+          surface: surfaceIndex,
+        })
         // A convex polygon fans from any vertex, and these are convex by
         // construction — every clip of a convex polygon by a half-space is.
         for (let v = 1; v + 1 < winding.length / 3; v += 1) {
@@ -289,5 +316,6 @@ export function mapGeometry(map: MapSource): MapGeometry {
     normals: Float32Array.from(normals),
     indices: Uint32Array.from(indices),
     groups,
+    faces,
   }
 }

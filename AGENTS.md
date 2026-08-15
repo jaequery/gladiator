@@ -30,6 +30,7 @@ recorded in [`credits.json`](./credits.json) and rendered to
 | `pnpm run map:bake`  | compiles `maps/*.ts` to `maps/baked/*.json` (`--check` verifies) |
 | `pnpm run nav:bake`  | compiles `maps/*.nav.ts` to `maps/baked/*.nav.json` (`--check` verifies) |
 | `pnpm run audio:bake`| synthesises `packages/client/public/audio/*.wav` (`--check` verifies) |
+| `pnpm run lightmap:bake`| traces each map's light into `assets/textures/*_lightmap.png` (`--check` verifies) |
 | `pnpm run audio:verify`| the audio acceptance checks in a real browser — own CI job |
 | `pnpm run assets:build` | compresses `assets/` into `packages/client/public/` and regenerates the credits (`--check` verifies) |
 | `pnpm run assets:budget` | fails if a committed asset is over 5 MB, or all of them over 24 MB |
@@ -150,6 +151,7 @@ Banned in `packages/client` only, by ESLint, each with its reason:
 | `ellipsoid` | the player is a 30x30x56 **box**, and every movement constant was measured against it |
 | `attachControl` | the camera is a puppet; aim is ours and goes into the `UserCmd` |
 | `enablePhysics`, `PhysicsAggregate`, `PhysicsBody` | there is no physics engine here, on purpose |
+| `PostProcess`, `DefaultRenderingPipeline`, `FxaaPostProcess`, … | a full-screen pass is latency on every frame to make a *still* frame prettier |
 
 And `pnpm run no-physics` fails if a physics engine ever appears in
 `pnpm-lock.yaml` — the fence that cannot be walked around, because an engine
@@ -916,11 +918,49 @@ plausible picture or a black one and looks like a broken bake.
 `render/lightmap.test.ts` pins the whole chain against the real loader, and
 `applyLightmap` is the only thing that should ever assign `lightmapTexture`.
 
+**The arena's second UV set is computed, not exported.** Its surfaces are cut
+from the collision brushes, so there is no model for Blender to unwrap;
+`packages/sim/src/map/lightmapUv.ts` packs one atlas rectangle per brush face,
+and it lives in the simulation package because `tools/bake-lightmap.ts` and
+`render/mapMesh.ts` both call it and must not disagree about where a face's
+light is.
+
 **A `.ktx2` bigger than its `.png` is not a regression.** PNG is a transmission
 format decoded to 32 bits per texel before it reaches the GPU; KTX2 is 8 bits
 per texel *in video memory*, which is the constraint. Compare against
 `width x height x 4`. The two Babylon settings that would undo all of it are
 turned off in `render/ktx2.ts`, and proved to matter in `ktx2.test.ts`.
+
+---
+
+## The look
+
+Full reasoning: [`docs/renderer.md`](./docs/renderer.md) §12 and §13.
+
+**The arena has no run-time light at all.** Its light is baked
+(`pnpm lightmap:bake`, `assets/textures/*_lightmap.png`) and its materials have
+`disableLighting` on, so the biggest object on screen costs no light loop. There
+is one hemispheric fill left in the scene and the arena is *excluded* from it —
+it exists for the two things a bake cannot cover, the opponent's model and your
+own hands. A map's `lights` are read only by the baker now, which is why
+`arena1` may carry seven of them.
+
+The arena's albedo rides in `emissiveColor` rather than `ambientColor`. That is
+deliberate and documented in `render/materials.ts`: `vAmbientColor` is a
+*scene*-wide multiplier the player models are tuned against, and running the
+level's albedo through it would couple two things that have no business moving
+together.
+
+**The effects are a fold over netstate, like the sounds.** `render/fx.ts` is
+`audio/cues.ts`'s twin: a rocket detonating is a rocket id that disappeared, a
+shot is `lastFireTick` changing, and something seen for the first time produces
+nothing. Every particle ages against `tick + alpha` rather than a wall clock,
+which is why they are ours and not Babylon's `ParticleSystem`.
+
+**The post-processing chain is empty and both ends are locked.** ESLint refuses
+the names, `scripts/guardrails.mjs` proves it fires, and
+`render/postprocess.test.ts` asserts the built scene carries no pass. A look
+that needs a chain loses; the budget is spent on the bake instead.
 
 ---
 

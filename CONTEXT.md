@@ -187,6 +187,15 @@ pixel-ratio dial rather than by hope.
 refresh rate. Counted as a *rate*, because a percentile cannot see something
 that happens twice a second. `docs/renderer.md` §9.
 
+**Effects fold** — `render/fx.ts`: the pure function that turns a frame of
+netstates and rockets into the effects to start — a rocket that disappeared is
+an explosion, a changed `lastFireTick` is a muzzle flash. `audio/cues.ts`'s twin
+for eyes, and built the same way for the same reason. `docs/renderer.md` §13.
+
+**Scorch mark** — the quad an impact leaves on the surface it hit. A quad and
+not a projected decal, because every surface in this world is cut from a brush
+plane, so a quad lying in that plane *is* the decal.
+
 **Reference screenshot** — a committed PNG of a fixed pose, compared in the
 browser smoke test within a perceptual threshold. A renderer change that
 legitimately moves the picture ships the new image in the same commit.
@@ -483,6 +492,31 @@ would pick *uncompressed* RGBA on an integrated GPU; both are off, and
 second gives every triangle a unique patch of one atlas, and confusing them
 renders a level lit from the wrong wall or renders it black. `docs/assets.md`
 §3.
+
+**Baked lightmap** — what `pnpm lightmap:bake` writes:
+`assets/textures/<map>_lightmap.png`, one atlas per map, traced from the map's
+own lights with shadow rays, occluded ambient and one bounce. It multiplies the
+arena's albedo and is the *only* light the arena has, which is what lets its
+materials run with no light loop at all. `docs/renderer.md` §12.
+
+**Luxel** — one texel of a lightmap, and the unit the bake is measured in. Eight
+Quake units across, so a 64-unit wall panel is eight of them.
+`packages/sim/src/map/lightmapUv.ts`.
+
+**Lightmap atlas** — where every brush face's luxels live: one rectangle per
+face, packed on shelves, computed by `lightmapUnwrap` in the *simulation*
+package because the baker and the browser both read it and must not disagree.
+Its height is derived from the packing rather than authored.
+
+**Surface material** — the logical name a map writes on a surface (`concrete`,
+`metal`, `trim`, `glass`, `light`), resolved to a look by
+`render/materials.ts`. The map never names a file or a shading model. A
+lightmapped world is a world of albedo, so a look is a detail texture, a tint
+gain, an alpha and whether the surface is self-lit — never a gloss.
+
+**Self-lit** — a surface that makes its own light and therefore takes no
+lightmap, because a bake *multiplies* and a lamp baked dark is not a lamp. The
+one such material is `light`, and `takesLightmap` is the seam.
 
 **Asset budget** — 5 MB per committed file and 24 MB across all of them, checked
 by `pnpm assets:budget` over `git ls-files`. Git has no forget, so the check has
