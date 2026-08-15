@@ -1,0 +1,140 @@
+{
+  "entries": [
+    {
+      "id": "crucible-crate",
+      "title": "Crucible crate",
+      "author": "Gladiator contributors",
+      "source": "https://github.com/jaequery/gladiator/blob/main/tools/assets-placeholders.ts",
+      "licence": "CC0-1.0",
+      "kind": "model"
+    },
+    {
+      "id": "crucible-crate-albedo",
+      "title": "Crucible crate albedo",
+      "author": "Gladiator contributors",
+      "source": "https://github.com/jaequery/gladiator/blob/main/tools/assets-placeholders.ts",
+      "licence": "CC0-1.0",
+      "kind": "texture"
+    },
+    {
+      "id": "crucible-crate-normal",
+      "title": "Crucible crate normal map",
+      "author": "Gladiator contributors",
+      "source": "https://github.com/jaequery/gladiator/blob/main/tools/assets-placeholders.ts",
+      "licence": "CC0-1.0",
+      "kind": "texture"
+    },
+    {
+      "id": "crucible-crate-orm",
+      "title": "Crucible crate occlusion/roughness/metalness",
+      "author": "Gladiator contributors",
+      "source": "https://github.com/jaequery/gladiator/blob/main/tools/assets-placeholders.ts",
+      "licence": "CC0-1.0",
+      "kind": "texture"
+    },
+    {
+      "id": "crucible-lightmap",
+      "title": "Crucible lightmap",
+      "author": "Gladiator contributors",
+      "source": "https://github.com/jaequery/gladiator/blob/main/tools/assets-placeholders.ts",
+      "licence": "CC0-1.0",
+      "kind": "texture"
+    },
+    {
+      "id": "sound-rocket-fire",
+      "title": "Rocket launcher firing",
+      "author": "Gladiator contributors",
+      "source": "https://github.com/jaequery/gladiator/blob/main/tools/synth-audio.ts",
+      "licence": "CC0-1.0",
+      "kind": "audio"
+    },
+    {
+      "id": "sound-rail-fire",
+      "title": "Railgun firing",
+      "author": "Gladiator contributors",
+      "source": "https://github.com/jaequery/gladiator/blob/main/tools/synth-audio.ts",
+      "licence": "CC0-1.0",
+      "kind": "audio"
+    },
+    {
+      "id": "sound-explosion",
+      "title": "Rocket detonating",
+      "author": "Gladiator contributors",
+      "source": "https://github.com/jaequery/gladiator/blob/main/tools/synth-audio.ts",
+      "licence": "CC0-1.0",
+      "kind": "audio"
+    },
+    {
+      "id": "sound-footstep-a",
+      "title": "Footstep, first of two",
+      "author": "Gladiator contributors",
+      "source": "https://github.com/jaequery/gladiator/blob/main/tools/synth-audio.ts",
+      "licence": "CC0-1.0",
+      "kind": "audio"
+    },
+    {
+      "id": "sound-footstep-b",
+      "title": "Footstep, second of two",
+      "author": "Gladiator contributors",
+      "source": "https://github.com/jaequery/gladiator/blob/main/tools/synth-audio.ts",
+      "licence": "CC0-1.0",
+      "kind": "audio"
+    },
+    {
+      "id": "sound-land",
+      "title": "Landing from a fall",
+      "author": "Gladiator contributors",
+      "source": "https://github.com/jaequery/gladiator/blob/main/tools/synth-audio.ts",
+      "licence": "CC0-1.0",
+      "kind": "audio"
+    },
+    {
+      "id": "sound-hit",
+      "title": "Hit confirmation",
+      "author": "Gladiator contributors",
+      "source": "https://github.com/jaequery/gladiator/blob/main/tools/synth-audio.ts",
+      "licence": "CC0-1.0",
+      "kind": "audio"
+    },
+    {
+      "id": "sound-damage",
+      "title": "Damage taken",
+      "author": "Gladiator contributors",
+      "source": "https://github.com/jaequery/gladiator/blob/main/tools/synth-audio.ts",
+      "licence": "CC0-1.0",
+      "kind": "audio"
+    },
+    {
+      "id": "sound-round-start",
+      "title": "Round starting",
+      "author": "Gladiator contributors",
+      "source": "https://github.com/jaequery/gladiator/blob/main/tools/synth-audio.ts",
+      "licence": "CC0-1.0",
+      "kind": "audio"
+    },
+    {
+      "id": "sound-round-end",
+      "title": "Round ending",
+      "author": "Gladiator contributors",
+      "source": "https://github.com/jaequery/gladiator/blob/main/tools/synth-audio.ts",
+      "licence": "CC0-1.0",
+      "kind": "audio"
+    },
+    {
+      "id": "babylon-ktx2-transcoders",
+      "title": "Babylon.js KTX2 decoder and Basis transcoders",
+      "author": "Microsoft and the Babylon.js contributors",
+      "source": "https://github.com/BabylonJS/Babylon.js",
+      "licence": "Apache-2.0",
+      "kind": "vendored"
+    },
+    {
+      "id": "meshopt-decoder",
+      "title": "meshoptimizer decoder",
+      "author": "Arseny Kapoulkine",
+      "source": "https://github.com/zeux/meshoptimizer",
+      "licence": "MIT",
+      "kind": "vendored"
+    }
+  ]
+}

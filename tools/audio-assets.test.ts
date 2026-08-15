@@ -87,9 +87,16 @@ describe('CREDITS.md', () => {
 
   it('has a row for every committed sound, with a source and a licence', () => {
     for (const file of files) {
+      // The row names the file by its repo-relative path, because GLAD-PGS73O
+      // generates this table from `credits.json` and the same table now carries
+      // models, textures and vendored code, which do not share a directory.
+      // Everything else this test asks of a row is unchanged — and the entry
+      // that produces it is separately required to exist by
+      // `pnpm assets:build --check`, which fails on any committed asset the
+      // registry does not account for.
       const row = credits
         .split('\n')
-        .find((line) => line.startsWith('|') && line.includes(`\`${file}\``))
+        .find((line) => line.startsWith('|') && line.includes(file))
       expect(row, `${file} is not in CREDITS.md`).toBeDefined()
       // A source anyone can follow, and a licence with a URL behind it.
       expect(row ?? '', `${file}'s row does not name where it came from`).toMatch(

@@ -6,10 +6,12 @@
   "description": "The browser client: Babylon renderer, prediction, input.",
   "dependencies": {
     "@babylonjs/core": "9.21.1",
+    "@babylonjs/loaders": "9.21.1",
     "@gladiator/bot": "workspace:*",
     "@gladiator/sim": "workspace:*"
   },
   "devDependencies": {
+    "@babylonjs/ktx2decoder": "9.21.1",
     "vite": "8.2.1"
   },
   "scripts": {

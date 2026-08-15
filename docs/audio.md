@@ -2,8 +2,10 @@
 
 Settings, and why each of them is what it is. Conventions are in
 [`AGENTS.md`](../AGENTS.md); the axis map is in
-[`docs/physics-spec.md`](./physics-spec.md) §0.3; asset licensing is in
-[`CREDITS.md`](../CREDITS.md).
+[`docs/physics-spec.md`](./physics-spec.md) §0.3; asset licensing is recorded
+in [`credits.json`](../credits.json), rendered to
+[`CREDITS.md`](../CREDITS.md), and argued in
+[`docs/assets.md`](./assets.md) §6.
 
 The audio system is `packages/client/src/audio/`. It is the second consumer of
 netstate, beside the renderer, and it obeys the same rule the renderer does: it
@@ -164,7 +166,11 @@ the bake is **bit-reproducible**: every operation is one IEEE 754 pins down, and
 `sinRad` comes from `packages/sim` precisely because `Math.sin` is
 implementation-approximated. `tools/audio-assets.test.ts` re-synthesises in
 memory and fails if what is committed is stale, if the set exceeds its 320 KiB
-budget, or if anything in `public/audio/` is missing from `CREDITS.md`.
+budget, or if anything in `public/audio/` is missing from `CREDITS.md`. That
+last one has a second, stronger lock behind it: every sound has an entry in
+`credits.json`, and `pnpm assets:build --check` fails on any committed file
+under `public/` that no entry accounts for — including a `.wav` somebody drops
+in by hand.
 
 22 050 Hz, mono, 16-bit — one honest step up from Quake's own 11 025 Hz 8-bit,
 and 241 KiB for the set. Nyquist at 11 kHz keeps the 4–10 kHz band HRTF uses for

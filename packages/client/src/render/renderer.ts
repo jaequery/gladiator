@@ -50,6 +50,7 @@ import {
   createFrameMeter,
   meterVerdict,
 } from './frameStats.ts'
+import { configureKtx2 } from './ktx2.ts'
 import { type MapMesh, buildMapMesh, createGridTexture } from './mapMesh.ts'
 import { type PlayerRoster, createPlayerRoster } from './playerModel.ts'
 import { addLighting, applyPose, createCamera, createScene } from './scene.ts'
@@ -120,6 +121,12 @@ export type Renderer = {
 }
 
 export async function createRenderer(options: RendererOptions): Promise<Renderer> {
+  // Before anything can ask for a texture. It points Babylon's KTX2 decoder and
+  // meshopt decoder at our own origin instead of cdn.babylonjs.com, and turns
+  // off the two defaults that would decode a compressed texture to uncompressed
+  // RGBA on an integrated GPU. `ktx2.ts` argues both.
+  configureKtx2()
+
   const budgetMs = options.frameBudgetMs ?? FRAME_BUDGET_MS
   const ceiling = ladderRung(
     options.pixelRatio ?? clampPixelRatio(globalThis.devicePixelRatio ?? 1),

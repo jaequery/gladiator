@@ -194,6 +194,13 @@ export default tseslint.config(
       '**/.vite/**',
       '**/coverage/**',
       '.fredrin/**',
+      // Static files Vite serves verbatim, including the vendored KTX2 and
+      // meshopt decoders (`pnpm assets:vendor`). Third-party, minified, and
+      // written against globals this repository does not have — linting it
+      // would report on somebody else's code and nothing would ever be done
+      // about it. `credits.json` records what is in there and under what
+      // licence; `pnpm assets:budget` records what it costs.
+      'packages/client/public/**',
     ],
   },
 

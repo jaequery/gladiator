@@ -9,7 +9,9 @@ Vocabulary is in [`CONTEXT.md`](./CONTEXT.md). Physics numbers are in
 [`docs/physics-spec.md`](./docs/physics-spec.md); renderer settings and their
 reasoning are in [`docs/renderer.md`](./docs/renderer.md); the audio
 architecture and the sounds themselves are in
-[`docs/audio.md`](./docs/audio.md). Asset licences are in
+[`docs/audio.md`](./docs/audio.md); the asset pipeline, the size budget and the
+licence rules are in [`docs/assets.md`](./docs/assets.md). Asset licences are
+recorded in [`credits.json`](./credits.json) and rendered to
 [`CREDITS.md`](./CREDITS.md), and a file that is not in there does not ship.
 
 ---
@@ -29,8 +31,15 @@ architecture and the sounds themselves are in
 | `pnpm run nav:bake`  | compiles `maps/*.nav.ts` to `maps/baked/*.nav.json` (`--check` verifies) |
 | `pnpm run audio:bake`| synthesises `packages/client/public/audio/*.wav` (`--check` verifies) |
 | `pnpm run audio:verify`| the audio acceptance checks in a real browser — own CI job |
-| `pnpm run ci`        | all six, in that order — what CI runs                  |
+| `pnpm run assets:build` | compresses `assets/` into `packages/client/public/` and regenerates the credits (`--check` verifies) |
+| `pnpm run assets:budget` | fails if a committed asset is over 5 MB, or all of them over 24 MB |
+| `pnpm run ci`        | all seven, in that order — the whole gate in one command |
 | `pnpm run e2e`       | the browser smoke test — needs Chromium, own CI job    |
+
+Two more exist and are not part of `ci`, because both write files that are then
+reviewed: `pnpm run assets:vendor` re-fetches the KTX2 transcoders on a Babylon
+upgrade, and `pnpm run assets:placeholders` regenerates the stand-in art.
+[`docs/assets.md`](./docs/assets.md).
 
 > `pnpm run ci`, not `pnpm ci`. pnpm reserves the bare `ci` verb
 > (`ERR_PNPM_CI_NOT_IMPLEMENTED`) and will not fall through to a package
@@ -467,6 +476,39 @@ brush's own planes by the player box, which is exact for an axis-aligned brush
 and over-approximates at the top edge of a ramp, where the expanded slope juts
 a few units into the air above the surface. `StepSlideMove` steps over that and
 a static sweep at a fixed height does not.
+
+---
+
+## Assets
+
+Full reasoning: [`docs/assets.md`](./docs/assets.md). Four things that decide
+whether a change belongs here at all:
+
+**Sources go in `assets/`, artifacts in `packages/client/public/`, and both are
+committed.** Same arrangement as `maps/baked/`: the sources so the artifacts can
+be reproduced, the artifacts so a build needs no encode step in front of it.
+`pnpm assets:build --check` re-runs it in memory and fails on a stale artifact.
+Authoring files — `.blend`, `.psd`, `.wav` — are gitignored.
+
+**`credits.json` is the registry, and everything else about credits is
+generated.** `CREDITS.md` and `packages/client/public/credits.json` both come
+out of it, so the human-readable credits and the machine-readable ones cannot
+disagree. Adding an asset means adding an entry: a committed file under either
+directory with no entry fails the build, and so does an entry naming a file that
+is not committed. **Content is CC0 only** — not CC-BY — and Mixamo is rejected
+by hostname, because its licence forbids redistributing the raw files.
+
+**A lightmap samples through the second UV set: `TEXCOORD_1` in glTF, `uv2` in
+Babylon, `coordinatesIndex = 1` on the texture.** Getting it wrong renders a
+plausible picture or a black one and looks like a broken bake.
+`render/lightmap.test.ts` pins the whole chain against the real loader, and
+`applyLightmap` is the only thing that should ever assign `lightmapTexture`.
+
+**A `.ktx2` bigger than its `.png` is not a regression.** PNG is a transmission
+format decoded to 32 bits per texel before it reaches the GPU; KTX2 is 8 bits
+per texel *in video memory*, which is the constraint. Compare against
+`width x height x 4`. The two Babylon settings that would undo all of it are
+turned off in `render/ktx2.ts`, and proved to matter in `ktx2.test.ts`.
 
 ---
 
