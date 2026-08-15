@@ -43,6 +43,7 @@
  */
 import { PROTOCOL_VERSION } from '@gladiator/sim'
 
+import type { QueueStats } from './queue.ts'
 import type { RegistryStats } from './rooms.ts'
 import type { SchedulerStats } from './scheduler.ts'
 import type { JitterSnapshot } from './jitter.ts'
@@ -144,6 +145,15 @@ export function createTrafficMeter(): TrafficMeter {
 }
 
 export type HealthInput = ReadinessInput & {
+  /**
+   * The quick-match line. `queue.ts`.
+   *
+   * In the body and deliberately not in {@link readinessOf}: a machine with
+   * somebody waiting in it is a machine that is *working*, and the one number
+   * here that could look alarming — a rising `timedOut` — means players are
+   * arriving alone, which is a population problem and not a health one.
+   */
+  readonly queue: QueueStats
   readonly build: string
   readonly map: { readonly name: string; readonly hash: string }
   readonly startedAtMs: number
@@ -196,6 +206,7 @@ export function healthReport(input: HealthInput): HealthReport {
     // address-forging flood, and it is invisible in every other counter here.
     addresses: input.addresses,
     rooms: input.rooms,
+    queue: input.queue,
     // Served, not just logged. The p99 on the machine that is actually running
     // is the only one worth quoting, it changes under load, and
     // `scheduler.withinBudget` is the deploy's own verdict on whether this

@@ -13,6 +13,8 @@
  * other room on the machine kept ticking. A hostile client ending its own
  * session is fine. A hostile client ending everybody's is the bug.
  */
+import { createConnection, type Socket } from 'node:net'
+
 import { PROTOCOL_VERSION, type ServerMessage, parseServerMessage } from '@gladiator/sim'
 import { WebSocket } from 'ws'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -85,6 +87,32 @@ function connect(port: number, room?: string): WebSocket {
   return new WebSocket(`ws://127.0.0.1:${port}${query}`, {
     headers: { Origin: ALLOWED_ORIGIN },
   })
+}
+
+/**
+ * A hand-written WebSocket upgrade, so a test can name a request target that a
+ * client library would refuse to send.
+ */
+function rawUpgrade(port: number, target: string): Socket {
+  const socket = createConnection({ host: '127.0.0.1', port })
+  // A connection this test is deliberately mistreating; its errors are noise.
+  socket.on('error', () => undefined)
+  socket.on('connect', () => {
+    socket.write(
+      [
+        `GET ${target} HTTP/1.1`,
+        `Host: 127.0.0.1:${port}`,
+        `Origin: ${ALLOWED_ORIGIN}`,
+        'Upgrade: websocket',
+        'Connection: Upgrade',
+        'Sec-WebSocket-Key: AAAAAAAAAAAAAAAAAAAAAA==',
+        'Sec-WebSocket-Version: 13',
+        '',
+        '',
+      ].join('\r\n'),
+    )
+  })
+  return socket
 }
 
 function helloFrame(): string {
@@ -433,5 +461,38 @@ describe('a room code that is not one', () => {
     expect(detail).not.toContain('\n')
     expect(detail).not.toContain('\u001b')
     expect(detail).toContain('AB')
+  })
+})
+
+describe('a request target that is not a URL', () => {
+  it('is answered, and the machine goes on simulating', async () => {
+    const started = await start()
+    await seat(started.server.port)
+    const before = runFrames(started)
+    expect(before).toBeGreaterThan(0)
+
+    // Node's HTTP parser accepts absolute-form request targets — it has to, that
+    // is what a proxy puts on the wire — so `request.url` reaching the server
+    // here is the literal `http://[`, and `new URL` throws on it.
+    //
+    // On the wire rather than by calling the parsers, because the two outcomes
+    // this is between are not "null" and "a throw", they are "a room" and "no
+    // more server": every reader of the target runs inside an `upgrade` or
+    // `connection` handler, where nothing catches anything, so the regression
+    // shows up here as an unhandled error and in production as an exit. `ws`
+    // will not put a target this shape on the wire, hence the hand-written
+    // request.
+    const raw = rawUpgrade(started.server.port, 'http://[')
+    const answered: Buffer[] = []
+    raw.on('data', (chunk: Buffer) => answered.push(chunk))
+    await waitFor(
+      () => (answered.length > 0 || raw.destroyed ? true : null),
+      'an answer to the hand-written upgrade',
+    )
+
+    // The load-bearing assertion, as everywhere in this file: the victim's room
+    // is still there and its tick is still moving.
+    expect(runFrames(started)).toBeGreaterThan(before)
+    raw.destroy()
   })
 })
