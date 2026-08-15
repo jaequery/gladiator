@@ -632,6 +632,44 @@ them their character set is right.
 Thirty bits, the guess rate at the concurrency this deploy admits, and the
 empty-room reaper that stops codes leaking are `docs/deploy.md`.
 
+### Quick match is a line of rooms, not a lobby of sockets
+
+`packages/server/src/queue.ts`. GLAD-ZHRFBK. `?queue=1` on the upgrade instead
+of `?room=ABC123`: the host either seats this peer in the room somebody is
+already waiting in, or opens one and parks them in it. Room codes are untouched
+and stay the way two people who know each other play — a request carrying both
+is answered as a *code*, because six characters somebody typed is a request for
+a particular match.
+
+**The obvious shape is the wrong one, and `net/wsTransport.ts` is why.** Holding
+the sockets and building a room once two of them are in hand means parking a
+socket with no handlers installed — and a socket with no handlers silently drops
+what arrives on it, the first thing being the client's `hello`. A lobby would
+therefore have to buffer frames and replay them into a room that does not exist
+yet, which is a second delivery path for the one message whose loss takes the
+whole session down. So the room comes first and the *code* goes in the line, and
+everything after the choice of room is the code path room codes already take:
+the handshake, the welcome, `startWhenFull`, the empty-room reaper.
+
+**An entry is a claim about a room and it is re-checked, never trusted.**
+Nothing tells the queue that a queued player closed their tab — the socket dies,
+`room.ts` forgets the peer, and the entry still names a code. So every entry is
+looked up in the registry the moment before it is used, and a room that has
+gone, emptied, or filled by some other route is dropped. That is what makes "a
+player who queues and walks away is never paired with anybody" true by
+construction rather than by remembering to call a `leave()` from every path a
+socket can die on. The sweep rides the tick scheduler's frame beside the
+registry's own, so the number served on `/healthz` is never more than a host
+frame stale.
+
+**The timeout is an outcome, not a hang-up.** A minute of nobody arriving ends
+the *matching* and nothing else: the socket, the room and the code all survive,
+and the player is told "nobody is waiting — send this code to a friend", which
+is a sentence with an action in it. Closing the socket instead would be the
+server hanging up on a player who has done nothing wrong, and an indefinite
+spinner would be the failure this whole frame exists to prevent. It fires once,
+not once per sweep.
+
 ### A deploy hands the score to the players, because there is nowhere else
 
 `packages/server/src/shutdown.ts` and `resume.ts` (GLAD-G41FQ9). The registry
