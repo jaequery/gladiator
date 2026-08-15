@@ -303,8 +303,16 @@ produces a different angle depending on how fast the wrist moved, the skill
 that separates two players is the mouse driver's.
 
 Where the browser refuses the flag, the request is retried without it, because
-accelerated input is much better than no game. `PointerLock.raw` says which
-happened, so the settings screen (GLAD-NPCTU8) can be honest about it.
+accelerated input is much better than no game. `PointerLock.rawInput` says which
+of *three* things happened — `granted`, `refused` or `unknown` — and the
+settings screen prints it in words with a warning under the two that are not
+`granted`. `unknown` is a real state: a browser still on the events-only Pointer
+Lock specification takes the options object, ignores the member it does not
+know, and never says whether it applied it.
+
+Which browsers do what, on which operating systems, is measured rather than
+assumed: [`docs/browser-support.md`](./browser-support.md), and
+`pnpm run raw-input` is what fills it in.
 
 ---
 

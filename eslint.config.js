@@ -318,12 +318,12 @@ export default tseslint.config(
     },
   },
 
-  /* The browser smoke test and the audio check are Node scripts that also
-   * contain functions which run *inside the page* —
+  /* The browser smoke test, the audio check and the raw-input probe are Node
+   * scripts that also contain functions which run *inside the page* —
    * `page.evaluate(() => window.__gladiator...)`. Both sets of globals are
    * legitimately in scope in the same file. */
   {
-    files: ['scripts/e2e.mjs', 'scripts/audio-check.mjs'],
+    files: ['scripts/e2e.mjs', 'scripts/audio-check.mjs', 'scripts/raw-input.mjs'],
     languageOptions: {
       globals: { ...globals.nodeBuiltin, ...globals.browser },
     },

@@ -465,6 +465,239 @@
         border-radius: 50% 50% 0 0 / 100% 100% 0 0;
       }
 
+      /* ------------------------------------------------------------------
+         The menus. GLAD-NPCTU8; the markup is
+         `packages/client/src/ui/menu.ts` and the bounce page is
+         `ui/unsupported.ts`.
+
+         Two things are load-bearing rather than decorative. `pointer-events`
+         is turned back on, because these are the overlays a player is meant to
+         click — the rest of the overlay must stay transparent to the mouse or
+         the canvas never gets the click that locks the pointer. And nothing in
+         here carries `data-hud-box`: the aspect-ratio check in
+         `scripts/e2e.mjs` measures those for overlap, and a full-screen menu
+         legitimately covers everything.
+         ------------------------------------------------------------------ */
+
+      #menu,
+      #bounce {
+        position: absolute;
+        inset: 0;
+        z-index: 5;
+        display: flex;
+        overflow-y: auto;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        background: rgba(13, 17, 23, 0.88);
+        pointer-events: auto;
+      }
+
+      #menu[hidden],
+      #bounce[hidden] {
+        display: none;
+      }
+
+      #bounce {
+        flex-direction: column;
+        max-width: 640px;
+        margin: 0 auto;
+        text-align: center;
+      }
+
+      .menu-screen {
+        width: min(460px, 100%);
+        padding: 22px 24px 24px;
+        border: 1px solid #30363d;
+        border-radius: 8px;
+        background: var(--panel);
+      }
+
+      .menu-screen[hidden] {
+        display: none;
+      }
+
+      .menu-heading,
+      .bounce-title {
+        margin: 0 0 10px;
+        font-size: 20px;
+        font-weight: 700;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+
+      .menu-lede,
+      .menu-body,
+      .bounce-body {
+        margin: 0 0 16px;
+        color: var(--ink);
+        line-height: 1.6;
+      }
+
+      .menu-hint {
+        margin: -8px 0 14px;
+        color: var(--dim);
+        min-height: 1.5em;
+      }
+
+      /* The raw-input fallback warning. Amber rather than red: the game is
+         entirely playable like this, and the player is being told that one
+         number means something slightly different than it says. */
+      .menu-warning {
+        margin: 0 0 16px;
+        padding: 10px 12px;
+        border: 1px solid #9e6a03;
+        border-radius: 6px;
+        background: rgba(187, 128, 9, 0.12);
+        color: var(--health-low);
+        line-height: 1.5;
+      }
+
+      .menu-warning[hidden] {
+        display: none;
+      }
+
+      .menu-button {
+        display: block;
+        width: 100%;
+        margin: 0 0 8px;
+        padding: 11px 14px;
+        border: 1px solid #30363d;
+        border-radius: 6px;
+        background: #161b22;
+        color: var(--ink);
+        font: inherit;
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .menu-button:hover:not(:disabled),
+      .menu-button:focus-visible {
+        border-color: var(--armour);
+        outline: none;
+      }
+
+      .menu-button:disabled {
+        color: var(--dim);
+        cursor: default;
+      }
+
+      .menu-footer {
+        display: flex;
+        gap: 8px;
+        margin-top: 16px;
+      }
+
+      .menu-footer .menu-button {
+        margin: 0;
+        color: var(--dim);
+        text-align: center;
+      }
+
+      /* The room code. The one thing on the page a player reads out loud, so
+         it is the biggest thing on it. */
+      .menu-code,
+      .bounce-code {
+        margin: 0 0 8px;
+        font-size: 34px;
+        font-weight: 700;
+        letter-spacing: 0.22em;
+        text-align: center;
+      }
+
+      .menu-link-row,
+      .bounce-row {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 14px;
+      }
+
+      .menu-link,
+      .menu-code-input,
+      .bounce-link {
+        flex: 1;
+        min-width: 0;
+        padding: 10px 12px;
+        border: 1px solid #30363d;
+        border-radius: 6px;
+        background: #0d1117;
+        color: var(--ink);
+        font: inherit;
+      }
+
+      .menu-code-input {
+        margin-bottom: 10px;
+        font-size: 22px;
+        letter-spacing: 0.2em;
+        text-align: center;
+        text-transform: uppercase;
+      }
+
+      .menu-link-row .menu-button,
+      .bounce-row .bounce-copy {
+        width: auto;
+        margin: 0;
+        white-space: nowrap;
+      }
+
+      .menu-button[data-state='copied'] {
+        border-color: var(--match);
+        color: var(--match);
+      }
+
+      .menu-field {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 4px 10px;
+        margin-bottom: 14px;
+        align-items: center;
+      }
+
+      .menu-field-label {
+        grid-column: 1 / -1;
+        color: var(--dim);
+      }
+
+      .menu-range {
+        width: 100%;
+        accent-color: var(--armour);
+      }
+
+      .menu-number {
+        width: 84px;
+        padding: 6px 8px;
+        border: 1px solid #30363d;
+        border-radius: 6px;
+        background: #0d1117;
+        color: var(--ink);
+        font: inherit;
+        font-variant-numeric: tabular-nums;
+        text-align: right;
+      }
+
+      .menu-check {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        margin-bottom: 16px;
+        color: var(--dim);
+      }
+
+      .bounce-copy,
+      .bounce-anyway {
+        padding: 10px 14px;
+        border: 1px solid #30363d;
+        border-radius: 6px;
+        background: #161b22;
+        color: var(--ink);
+        font: inherit;
+        cursor: pointer;
+      }
+
+      .bounce-anyway {
+        color: var(--dim);
+      }
+
       /* The quick-match panel. Centred low, where a loading line goes and
          where nothing else on the overlay is: the diagnostics panel is top
          left, the score top centre and the vitals bottom left, and a player
@@ -526,10 +759,11 @@
 
       /* The credits screen. `pointer-events` is turned back on because it is
          the one overlay a player is meant to click: every entry links to where
-         the asset came from. */
+         the asset came from. Above the menu, because it opens from it. */
       #credits {
         position: absolute;
         inset: 0;
+        z-index: 10;
         overflow-y: auto;
         padding: 48px 24px;
         background: rgba(13, 17, 23, 0.94);

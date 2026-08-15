@@ -380,6 +380,31 @@ async function measureBaseline(context, seconds) {
   return p99
 }
 
+/**
+ * Give the mouse back, the way a player does — or the way a test has to.
+ *
+ * Escape is handled by the browser's own *chrome* rather than by the page, and
+ * a synthesised key event does not reach it in headless Chromium. Where that is
+ * the case the lock is dropped through the API instead: what everything after
+ * this is about is the state on the other side of a release, and the release
+ * itself is not the claim. Which one happened is returned rather than hidden,
+ * because "escape did nothing" must not read as a pass.
+ */
+async function releaseLock(page) {
+  await page.keyboard.press('Escape')
+  const byEscape = await waitFor(
+    'escape to release the pointer',
+    async () => page.evaluate(() => document.pointerLockElement === null),
+    2000,
+  )
+  if (byEscape) return { released: true, byEscape: true }
+  await page.evaluate(() => document.exitPointerLock())
+  const released = await waitFor('the pointer to be released', async () =>
+    page.evaluate(() => document.pointerLockElement === null),
+  )
+  return { released, byEscape: false }
+}
+
 async function waitFor(what, predicate, timeoutMs = 20_000) {
   const deadline = Date.now() + timeoutMs
   for (;;) {
@@ -461,7 +486,10 @@ try {
   })
   tab.on('pageerror', (error) => consoleErrors.push(`uncaught: ${error.message}`))
 
-  await tab.goto(`${STATIC_ORIGIN}/`, { waitUntil: 'load' })
+  // `?host=1`: a room opened and no menu in front of it, which is the state
+  // everything below measures. The menu itself — and the room-code flow that is
+  // the reason it exists — is its own section further down. `ui/roomFlow.ts`.
+  await tab.goto(`${STATIC_ORIGIN}/?host=1`, { waitUntil: 'load' })
 
   const booted = await waitFor('the client to start simulating', async () =>
     tab.evaluate(() => (window.__gladiator?.snapshot().tick ?? 0) > 0),
@@ -599,6 +627,19 @@ try {
   await tab.setViewportSize(VIEWPORT)
   await tab.evaluate(() => window.dispatchEvent(new Event('resize')))
 
+  // The lock again, because the pacing measurement above took it away: the
+  // baseline runs in a second tab, and a browser drops pointer lock the moment
+  // the page stops being the front one. Nothing below is worth measuring
+  // without it — a client with a loose pointer sends a player who is standing
+  // still (`input/controller.ts`: no lock, no movement), and "the hashes agree
+  // over a minute of movement" would then be a minute of nothing.
+  await tab.locator('#stage').click()
+  const lockedForHashes = await waitFor(
+    'the pointer lock to come back for the hash run',
+    async () => tab.evaluate(() => document.pointerLockElement !== null),
+  )
+  check('the pointer is locked for the hash comparison', lockedForHashes)
+
   // --- hash agreement, for real, for a minute ------------------------------
   console.log(`  ...  moving for ${seconds}s and comparing hashes`)
   const deadline = Date.now() + seconds * 1000
@@ -716,7 +757,7 @@ try {
   )
 
   // --- the version mismatch path ------------------------------------------
-  await tab.goto(`${STATIC_ORIGIN}/?protocol=999`, { waitUntil: 'load' })
+  await tab.goto(`${STATIC_ORIGIN}/?host=1&protocol=999`, { waitUntil: 'load' })
   const banner = tab.locator('[data-hud="banner"]')
   const shown = await waitFor('the version-mismatch banner', async () => {
     const text = await banner.textContent()
@@ -734,7 +775,7 @@ try {
   // The deploy race: Vercel ships the client and Fly ships the server, and for
   // a minute or two after either one, a page can be holding a different arena
   // than the server is authoritative over. `?map=` forces that state.
-  await tab.goto(`${STATIC_ORIGIN}/?map=deadbeef`, { waitUntil: 'load' })
+  await tab.goto(`${STATIC_ORIGIN}/?host=1&map=deadbeef`, { waitUntil: 'load' })
   const mapShown = await waitFor('the map-mismatch banner', async () => {
     const text = await banner.textContent()
     return text !== null && text.includes('deadbeef')
@@ -790,10 +831,256 @@ try {
     `${creditsMatch.rendered}/${creditsMatch.expected} rendered, ${creditsMatch.linked} linked, ${creditsMatch.licensed} licensed`,
   )
 
-  // --- the HUD at three aspect ratios --------------------------------------
-  // GLAD-BHNPOE. A fresh load, so the pointer is unlocked and the "click to
-  // play" prompt is on screen with everything else.
+  // --- the menu, and the room-code flow ------------------------------------
+  // GLAD-NPCTU8, and the acceptance list this ticket is judged on. Everything
+  // here is the *deployed* flow rather than a unit of it: a stranger opens the
+  // page, creates a match, copies the link, and somebody else opens that link
+  // and is in the same room with nothing to type.
+  //
+  // The static host is `http://127.0.0.1`, which every browser treats as a
+  // secure context exactly as it treats the deployed HTTPS origin — so the
+  // asynchronous clipboard is the same code path here as on Vercel.
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'], {
+    origin: STATIC_ORIGIN,
+  })
   await tab.goto(`${STATIC_ORIGIN}/`, { waitUntil: 'load' })
+
+  const menuUp = await waitFor('the main menu', async () =>
+    tab.evaluate(() => window.__gladiator?.snapshot().menu === 'main'),
+  )
+  check('a page with nothing in the URL opens on the menu', menuUp)
+  const idle = await tab.evaluate(() => window.__gladiator?.snapshot())
+  check(
+    'the menu opens no socket and simulates nothing until a match is picked',
+    idle?.net.status === 'idle' && idle.tick === 0,
+    `status ${idle?.net.status ?? '(none)'}, tick ${idle?.tick ?? '(none)'}`,
+  )
+
+  await tab.locator('[data-hud="menu-create"]').click()
+  // Waited for on the *screen* rather than in the snapshot: the host answers
+  // with the code the moment the socket opens, and what this section is about
+  // is the player having something to send. The menu is written from the
+  // session ten times a second, with everything else that changes slowly.
+  const minted = await waitFor('the room code to reach the screen', async () =>
+    tab.evaluate(
+      () => (document.querySelector('[data-hud="menu-room-link"]')?.value ?? '') !== '',
+    ),
+  )
+  const room = await tab.evaluate(() => window.__gladiator?.snapshot().net.room)
+  check('creating a match gets a room code from the host', minted, `room ${String(room)}`)
+
+  const onScreen = await tab.locator('[data-hud="menu-room-code"]').textContent()
+  const link = await tab.locator('[data-hud="menu-room-link"]').inputValue()
+  check(
+    'the code is on screen, grouped so it can be read out',
+    onScreen === `${String(room).slice(0, 3)}-${String(room).slice(3)}`,
+    `screen ${JSON.stringify(onScreen)}, room ${String(room)}`,
+  )
+  check(
+    'the link is this page with the room on it, and nothing else',
+    link === `${STATIC_ORIGIN}/?room=${String(room)}`,
+    link,
+  )
+  check(
+    'the room is in the address bar, so a reload rejoins rather than opening another',
+    (await tab.evaluate(() => window.location.search)).includes(`room=${String(room)}`),
+    await tab.evaluate(() => window.location.search),
+  )
+
+  await tab.locator('[data-hud="menu-copy"]').click()
+  const copied = await waitFor('the copy to land', async () =>
+    tab.evaluate(
+      () => document.querySelector('[data-hud="menu-copy"]')?.dataset.state === 'copied',
+    ),
+  )
+  const clipboard = await tab.evaluate(() => navigator.clipboard.readText())
+  check(
+    'the copy affordance puts the link on the clipboard on a secure origin',
+    copied && clipboard === link,
+    `clipboard ${JSON.stringify(clipboard)}`,
+  )
+
+  // The second player. A separate tab, opening nothing but the link.
+  const friend = await context.newPage()
+  const friendErrors = []
+  friend.on('console', (message) => {
+    if (message.type() === 'error') friendErrors.push(message.text())
+  })
+  friend.on('pageerror', (error) => friendErrors.push(`uncaught: ${error.message}`))
+  await friend.goto(link, { waitUntil: 'load' })
+
+  const joining = await waitFor('the second player to reach the room screen', async () =>
+    friend.evaluate(() => window.__gladiator?.snapshot().menu === 'room'),
+  )
+  const prefilled = await friend.locator('[data-hud="menu-code-input"]').inputValue()
+  check(
+    'opening a room link goes straight into the join, with the code prefilled',
+    joining && prefilled.replace('-', '') === String(room),
+    `menu ${await friend.evaluate(() => window.__gladiator?.snapshot().menu)}, box ${JSON.stringify(prefilled)}`,
+  )
+  const friendLive = await waitFor('the second player to be welcomed', async () =>
+    friend.evaluate(() => window.__gladiator?.snapshot().net.status === 'live'),
+  )
+  check(
+    'the link connects on its own — nothing is typed and nothing is pressed first',
+    friendLive && (await friend.evaluate(() => window.__gladiator?.snapshot().net.room)) === room,
+  )
+
+  // One click: the browser will not lock a pointer or start an audio context
+  // without a gesture, and this is the same one. `audio/gesture.ts`.
+  await friend.locator('[data-hud="menu-enter"]').click()
+  const friendPlaying = await waitFor('the second player to be in the arena', async () =>
+    friend.evaluate(
+      () => document.pointerLockElement !== null && window.__gladiator?.snapshot().menu === 'hidden',
+    ),
+  )
+  check('one click from the link puts the second player in the arena', friendPlaying)
+  check('the second player’s page logged no console errors', friendErrors.length === 0,
+    friendErrors.slice(0, 5).join(' | '))
+
+  // --- escape, and taking the mouse back -----------------------------------
+  // The lock is the browser's to give, and every browser refuses to hand it
+  // straight back after the player released it with escape — a *fresh* click is
+  // the only thing that works. What must survive that is everything else: the
+  // match keeps running, the settings are untouched, and resuming is one click.
+  const paused = await friend.evaluate(() => window.__gladiator?.snapshot())
+  const { released, byEscape } = await releaseLock(friend)
+  const pausedUp =
+    released &&
+    (await waitFor('the pause screen', async () =>
+      friend.evaluate(() => window.__gladiator?.snapshot().menu === 'paused'),
+    ))
+  check(
+    'losing the pointer lock puts the pause screen up over a running match',
+    pausedUp,
+    byEscape
+      ? 'released with escape'
+      : 'released with exitPointerLock — this browser does not deliver a synthesised escape to its own chrome',
+  )
+
+  const ticking = await waitFor('the match to carry on ticking while paused', async () =>
+    friend.evaluate((tick) => (window.__gladiator?.snapshot().tick ?? 0) > tick + 20, paused.tick),
+  )
+  check('the match keeps running behind the pause screen', ticking)
+
+  // Clicked, not retried on a timer: after the default unlock gesture a browser
+  // refuses even with a transient activation available, so the honest response
+  // is to ask for another click and take the lock on that one.
+  let relocked = false
+  for (let attempt = 0; attempt < 5 && !relocked; attempt += 1) {
+    await friend.locator('[data-hud="menu-resume"]').click()
+    relocked = await waitFor(
+      'the pointer lock to come back',
+      async () => friend.evaluate(() => document.pointerLockElement !== null),
+      2000,
+    )
+  }
+  const after = await friend.evaluate(() => window.__gladiator?.snapshot())
+  check('the pointer lock is reacquired after escape', relocked)
+  check(
+    'nothing was lost across the escape: same match, same session, same settings',
+    after.net.status === 'live' &&
+      after.net.room === room &&
+      after.tick > paused.tick &&
+      JSON.stringify(after.settings) === JSON.stringify(paused.settings),
+    `status ${after.net.status}, room ${String(after.net.room)}, settings ${JSON.stringify(after.settings)}`,
+  )
+
+  // --- the settings a competitive player expects ---------------------------
+  await releaseLock(friend)
+  await waitFor('the pause screen again', async () =>
+    friend.evaluate(() => window.__gladiator?.snapshot().menu === 'paused'),
+  )
+  await friend.locator('[data-hud="menu-pause-settings"]').click()
+  await friend.locator('[data-hud="menu-cm360"]').fill('40')
+  await friend.locator('[data-hud="menu-cm360"]').press('Enter')
+  const set = await waitFor('the sensitivity to be taken', async () =>
+    friend.evaluate(() => window.__gladiator?.snapshot().settings.cm360 === 40),
+  )
+  const derived = await friend.locator('[data-hud="menu-derived"]').textContent()
+  check(
+    'sensitivity is set in cm/360, and the counts it comes to are shown beside it',
+    // 40 cm at the default 800 CPI is 40/2.54 x 800 = 12598 counts per 360.
+    set && (derived ?? '').includes('12598 counts per 360'),
+    `${JSON.stringify(derived)}`,
+  )
+  const rawLine = await friend.locator('[data-hud="menu-raw"]').textContent()
+  const warned = await friend.evaluate(() => {
+    const node = document.querySelector('[data-hud="menu-raw-warning"]')
+    const state = window.__gladiator?.snapshot().rawInput
+    return { state, hidden: node?.hasAttribute('hidden') ?? true, text: node?.textContent ?? '' }
+  })
+  // The verdict itself is the browser's and the platform's — `docs/browser-support.md`
+  // is the matrix, and `pnpm run raw-input` is what measures it. What is checked
+  // here is that the page is *honest* about whichever answer it got.
+  check(
+    'the raw-input state is on the settings screen, with a warning when it is not raw',
+    (rawLine ?? '').includes(warned.state === 'granted' ? 'raw' : warned.state) &&
+      warned.hidden === (warned.state === 'granted') &&
+      (warned.state === 'granted' || warned.text.length > 0),
+    `${warned.state}: ${JSON.stringify(rawLine)}, warning hidden ${warned.hidden}`,
+  )
+
+  const persisted = await friend.evaluate(() => window.localStorage.getItem('gladiator.settings.v1'))
+  check(
+    'settings are kept in this browser and nowhere else',
+    (persisted ?? '').includes('"cm360":40'),
+    String(persisted),
+  )
+
+  // --- the phone that opens the room link ----------------------------------
+  // Somebody will. The bounce page is what they get instead of a canvas that
+  // never locks a pointer. `ui/unsupported.ts`.
+  const phone = await context.browser().newContext({
+    viewport: { width: 390, height: 844 },
+    isMobile: true,
+    hasTouch: true,
+    deviceScaleFactor: 3,
+  })
+  const phoneTab = await phone.newPage()
+  const phoneErrors = []
+  phoneTab.on('pageerror', (error) => phoneErrors.push(`uncaught: ${error.message}`))
+  await phoneTab.goto(link, { waitUntil: 'load' })
+  const bounced = await waitFor('the bounce page', async () =>
+    phoneTab.evaluate(() => document.querySelector('[data-hud="bounce"]') !== null),
+  )
+  const phoneState = await phoneTab.evaluate(() => ({
+    canvas: document.querySelector('#stage') !== null,
+    locked: document.pointerLockElement !== null,
+    booted: window.__gladiator !== undefined,
+    code: document.querySelector('[data-hud="bounce-code"]')?.textContent ?? '',
+    link: document.querySelector('[data-hud="bounce-link"]')?.value ?? '',
+  }))
+  check(
+    'a phone gets the bounce page rather than a broken pointer-lock attempt',
+    bounced && !phoneState.canvas && !phoneState.locked && !phoneState.booted,
+    `canvas ${phoneState.canvas}, locked ${phoneState.locked}, game ${phoneState.booted}`,
+  )
+  check(
+    'the bounce page hands the match back, so the link can be opened elsewhere',
+    phoneState.code.replace('-', '') === String(room) && phoneState.link === link,
+    `code ${JSON.stringify(phoneState.code)}, link ${JSON.stringify(phoneState.link)}`,
+  )
+  check('the bounce page logged no errors', phoneErrors.length === 0, phoneErrors.join(' | '))
+  await phone.close()
+
+  // --- the code in the address bar survives a reload -----------------------
+  await friend.reload({ waitUntil: 'load' })
+  const rejoined = await waitFor('the reloaded page to rejoin the same room', async () =>
+    friend.evaluate(() => window.__gladiator?.snapshot().net.status === 'live'),
+  )
+  const rejoinedState = await friend.evaluate(() => window.__gladiator?.snapshot())
+  check(
+    'a reload rejoins the same match, with the settings intact',
+    rejoined && rejoinedState.net.room === room && rejoinedState.settings.cm360 === 40,
+    `room ${String(rejoinedState?.net.room)}, cm360 ${String(rejoinedState?.settings.cm360)}`,
+  )
+  await friend.close()
+
+  // --- the HUD at three aspect ratios --------------------------------------
+  // GLAD-BHNPOE. A fresh load into a match, so the pointer is unlocked and the
+  // "click to play" prompt is on screen with everything else.
+  await tab.goto(`${STATIC_ORIGIN}/?host=1`, { waitUntil: 'load' })
   await waitFor('the HUD to be drawn', async () =>
     tab.evaluate(() => (window.__gladiator?.snapshot().hudFrames ?? 0) > 0),
   )
