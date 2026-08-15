@@ -70,12 +70,15 @@ packages/bot      single-player opposition; emits UserCmds like a human does
 packages/client   Babylon renderer, prediction, input
 packages/server   authoritative tick loop, rooms, WebSocket transport
 maps/             hand-authored maps and nav graphs, and the baked JSON they compile to
-tools/            bake-map.ts — compiles, validates and hashes maps/*.ts
-                  nav-bake.ts — validates and precomputes maps/*.nav.ts
+tools/            bake-map.ts    — compiles, validates and hashes maps/*.ts
+                  nav-bake.ts    — validates and precomputes maps/*.nav.ts
+                  synth-audio.ts — synthesises the sound set, bit-reproducibly
 scripts/          guardrails.mjs        — proves the boundaries reject violations
                   no-physics-plugin.mjs — fails if a physics engine is installed
                   e2e.mjs               — the browser smoke test
-docs/             physics-spec.md, renderer.md, deploy.md
+                  audio-check.mjs       — the audio checks, in a real browser
+docs/             physics-spec.md, renderer.md, audio.md, deploy.md
+CREDITS.md        every shipped asset, its source and its licence
 Dockerfile        the Fly.io image for packages/server
 fly.toml          the Fly.io app
 vercel.json       how Vercel builds packages/client from the repo root
@@ -93,6 +96,13 @@ camera is written from sim state every frame and never read back, and Babylon's
 own collision system and physics API are banned by lint and by a lockfile check
 so a second, disagreeing physics cannot quietly appear. Settings and reasoning:
 [`docs/renderer.md`](./docs/renderer.md).
+
+Its audio is two buses: your own actions go out dry and centred with the least
+latency the browser will give, and everything that happens in the arena is
+HRTF-panned so that a rocket fired behind you sounds behind you. The sounds
+themselves are synthesised by `tools/synth-audio.ts` rather than downloaded, so
+their licence is ours to give. Reasoning and the measurements:
+[`docs/audio.md`](./docs/audio.md).
 
 ## Deploying
 

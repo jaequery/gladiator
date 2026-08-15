@@ -7,7 +7,10 @@ every convention below exists to protect that one sentence.
 
 Vocabulary is in [`CONTEXT.md`](./CONTEXT.md). Physics numbers are in
 [`docs/physics-spec.md`](./docs/physics-spec.md); renderer settings and their
-reasoning are in [`docs/renderer.md`](./docs/renderer.md).
+reasoning are in [`docs/renderer.md`](./docs/renderer.md); the audio
+architecture and the sounds themselves are in
+[`docs/audio.md`](./docs/audio.md). Asset licences are in
+[`CREDITS.md`](./CREDITS.md), and a file that is not in there does not ship.
 
 ---
 
@@ -24,6 +27,8 @@ reasoning are in [`docs/renderer.md`](./docs/renderer.md).
 | `pnpm run guardrails`| proves the boundaries reject violations                |
 | `pnpm run map:bake`  | compiles `maps/*.ts` to `maps/baked/*.json` (`--check` verifies) |
 | `pnpm run nav:bake`  | compiles `maps/*.nav.ts` to `maps/baked/*.nav.json` (`--check` verifies) |
+| `pnpm run audio:bake`| synthesises `packages/client/public/audio/*.wav` (`--check` verifies) |
+| `pnpm run audio:verify`| the audio acceptance checks in a real browser — own CI job |
 | `pnpm run ci`        | all six, in that order — what CI runs                  |
 | `pnpm run e2e`       | the browser smoke test — needs Chromium, own CI job    |
 
@@ -45,7 +50,7 @@ and there is no `dist`, so there is exactly one resolution condition and nothing
 for `bundler` and `NodeNext` to disagree about.
 
 Two directories belong to no package and ship with neither build: `maps/` (the
-authored maps, the nav graphs, and their baked artifacts) and `tools/` (the two
+authored maps, the nav graphs, and their baked artifacts) and `tools/` (the
 bakers). Both are typechecked by the root `tsconfig.json` and linted with Node
 globals; both may import `@gladiator/sim` and `@gladiator/bot`, which is why
 both are devDependencies of the root `package.json`.
@@ -312,7 +317,8 @@ built from the same brush list `map/geometry.ts` cuts the render mesh out of. So
 what you can walk on is what you can see, across the network, by construction.
 Both spawn through `createMapState`, which lives in the simulation rather than in
 either of them because two peers that compute a spawn point separately are two
-peers waiting to disagree about it.
+peers waiting to disagree about it — and which now goes through the spawn system
+below rather than taking `spawns[0]`.
 
 `arena.ts` stays, and is not dead: `packages/sim` cannot import `maps/` —
 `rootDir` is `./src`, and the package has no filesystem — so the kernel's
@@ -325,6 +331,36 @@ is asserted against the movement in `maps/arena1.test.ts`, and the two
 `packages/server/src/map.ts` are what point the game at it. They still say
 `testbed`, because which map a room plays on is a choice with an owner
 (room-to-map assignment) and a reference screenshot behind it.
+
+### The spawn system
+
+`packages/sim/src/match/spawn.ts`. Numbers and reasoning:
+`docs/physics-spec.md` §6.
+
+Three policies are decided there rather than discovered in a duel, and each one
+is a constant with the argument next to it: **telefrag** (the arrival lives, the
+occupant dies), **spawn protection** (`SPAWN_PROTECTION_TICKS` is zero, and the
+seam is `isSpawnProtected` so turning it on is one number), and
+`RESPAWN_DELAY_TICKS` (three seconds; GLAD-L4SYN9 owns the state machine that
+counts it).
+
+The expensive half is geometry and it happens once. `buildSpawnPlan` works out
+which *pairs* of a map's spawns are far enough apart and cannot see each other —
+nine sample points per body, both directions, with the same `traceRay` the
+railgun will use. A round start is then two draws from `state.rng`: which pair,
+then which end each player gets. That is what makes a replay reproduce a match,
+and it is why `map/validate.ts` refuses a map with no legal pair.
+
+Two things in there look incidental and are not. `spawnRound` moves **both**
+bodies before either is allowed to telefrag anything, or a player standing where
+the last round left them would be killed for it. And a respawn **reuses** the
+slot's entity rather than making a new one, so an opponent's model survives a
+round boundary instead of vanishing and being replaced by a stranger.
+
+Facing is an instruction rather than a value: the kernel overwrites `angles`
+from the next `UserCmd`, so a client has to adopt the spawn yaw into its own
+view angles (`packages/client/src/main.ts`) or the first command a player sends
+spins them back to due north.
 
 ### The golden replay
 
