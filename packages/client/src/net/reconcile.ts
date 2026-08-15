@@ -63,6 +63,7 @@ import {
   type CollisionWorld,
   type GameState,
   type ServerSnapshot,
+  type TickHooks,
   type UserCmd,
   type Vec3,
 } from '@gladiator/sim'
@@ -168,6 +169,14 @@ export type ReconcileOptions = {
   /** The unacknowledged commands, oldest first, each with its tick label. */
   readonly pending: readonly PendingCommand[]
   /**
+   * Who this peer is, for the replay. The same hooks the live prediction runs
+   * under, and it has to be the same ones: a replay that reached a different
+   * answer about a rocket's self-splash than the tick it is replaying would
+   * make the launch flicker on and off as snapshots arrived.
+   * `net/rocketPredict.ts` is what keeps that answer stable.
+   */
+  readonly hooks?: TickHooks | null
+  /**
    * The authoritative world, the instant it is adopted and before anything is
    * replayed on top of it.
    *
@@ -200,6 +209,7 @@ export type PendingCommand = {
  */
 export function reconcile(options: ReconcileOptions): Correction | null {
   const { state, world, slot, snapshot, pending } = options
+  const hooks = options.hooks ?? null
 
   const predictedTick = state.tick
   const predicted = originOf(state, slot)
@@ -215,7 +225,7 @@ export function reconcile(options: ReconcileOptions): Correction | null {
   let replayed = 0
   for (const entry of pending) {
     if (entry.tick <= snapshot.ack) continue
-    simTick(state, inputsFor(slot, entry.cmd), world)
+    simTick(state, inputsFor(slot, entry.cmd), world, null, hooks)
     replayed += 1
     options.onReplayTick?.(state)
   }

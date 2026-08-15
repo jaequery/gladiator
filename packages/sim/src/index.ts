@@ -85,7 +85,16 @@ export {
   createKernel,
   tick,
 } from './kernel.ts'
-export type { CommandSource, Kernel, TickInputs, TickObserver } from './kernel.ts'
+export type { CommandSource, Kernel, TickHooks, TickInputs, TickObserver } from './kernel.ts'
+
+export {
+  INTERP_DELAY_MS,
+  INTERP_DELAY_TICKS,
+  MAX_REWIND_MS,
+  rewindMsFor,
+  rewindTicksFor,
+} from './lagcomp.ts'
+export type { HitscanRewind } from './lagcomp.ts'
 
 export {
   createMapWorld,
@@ -373,6 +382,14 @@ export {
 export type { ClipPlanes, MoveBody } from './slidemove.ts'
 
 export { snapshotFrame } from './snapshot.ts'
+
+export {
+  CLEARANCE_MAXS,
+  CLEARANCE_MINS,
+  SELF_SPLASH_CLEARANCE,
+  segmentClearsPlayer,
+} from './splash.ts'
+export type { SelfSplashPolicy } from './splash.ts'
 
 export {
   EntityFlag,

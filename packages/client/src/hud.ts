@@ -39,6 +39,18 @@ export type HudModel = {
    */
   readonly corrected: number
   readonly pending: number
+  /**
+   * What predicted self-splash has done this session. GLAD-5QGO11.
+   *
+   * Its own two numbers on the agreement row rather than folded into
+   * `corrected`, because they answer opposite questions: *deferred* is how often
+   * this client declined to predict a launch it was not sure about, which is the
+   * mechanism working (`net/rocketPredict.ts`), and *mispredicted* is how often
+   * a launch it did predict turned out to be one the host disagreed with, which
+   * is the mechanism not being conservative enough (`net/mispredict.ts`). Adding
+   * them together would hide the only one worth acting on.
+   */
+  readonly selfSplash: { readonly deferred: number; readonly mispredicted: number }
 }
 
 /**
@@ -177,7 +189,13 @@ export function createHud(root: HTMLElement): Hud {
           `${net.agree ? 'MATCH' : 'MISMATCH'} · ${net.compared} compared, ${net.mismatched} mismatched` +
             (net.dropped > 0 ? `, ${net.dropped} dropped` : '') +
             (model.corrected > 0 ? `, ${model.corrected} corrected` : '') +
-            (model.pending > 0 ? `, ${model.pending} unacked` : ''),
+            (model.pending > 0 ? `, ${model.pending} unacked` : '') +
+            (model.selfSplash.deferred > 0
+              ? `, ${model.selfSplash.deferred} splash deferred`
+              : '') +
+            (model.selfSplash.mispredicted > 0
+              ? `, ${model.selfSplash.mispredicted} splash mispredicted`
+              : ''),
         )
         setState(agreementValue, rate <= MISPREDICTION_TOLERANCE ? 'match' : 'mismatch')
       }
