@@ -2,12 +2,13 @@
  * The server entry point.
  *
  * Everything interesting is in `server.ts`; this is the part that reads the
- * environment, prints a line, and knows how to die politely.
+ * environment, opens the log, and knows how to die politely.
  */
-import { PROTOCOL_VERSION, TICK_INTERVAL_MS, onSpeedClamp } from '@gladiator/sim'
+import { PROTOCOL_VERSION, TICK_INTERVAL_MS, countSimEvents } from '@gladiator/sim'
 
 import { readConfig } from './config.ts'
 import { createJitterProbe } from './jitter.ts'
+import { createLogger } from './log.ts'
 import { MAX_ROOMS } from './rooms.ts'
 import { HOST_FRAME_MS } from './scheduler.ts'
 import { startServer } from './server.ts'
@@ -18,23 +19,48 @@ const JITTER_REPORT_MS = 60_000
 const config = readConfig(process.env)
 const jitter = createJitterProbe()
 
-// The simulation has no `console` — that is enforced, not conventional — so the
-// physics-spec §2.6 safety rail reports through a seam the host fills in.
-// Nothing a player can do reaches 3000 qu/s, so a line here means a command
-// stream produced a velocity that movement cannot: worth seeing in the log.
-onSpeedClamp((speed) => {
-  console.warn(`gladiator: clamped a velocity of ${speed.toFixed(0)} qu/s`)
+/**
+ * The log. One JSON object per line, and this is the only place that decides
+ * where a line goes — see `log.ts` for why the sink and the clock are injected
+ * rather than read in there.
+ */
+const log = createLogger({
+  write: (line) => {
+    console.log(line)
+  },
+  time: () => Date.now(),
+  context: { build: config.build },
 })
 
-const server = await startServer({ config, jitter })
+// The simulation has no `console` and no counters — that is enforced, not
+// conventional — so the two conditions worth noticing are seams a host fills
+// in, and `countSimEvents` is the tally on both of them. Nothing a player can
+// do reaches 3000 qu/s, so a clamp here means a command stream produced a
+// velocity that movement cannot: worth a line, every time, with the count
+// beside it so a storm of them reads as one problem rather than a thousand.
+const counters = countSimEvents({
+  onSpeedClamp: (speed) => {
+    log('sim.speed_clamped', {
+      level: 'warn',
+      speed: Math.round(speed),
+      clamps: counters.speedClamps,
+    })
+  },
+})
 
-console.log(
-  `gladiator server listening on :${server.port} — build ${config.build}, protocol ${PROTOCOL_VERSION}, ` +
-    `ticking at ${1000 / HOST_FRAME_MS} Hz into ${1000 / TICK_INTERVAL_MS} Hz sub-steps, ` +
-    `up to ${MAX_ROOMS} rooms, ` +
-    `origins: ${config.allowedOrigins.length > 0 ? config.allowedOrigins.join(' ') : '(none listed)'} ` +
-    `+ ${config.vercelProject}*.vercel.app${config.allowLocalhost ? ' + localhost' : ''}`,
-)
+const server = await startServer({ config, jitter, log })
+
+log('server.listening', {
+  port: server.port,
+  protocol: PROTOCOL_VERSION,
+  hostFrameHz: 1000 / HOST_FRAME_MS,
+  tickHz: 1000 / TICK_INTERVAL_MS,
+  maxRooms: MAX_ROOMS,
+  allowedOrigins: config.allowedOrigins.join(' '),
+  vercelProject: `${config.vercelProject}*.vercel.app`,
+  allowLocalhost: config.allowLocalhost,
+  demoDir: config.demoDir,
+})
 
 // The number that matters is the one measured on the machine class actually
 // serving players, so it is measured there and logged there. `/healthz` carries
@@ -45,8 +71,8 @@ console.log(
 // work. `WAKEUP_BUDGET_MS` is the budget and `docs/deploy.md` says what to do
 // when it is over.
 const report = setTimeout(() => {
-  console.log(`bare timer: ${jitter.describe()}`)
-  console.log(server.scheduler.describe())
+  log('jitter.bare_timer', { detail: jitter.describe() })
+  log('scheduler.report', { detail: server.scheduler.describe() })
 }, JITTER_REPORT_MS)
 report.unref()
 
@@ -57,9 +83,13 @@ report.unref()
  * is GLAD-G41FQ9.
  */
 const shutdown = (signal: string) => {
-  console.log(
-    `${signal} received — ${server.rooms.size} rooms live, ${server.scheduler.describe()}`,
-  )
+  log('server.shutdown', {
+    signal,
+    rooms: server.rooms.size,
+    speedClamps: counters.speedClamps,
+    selfSplashes: counters.selfSplashes,
+    scheduler: server.scheduler.describe(),
+  })
   void server.close().then(() => {
     process.exit(0)
   })

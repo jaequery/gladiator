@@ -105,6 +105,10 @@ describe('the host is isomorphic', () => {
     // one command per peer per sub-step, and the buffer that holds them has to
     // run in a tab as well.
     //
+    // `log.ts` joined it with structured logging, and it is on this side of the
+    // line for the same reason `clock.ts` is: the sink and the wall-clock are
+    // injected, so the module itself names neither `console` nor `Date.now`.
+    //
     // `lifecycle.ts` joined it with the connection lifecycle, and `roomCode.ts`
     // came with it: a seat token is drawn from the same uniform uint32 source a
     // room code is, and `crypto.getRandomValues` is a global in Node 22 and in
@@ -116,6 +120,7 @@ describe('the host is isomorphic', () => {
       'clockSync.ts',
       'inputQueue.ts',
       'lifecycle.ts',
+      'log.ts',
       'room.ts',
       'roomCode.ts',
       'session.ts',

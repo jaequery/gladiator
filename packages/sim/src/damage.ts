@@ -121,6 +121,48 @@ export function knockbackTicksFor(damage: number): number {
 }
 
 /* --------------------------------------------------------------------------
+ * The self-splash seam
+ * ----------------------------------------------------------------------- */
+
+/** A player taking their own splash: a rocket jump, or a rocket at their feet. */
+export type SelfSplash = {
+  /** The world tick it landed on. */
+  readonly tick: number
+  /** The player slot, or `NO_SLOT` for a body no peer is steering. */
+  readonly slot: number
+  /** The splash before the self-damage rule was consulted — what the push came from. */
+  readonly points: number
+  /** What it actually cost: armour plus health, which is 0 under `SelfDamage.None`. */
+  readonly absorbed: number
+}
+
+/**
+ * Called when a player takes damage from their own rocket.
+ *
+ * The same shape, and the same reason, as `pmove/index.ts`'s
+ * `onSpeedClamp`: `packages/sim` has no `console` and no counters of its
+ * own, so anything the outside world wants to *notice* is a seam the host
+ * fills in.
+ *
+ * What the client does with it is the interesting part. Self-splash is the one
+ * event whose prediction is a *predicate* rather than a trajectory — you either
+ * ate your own rocket or you did not — so a client that predicted one the
+ * server did not apply, or missed one it did, has had its prediction fail in a
+ * way ordinary positional drift never shows. `client/src/net/mispredict.ts`
+ * counts exactly that, and it is a far sharper determinism canary than a
+ * correction distance. GLAD-2E6PUO.
+ *
+ * Purely observational: it cannot reach the state, nothing consults it, and two
+ * peers with different observers still produce the same world. `null` removes
+ * it.
+ */
+export function onSelfSplash(observer: ((splash: SelfSplash) => void) | null): void {
+  selfSplashObserver = observer
+}
+
+let selfSplashObserver: ((splash: SelfSplash) => void) | null = null
+
+/* --------------------------------------------------------------------------
  * G_Damage
  * ----------------------------------------------------------------------- */
 
@@ -179,12 +221,22 @@ export function applyDamage(
     }
   }
 
-  const split = resolveDamage(mode, target.id === attackerId, points, target.armor)
+  const selfInflicted = target.id === attackerId
+  const split = resolveDamage(mode, selfInflicted, points, target.armor)
   target.armor -= split.armor
   target.health -= split.health
   if (target.health <= 0) target.flags |= EntityFlag.Dead
 
-  return split.armor + split.health
+  const absorbed = split.armor + split.health
+
+  // After the state is written, so an observer that reads the entity sees the
+  // world the tick left behind rather than a half-applied one. See
+  // {@link onSelfSplash}.
+  if (selfInflicted && target.kind === EntityKind.Player && selfSplashObserver !== null) {
+    selfSplashObserver({ tick: state.tick, slot: target.slot, points, absorbed })
+  }
+
+  return absorbed
 }
 
 const pushDir: MutVec3 = vec3()
