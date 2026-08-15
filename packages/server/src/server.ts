@@ -38,11 +38,19 @@
  * answered with a `fault` frame naming it and a 4006 close — a socket that
  * opened and then went quiet is the one failure mode a player cannot diagnose.
  *
+ * `wss://host/?room=ABC123&token=…` is the same URL with proof of a *seat* in
+ * it, which is what makes it a reconnect rather than a join: the same slot, the
+ * same score, the same body standing where it was left. What a token can mean
+ * and what each answer costs is `lifecycle.ts`; this file's share is reading it
+ * off the query string and handing it to the room.
+ *
  * `wss://host/?queue=1` asks to be matched with a stranger: the quick-match
  * queue seats this peer in the room somebody is already waiting in, or opens
  * one and parks them in it (`queue.ts`). A code beats it — a player who typed
  * six characters asked for a *particular* match — which is why `?room=` is read
- * first below and the queue is only consulted when there is no code.
+ * first below and the queue is only consulted when there is no code. A token
+ * comes with a code, so a reconnect never reaches the queue: being handed a
+ * stranger is the opposite of what the player holding it is asking for.
  *
  * ## What an unknown client is allowed to do before it is anybody
  *
@@ -109,11 +117,24 @@ const HEARTBEAT_MS = 20_000
 /** The query parameter a client puts a room code in. */
 export const ROOM_QUERY_PARAM = 'room'
 
+/** The query parameter a returning client puts its seat token in. */
+export const TOKEN_QUERY_PARAM = 'token'
+
 /** The query parameter a reconnecting client puts its resume ticket in. */
 export const RESUME_QUERY_PARAM = 'resume'
 
 /** The query parameter a client asking to be matched with a stranger sets. */
 export const QUEUE_QUERY_PARAM = 'queue'
+
+/**
+ * The longest seat token this server will look at.
+ *
+ * A token is 32 hex characters (`lifecycle.ts`). The bound is here rather than
+ * only in the parser because this one arrives in a URL, and the cheapest way to
+ * make a server do pointless work is to hand it a megabyte where it expected
+ * thirty-two bytes. Anything longer is not a token, so it is not read as one.
+ */
+const MAX_TOKEN_LENGTH = 64
 
 export type GladiatorServer = {
   readonly http: Server
@@ -216,6 +237,19 @@ function queryOf(url: string | undefined, name: string): string | null {
 }
 
 /**
+ * The seat token a request is presenting, or `null` for somebody arriving fresh.
+ *
+ * Read but never *judged* here: whether a token names a seat, and what happens
+ * if it names one somebody else is sitting in, is `lifecycle.ts`'s decision. All
+ * this owes is that a value too long to be a token is not passed on as one.
+ */
+export function seatTokenOf(url: string | undefined): string | null {
+  const query = queryOf(url, TOKEN_QUERY_PARAM)
+  if (query === null || query.length > MAX_TOKEN_LENGTH) return null
+  return query
+}
+
+/**
  * The query parameters of a request target, or `null` if it does not parse.
  *
  * The parse is here, once, because the argument is a request target an attacker
@@ -224,11 +258,15 @@ function queryOf(url: string | undefined, name: string): string | null {
  * `new URL` throws on it — inside an `upgrade` handler, which is an uncaught
  * exception and therefore the whole process.
  *
- * Total, and total in one place rather than three, because the failure mode of
- * doing it per-caller is not hypothetical: while a total `roomCodeOf` and a
- * throwing `queueRequested` coexisted, an unparseable target returned `null`
- * from the first — which is exactly the condition that consults the second.
- * Catching in one reader routed the attack into the one that did not.
+ * Total, and total *here* rather than in each of the four readers, because the
+ * failure mode of doing it per-caller is not hypothetical and has now happened
+ * twice. While a total `roomCodeOf` and a throwing `queueRequested` coexisted,
+ * an unparseable target returned `null` from the first — which is exactly the
+ * condition that consults the second, so catching in one reader routed the
+ * attack into the one that did not. `seatTokenOf` arrived with the same
+ * unguarded `new URL` and was folded in here on sight. Anything that reads the
+ * target goes through this function; a second `new URL` in this file is a bug
+ * whether or not anyone can currently reach it.
  */
 function paramsOf(url: string | undefined): URLSearchParams | null {
   if (url === undefined) return null
@@ -631,6 +669,14 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
       return
     }
 
+    // Read for every connection that gets this far, including one opening a new
+    // room: a token that names nothing is a stale value in somebody's tab rather
+    // than an error, and `lifecycle.ts` treats its holder as the newcomer they
+    // are. The quick-match path above returns before this and never wants one —
+    // a token travels with the code it was issued for, and a socket asking for a
+    // stranger has no code.
+    const token = seatTokenOf(request.url)
+
     if (asked === null) {
       const opened = rooms.create()
       if (opened === null) {
@@ -642,7 +688,7 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
         )
         return
       }
-      opened.room.join(wsTransport(socket, traffic))
+      opened.room.join(wsTransport(socket, traffic), { token })
       return
     }
 
@@ -682,7 +728,12 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
       return
     }
 
-    found.room.join(wsTransport(socket, traffic), resumed?.slot)
+    // Both ways of asking for a seat, in order of how strongly they ask. A
+    // token is proof of the seat this player was already in and settles it
+    // outright; a resumed ticket's slot is only a preference, because the match
+    // it names was rebuilt on a different machine and the seat may since have
+    // been taken by the opponent getting back first.
+    found.room.join(wsTransport(socket, traffic), { token, prefer: resumed?.slot ?? null })
   })
 
   // The socket heartbeat: is this pipe still there. A question about TCP, at a
@@ -717,6 +768,7 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
     http.listen(config.port, () => {
       const address = http.address()
       const port = typeof address === 'object' && address !== null ? address.port : config.port
+
       resolve({
         http,
         wss,
@@ -744,9 +796,14 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
             jitter.stop()
             // "Going away" is what a browser is told when a server is shutting
             // down cleanly, and it is what lets a client tell a deploy apart
-            // from a crash. Said twice on purpose: once to every room's peers
-            // through their transports, and once to any socket that never got
-            // as far as a room.
+            // from a crash — and, now, what makes it *reconnect* rather than
+            // give up (`client/net/reconnect.ts`). Said twice on purpose: once
+            // to every room's peers through their transports, and once to any
+            // socket that never got as far as a room.
+            //
+            // Draining properly — refusing new upgrades, handing every peer
+            // something to come back with, and waiting for the sockets — is
+            // GLAD-G41FQ9's `shutdown.ts`.
             rooms.closeAll(CloseReason.GoingAway, 'server shutting down')
             for (const socket of connections.keys()) {
               socket.close(CloseReason.GoingAway, 'server shutting down')

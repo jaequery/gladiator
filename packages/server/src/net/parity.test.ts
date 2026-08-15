@@ -299,8 +299,13 @@ describe('one input stream, two transports', () => {
     const two = welcomeOf(socket)
     if (one?.t !== 'welcome' || two?.t !== 'welcome') throw new Error('no welcome')
 
-    // Everything but the session id, which is per-peer by construction.
-    expect({ ...one, session: '' }).toEqual({ ...two, session: '' })
+    // Everything but the two fields that are per-*peer* by construction: the
+    // session id, and the seat token — two peers in one room are handed the
+    // same build, the same map and the same code, and two different keys
+    // (`lifecycle.ts`). A parity test that required those to match would be
+    // asserting the opposite of what the lifecycle promises.
+    expect({ ...one, session: '', token: '' }).toEqual({ ...two, session: '', token: '' })
+    expect(one.token).not.toBe(two.token)
   })
 
   it('agrees about a world that actually went somewhere', async () => {

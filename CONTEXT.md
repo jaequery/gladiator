@@ -373,7 +373,44 @@ it. A `waiting` frame says the wait has started, a `matched` frame says it is
 over, and a `timeout` frame — a minute in — says nobody came and hands back the
 code to send a friend. An entry is re-checked against the registry every time it
 is about to be used, so a player who queues and closes the tab is never paired
-with anybody.
+with anybody. That re-check counts **seats**, not sockets: once seats could
+outlive connections, "one peer and room for two" stopped meaning there is a free
+seat, and a room holding one for somebody mid-reconnect must not be paired into.
+
+**Seat** — a *side* of a duel: a slot in the world, a score, a body standing in
+the arena. Deliberately not the same thing as a connection, because a socket
+dies for reasons that have nothing to do with the match. Held by one peer at a
+time, and outliving whoever holds it by the grace window.
+`packages/server/src/lifecycle.ts`.
+
+**Seat token** — the 128-bit key the host mints when a seat is first taken and
+puts in the welcome. A room code says *which match*; a token says *which side of
+it*, which is the whole difference between reconnecting and joining. Bearer, and
+never shown to the other peer.
+
+**Grace window** — how long a seat is held for a peer that has gone:
+`RECONNECT_GRACE_MS`, thirty seconds. Their body stays in the world with no
+input at all — standing still and killable, so rage-quitting cannot deny a frag
+— and the opponent is told immediately, with a countdown.
+
+**Forfeit** — what a grace window running out does: the round in progress is
+awarded and the match with it, to whoever still holds the other seat
+(`forfeitMatch`, `sim/src/match/round.ts`). The score then records the rounds
+that were played and the winner is the player who was still there, and those two
+can disagree.
+
+**Reconnect** — coming back to a seat with its token, on the same URL plus
+`&token=…`. The client throws away everything it predicted across the gap and
+takes the first snapshot whole; which closes are worth retrying, and the
+250 ms-to-4 s backoff, are `packages/client/src/net/reconnect.ts`. A reconnect
+during a **drain** carries `&resume=` as well: the token asks the machine still
+holding the seat, and the ticket tells a machine that was never there what the
+score was.
+
+A **drain** is deliberately *not* a departure, and the two must never be
+confused: closing a room for a deploy vacates no seat, starts no grace window
+and forfeits nobody, or a rolling deploy would decide every match it touched.
+`Room.close` says so with a `closing` flag.
 
 **Drain** — what a machine does between SIGTERM and exiting
 (`packages/server/src/shutdown.ts`). Stops being ready, hands every seated
@@ -605,8 +642,8 @@ wrong.
 **Link kind** — how a body gets from one nav node to the next: `walk`, `jump`,
 `drop` or `teleport`. Directed, always — a ledge you can drop off and cannot
 climb back on to is the commonest shape in an arena and an undirected graph
-cannot say it. Each kind maps to exactly one traversal controller in the bot's
-movement (GLAD-TSED8V). `rocketjump` is a v2 kind.
+cannot say it. Each kind maps to exactly one **traversal controller** in the
+bot's movement. `rocketjump` is a v2 kind.
 
 **Ground / perch** — the two routing classes a nav node can be in. Every
 `ground` node has to route to every other one and the bake refuses a graph
@@ -631,6 +668,42 @@ require the bot's `UserCmd` stream to come out **bit-identical**. Binary and
 un-gameable, unlike a correlation threshold. A positive control moves the
 opponent somewhere the bot can see and requires the stream to *differ*, so it
 cannot pass by the bot doing nothing.
+
+**Follower** — the bot's movement loop: a route, one link, and one `UserCmd`'s
+worth of axes. `packages/bot/src/movement/move.ts` (GLAD-TSED8V). It never
+expresses "move to point P" — only which of nine stick positions produces
+velocity towards P, given the yaw the aim controller chose.
+
+**Hop** — the link the bot is on right now, held until it arrives, is displaced
+off it, or runs out of budget. Exactly one at a time, which is what makes
+"falling while the link is a `walk`" a bug rather than a case to handle.
+
+**Traversal controller** — one link kind's worth of driving:
+`packages/bot/src/travel/`. Answers which direction and whether to press jump,
+and nothing else. The table is exhaustive by type, so a new link kind fails to
+compile until it has one.
+
+**Ledge guard** — a downward point trace at the position the bot's next stride
+lands on, and a re-steer when there is no floor within a step. The lookahead is
+a stopping distance rather than a constant, and the guard is off for `drop` and
+`jump` — the kinds that mean there is supposed to be nothing under you.
+
+**Circle jump** — v1's whole answer to strafe-jumping: one jump at the start of
+a straight run, with the wish held 45 degrees off the direction of travel for
+24 sub-steps. 369 ups measured, and no continuous yaw control, so the aim
+controller keeps the view.
+
+**Roam** — where the bot goes when the decision layer has nothing to ask for: a
+`ground` node drawn from its own seeded stream. Standing still is never the
+default, because "stop closing" is not "stop moving".
+
+**Stuck** — 32 units of progress not made in three seconds, while there is
+something to walk towards. Recovery is bounded to 1.5 seconds and is *steering*,
+never a position write; four seconds emits `NAV_STUCK` with the position in it.
+
+**Soak** — `pnpm bot:soak`: two bots, 200 matches of two minutes, and the
+movement's acceptance checks measured from the world rather than from the bot's
+own bookkeeping. `tools/bot-arena.ts`.
 
 ---
 

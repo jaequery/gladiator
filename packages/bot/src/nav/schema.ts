@@ -32,8 +32,9 @@
  *
  * ## The kinds, and what owns them
  *
- * Each kind maps to exactly one traversal controller in the bot's movement
- * (GLAD-TSED8V), mirroring Quake's `BotTravel_*` split. That is the reason the
+ * Each kind maps to exactly one traversal controller in the bot's movement —
+ * `packages/bot/src/travel/`, one file each — mirroring Quake's `BotTravel_*`
+ * split. That is the reason the
  * set is small and closed: a kind nothing can execute is a route the bot walks
  * into and stops on.
  *

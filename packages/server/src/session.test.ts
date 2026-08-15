@@ -19,6 +19,11 @@ const MAP_HASH = 'a1b2c3d4'
 const ROOM = 'H7K2Q9'
 const IDENTITY = { build: BUILD, mapHash: MAP_HASH, room: ROOM }
 
+/** This seat's key, minted by the lifecycle before the session existed. A fixed
+ *  one here for the same reason the map hash is fake: this is a unit test of the
+ *  door, and it never seats anybody. `lifecycle.ts`. */
+const TOKEN = 'deadbeefdeadbeefdeadbeefdeadbeef'
+
 function hello(over: Record<string, unknown> = {}) {
   return JSON.stringify({
     t: 'hello',
@@ -46,7 +51,7 @@ function cmdsFrame(startTick: number, count: number, cmd = NULL_CMD) {
  * it refuses, and what it counts.
  */
 function fresh() {
-  return createSession('s1', 0, createInputQueue())
+  return createSession('s1', 0, createInputQueue(), TOKEN)
 }
 
 function greeted() {
@@ -64,6 +69,10 @@ describe('session handshake', () => {
         session: 's1',
         mapHash: MAP_HASH,
         room: ROOM,
+        // The key to this seat. It is a property of the *seat* rather than of
+        // the server, which is why it comes off the session and not off the
+        // identity beside it (`lifecycle.ts`).
+        token: TOKEN,
       },
     ])
     expect(step.close).toBeUndefined()

@@ -70,8 +70,8 @@ export function canSee(nav: LoadedNav, a: number, b: number): boolean {
  * neighbours.
  *
  * The companion to {@link nextHop}: that says *where*, this says *which
- * traversal controller*. Each kind maps to exactly one of them in the bot's
- * movement (GLAD-TSED8V), which is why the set is small and closed.
+ * traversal controller*. Each kind maps to exactly one of them in `travel/`,
+ * which is why the set is small and closed.
  */
 export function hopKind(nav: LoadedNav, from: number, to: number): NavLinkKind | null {
   const kind = nav.linkKind[from * nav.nodeCount + to] ?? NO_NODE

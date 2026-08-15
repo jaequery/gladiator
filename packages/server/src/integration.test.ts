@@ -7,6 +7,7 @@
  * about TLS, framing, close codes or an origin header.
  */
 import {
+  MatchPhase,
   PROTOCOL_VERSION,
   TICK_RATE,
   type GameState,
@@ -31,7 +32,7 @@ import { SERVER_MAP, SERVER_MAP_HASH } from './map.ts'
 import { ROOM_CODE_ALPHABET } from './roomCode.ts'
 import { seedForRoom } from './rooms.ts'
 import { manualTimer } from './scheduler.ts'
-import { roomCodeOf, startServer, type GladiatorServer } from './server.ts'
+import { roomCodeOf, seatTokenOf, startServer, type GladiatorServer } from './server.ts'
 import { CLOSE_MAP_MISMATCH, CLOSE_NO_SUCH_ROOM, CLOSE_VERSION_MISMATCH } from './session.ts'
 
 const ALLOWED_ORIGIN = 'http://localhost:5173'
@@ -110,9 +111,19 @@ function fixedCode(code: string): () => number {
 }
 
 /** `null` means "send no Origin header at all", which is its own test case. */
-function connect(port: number, origin: string | null = ALLOWED_ORIGIN, room?: string): WebSocket {
-  const query = room === undefined ? '' : `?room=${encodeURIComponent(room)}`
-  return new WebSocket(`ws://127.0.0.1:${port}${query}`, {
+function connect(
+  port: number,
+  origin: string | null = ALLOWED_ORIGIN,
+  room?: string,
+  token?: string,
+): WebSocket {
+  const query = new URLSearchParams()
+  if (room !== undefined) query.set('room', room)
+  // The seat key, which is what turns this from a join into a reconnect.
+  // `lifecycle.ts`; the client builds the same URL in `net/client.ts`.
+  if (token !== undefined) query.set('token', token)
+  const search = query.size === 0 ? '' : `?${query.toString()}`
+  return new WebSocket(`ws://127.0.0.1:${port}${search}`, {
     ...(origin === null ? {} : { headers: { Origin: origin } }),
   })
 }
@@ -156,6 +167,17 @@ describe('the room code on the upgrade', () => {
     // One place folds a code and it is `roomCode.ts`. A second opinion here
     // would be a second alphabet to keep in step.
     expect(roomCodeOf('/?room=not-a-code')).toBe('not-a-code')
+  })
+
+  it('reads a seat token off the same query string, and bounds it', () => {
+    expect(seatTokenOf('/?room=H7K2Q9&token=deadbeef')).toBe('deadbeef')
+    expect(seatTokenOf('/?token=')).toBeNull()
+    expect(seatTokenOf('/?room=H7K2Q9')).toBeNull()
+    expect(seatTokenOf(undefined)).toBeNull()
+    // A token is 32 hex characters. Something far longer is not one, so it is
+    // not read as one — the cheapest way to make a server do pointless work is
+    // to hand it a megabyte where it expected thirty-two bytes.
+    expect(seatTokenOf(`/?token=${'a'.repeat(500)}`)).toBeNull()
   })
 })
 
@@ -559,6 +581,78 @@ describe('room codes on a real socket', () => {
 
     expect(code).toBe(CLOSE_NO_SUCH_ROOM)
     expect(frames.find((frame) => frame.t === 'fault')).toMatchObject({ code: 'no-such-room' })
+  })
+
+  it('gives a dropped player their seat back, over a second real socket', async () => {
+    // The reconnect, end to end: the same URL with the seat key on it
+    // (`?room=…&token=…`), through the real upgrade, the real registry and the
+    // real room. Everything below the socket is unit-tested in
+    // `lifecycle.test.ts`; what this proves is that the key survives the wire.
+    const { server, clock } = await start()
+
+    const host = connect(server.port)
+    await new Promise((resolve) => host.once('open', resolve))
+    const welcome = await new Promise<ServerMessage | null>((resolve) => {
+      host.once('message', (data) => resolve(parseServerMessage(String(data))))
+      host.send(helloFrame())
+    })
+    if (welcome?.t !== 'welcome') throw new Error('expected a welcome frame')
+    expect(welcome.token).toMatch(/^[0-9a-f]{32}$/)
+
+    const guest = connect(server.port, ALLOWED_ORIGIN, welcome.room)
+    const heardLife: Array<Extract<ServerMessage, { t: 'life' }>> = []
+    guest.on('message', (data) => {
+      const parsed = parseServerMessage(String(data))
+      if (parsed?.t === 'life') heardLife.push(parsed)
+    })
+    await new Promise((resolve) => guest.once('open', resolve))
+    guest.send(helloFrame())
+    await waitFor(() => {
+      const seated = server.rooms.get(welcome.room)?.room.peers ?? []
+      // Greeted, not merely connected: the match starts when both *players*
+      // have arrived, and a peer mid-handshake is not one yet (`room.ts`).
+      return seated.length === 2 && seated.every((peer) => peer.session.greeted) ? true : null
+    }, 'both seats')
+
+    // Start the match, put a round on the board, then pull the host's socket.
+    clock.advance(16)
+    server.scheduler.frame()
+    const room = server.rooms.get(welcome.room)?.room
+    if (room === undefined) throw new Error('the registry lost the room')
+    expect(room.state.match.phase).toBe(MatchPhase.Live)
+    room.state.match.wins[1] = 2
+
+    host.close()
+    await waitFor(() => (room.peers.length === 1 ? true : null), 'the host to drop')
+    expect(room.seats[0]?.phase).toBe('vacant')
+
+    // The opponent is told immediately, with a countdown rather than a silence.
+    const told = await waitFor(
+      () => heardLife[heardLife.length - 1] ?? null,
+      'a lifecycle frame',
+    )
+    expect(told).toMatchObject({ t: 'life', event: 'opponent-left' })
+    expect(told.graceMs).toBeGreaterThan(0)
+
+    // Back, with the key, inside the window.
+    const again = connect(server.port, ALLOWED_ORIGIN, welcome.room, welcome.token)
+    await new Promise((resolve) => again.once('open', resolve))
+    const second = await new Promise<ServerMessage | null>((resolve) => {
+      again.once('message', (data) => resolve(parseServerMessage(String(data))))
+      again.send(helloFrame())
+    })
+    if (second?.t !== 'welcome') throw new Error('expected a welcome frame')
+
+    // Same seat, same key, same match — and the score is the one they left.
+    expect(second.room).toBe(welcome.room)
+    expect(second.token).toBe(welcome.token)
+    expect(room.peers.map((peer) => peer.slot).sort()).toEqual([0, 1])
+    expect(room.state.match.phase).toBe(MatchPhase.Live)
+    expect(room.state.match.wins).toEqual([0, 2])
+    expect(server.rooms.size).toBe(1)
+
+    guest.close()
+    again.close()
   })
 
   it('reports its rooms and its scheduler on /healthz', async () => {

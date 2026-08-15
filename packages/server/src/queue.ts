@@ -47,6 +47,7 @@
  * machine as the other `Map`.
  */
 import type { Clock } from './clock.ts'
+import { SeatPhase } from './lifecycle.ts'
 import { NO_LOG, type Log } from './log.ts'
 import type { RoomEntry, RoomRegistry } from './rooms.ts'
 
@@ -163,18 +164,31 @@ export function createMatchQueue(options: MatchQueueOptions): MatchQueue {
   /**
    * The room an entry names, if it is still one an arrival can be put into.
    *
-   * `null` for all three ways an entry goes stale, and they are one question
-   * rather than three: is there still a room under this code with somebody in
-   * it and a seat free. A room that emptied is a player who left; one that
-   * filled was joined by code while its owner waited (which is a *good*
+   * `null` for all the ways an entry goes stale, and they are one question
+   * rather than several: is there still a room under this code with somebody in
+   * it that would take an arrival. A room that emptied is a player who left; one
+   * that filled was joined by code while its owner waited (which is a *good*
    * outcome, and the queue's part in it is to get out of the way).
+   *
+   * "Would take an arrival" is asked of the *seats* rather than the sockets, and
+   * the difference is the connection lifecycle (GLAD-DVDV6P). The two counts
+   * used to be one: a seat had a socket in it or it was free. Now a seat whose
+   * peer dropped mid-match is *held* for thirty seconds with no socket in
+   * `peers`, so a room with one live player and one held seat counts as half
+   * empty and is nothing of the kind — `lifecycle.arrive` refuses the arrival,
+   * and by then this module has told both sides they were paired. The same goes
+   * for a decided match, which reads as having a free seat and rejects anybody
+   * who sits in it. Asking the question the room actually answers is the fix.
    */
   const liveEntry = (waiting: Waiting): RoomEntry | null => {
     const entry = rooms.get(waiting.code)
     if (entry === null) return null
-    const seated = entry.room.peers.length
-    if (seated === 0 || seated >= entry.room.capacity) return null
-    return entry
+    // Still a question about sockets, and deliberately: a room whose seats are
+    // open because its waiting player left is one nobody should be paired into,
+    // and seats alone cannot tell that from a room nobody has arrived at yet.
+    if (entry.room.peers.length === 0) return null
+    if (entry.room.ended) return null
+    return entry.room.seats.some((seat) => seat.phase === SeatPhase.Open) ? entry : null
   }
 
   return {

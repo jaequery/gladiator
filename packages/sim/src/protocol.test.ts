@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  LifecycleEvent,
   MAX_CMDS_PER_BATCH,
   PROTOCOL_VERSION,
   QueueState,
@@ -135,6 +136,7 @@ describe('parseServerMessage', () => {
           session: 's',
           mapHash: '0000beef',
           room: 'H7K2Q9',
+          token: 'deadbeefdeadbeefdeadbeefdeadbeef',
         }),
       ),
     ).toEqual({
@@ -144,6 +146,7 @@ describe('parseServerMessage', () => {
       session: 's',
       mapHash: '0000beef',
       room: 'H7K2Q9',
+      token: 'deadbeefdeadbeefdeadbeefdeadbeef',
     })
     expect(
       parseServerMessage(
@@ -179,6 +182,70 @@ describe('parseServerMessage', () => {
       code: 'x',
       detail: 'y',
     })
+  })
+
+  it('parses a lifecycle frame, with its countdown', () => {
+    expect(
+      parseServerMessage(
+        JSON.stringify({
+          t: 'life',
+          event: 'opponent-left',
+          graceMs: 30_000,
+          detail: 'they forfeit in 30s',
+        }),
+      ),
+    ).toEqual({
+      t: 'life',
+      event: 'opponent-left',
+      graceMs: 30_000,
+      detail: 'they forfeit in 30s',
+    })
+    for (const event of Object.values(LifecycleEvent)) {
+      const raw = JSON.stringify({ t: 'life', event, graceMs: 0, detail: '' })
+      expect(parseServerMessage(raw), `refused ${event}`).not.toBeNull()
+    }
+  })
+
+  it('refuses a lifecycle frame nobody could act on', () => {
+    for (const patch of [
+      // An event this build has no handler for. Refused at the door rather than
+      // arriving as a string that falls through every branch.
+      { event: 'opponent-sneezed' },
+      { event: 5 },
+      // A countdown that has run backwards would be shown counting *up* towards
+      // a forfeit that had already happened.
+      { graceMs: -1 },
+      { graceMs: 1.5 },
+      { detail: 7 },
+    ]) {
+      const raw = JSON.stringify({
+        t: 'life',
+        event: 'opponent-left',
+        graceMs: 1000,
+        detail: 'x',
+        ...patch,
+      })
+      expect(parseServerMessage(raw), `accepted ${JSON.stringify(patch)}`).toBe(null)
+    }
+  })
+
+  it('refuses a welcome with no seat key in it', () => {
+    // A client that stored an empty token would send it back and be refused as
+    // a stranger — a failure worth having at the door rather than a minute
+    // later, at the reconnect (`server/lifecycle.ts`).
+    const welcome = {
+      t: 'welcome',
+      protocol: 1,
+      build: 'b',
+      session: 's',
+      mapHash: '0000beef',
+      room: 'H7K2Q9',
+      token: 'deadbeefdeadbeefdeadbeefdeadbeef',
+    }
+    expect(parseServerMessage(JSON.stringify({ ...welcome, token: '' }))).toBe(null)
+    const without: Record<string, unknown> = { ...welcome }
+    delete without['token']
+    expect(parseServerMessage(JSON.stringify(without))).toBe(null)
   })
 
   it('parses a drain notice, ticket and all', () => {

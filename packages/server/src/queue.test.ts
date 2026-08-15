@@ -10,10 +10,12 @@
  * The clock is manual, so a minute-long wait costs the arithmetic rather than
  * the minute.
  */
+import { MatchPhase, PROTOCOL_VERSION } from '@gladiator/sim'
 import { describe, expect, it } from 'vitest'
 
 import { manualClock } from './clock.ts'
-import { SERVER_MAP, SERVER_PLAN } from './map.ts'
+import { RECONNECT_GRACE_MS, SeatPhase } from './lifecycle.ts'
+import { SERVER_MAP, SERVER_MAP_HASH, SERVER_PLAN } from './map.ts'
 import { createLoopbackPair, settleLoopback } from './net/loopbackTransport.ts'
 import { QUEUE_WAIT_TIMEOUT_MS, createMatchQueue, type MatchQueue } from './queue.ts'
 import { createRoom, type Room } from './room.ts'
@@ -60,6 +62,30 @@ async function seat(room: Room) {
   const pair = createLoopbackPair()
   pair.client.setHandlers({ onMessage: () => undefined })
   room.join(pair.server)
+  await settleLoopback(pair)
+  return pair
+}
+
+const HELLO = JSON.stringify({
+  t: 'hello',
+  protocol: PROTOCOL_VERSION,
+  build: 'queue-test',
+  mapHash: SERVER_MAP_HASH,
+})
+
+/**
+ * The same, having also said hello.
+ *
+ * Which is the difference between a socket and a *player*: the match does not
+ * start until both peers have finished the handshake, and a seat is only held
+ * for somebody who drops out of a match that had started. Every test above this
+ * one is about the line rather than the duel, and does not need it.
+ */
+async function player(room: Room) {
+  const pair = createLoopbackPair()
+  pair.client.setHandlers({ onMessage: () => undefined })
+  room.join(pair.server)
+  pair.client.send(HELLO)
   await settleLoopback(pair)
   return pair
 }
@@ -208,6 +234,57 @@ describe('a room that filled some other way', () => {
     queue.sweep(clock.nowMs())
     expect(queue.size).toBe(0)
 
+    const next = queue.admit()
+    if (next.kind !== 'waiting') throw new Error('expected a wait')
+    expect(next.entry.code).not.toBe(admission.entry.code)
+  })
+})
+
+describe('a room holding a seat for somebody who is coming back', () => {
+  it('is not offered to the next arrival, one socket short of capacity though it is', async () => {
+    const { queue } = harness()
+    const admission = queue.admit()
+    if (admission.kind !== 'waiting') throw new Error('expected a wait')
+    const room = admission.entry.room
+    const first = await player(room)
+    await player(room)
+
+    // The match has to be *under way* for a dropped peer's seat to be held: in
+    // warmup there is no score to protect, so the seat goes straight back in the
+    // pool and this room really would be free. `lifecycle.ts`.
+    room.advance(1)
+    expect(room.state.match.phase).toBe(MatchPhase.Live)
+    first.close()
+    await settleLoopback(first)
+
+    // One socket in a room that seats two, and not a free seat among them —
+    // which is the whole reason this check cannot be a socket count.
+    expect(room.peers).toHaveLength(1)
+    expect(room.seats.some((seat) => seat.phase === SeatPhase.Vacant)).toBe(true)
+    expect(room.seats.some((seat) => seat.phase === SeatPhase.Open)).toBe(false)
+
+    const next = queue.admit()
+    if (next.kind !== 'waiting') throw new Error('expected a wait')
+    expect(next.entry.code).not.toBe(admission.entry.code)
+  })
+
+  it('is not offered once the window runs out and the match is forfeit either', async () => {
+    const { clock, queue } = harness()
+    const admission = queue.admit()
+    if (admission.kind !== 'waiting') throw new Error('expected a wait')
+    const room = admission.entry.room
+    const first = await player(room)
+    await player(room)
+    room.advance(1)
+    first.close()
+    await settleLoopback(first)
+
+    clock.advance(RECONNECT_GRACE_MS + 1)
+    room.sweep(clock.nowMs())
+    expect(room.ended).toBe(true)
+
+    // A decided match is the other way a room reads as having space and has
+    // none: whoever sat down in it would be told the match is over.
     const next = queue.admit()
     if (next.kind !== 'waiting') throw new Error('expected a wait')
     expect(next.entry.code).not.toBe(admission.entry.code)

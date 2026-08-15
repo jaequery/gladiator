@@ -65,6 +65,16 @@ export type SessionState = {
   /** Which player slot this peer's commands land in. */
   readonly slot: number
   /**
+   * The seat token this peer must come back with, minted by `lifecycle.ts`.
+   *
+   * A property of the *seat* rather than of the server, which is why it is here
+   * and not in {@link ServerIdentity}: two peers in one room are handed the same
+   * build, the same map and the same room code, and two different tokens. Empty
+   * for a peer that was never seated — it is on its way to a fault frame and a
+   * close, and there is no seat to give it the key to.
+   */
+  readonly token: string
+  /**
    * This peer's jitter buffer.
    *
    * A live object held by reference rather than a value carried through the
@@ -121,10 +131,36 @@ export const CLOSE_ROOM_FULL = 4005
  */
 export const CLOSE_NO_SUCH_ROOM = 4006
 
-export function createSession(id: string, slot = 0, queue = createInputQueue()): SessionState {
+/**
+ * Close code for a match that is over and cannot be rejoined.
+ *
+ * A reconnect that arrives after the grace window has closed, or a token for a
+ * seat that has been forfeited. Its own code because it is the one refusal a
+ * client must **not** retry: the room may still exist for another minute, so a
+ * policy that treated this like a dropped connection would back off and try
+ * again for as long as the reaper let it (`client/net/reconnect.ts`).
+ */
+export const CLOSE_MATCH_ENDED = 4007
+
+/**
+ * Close code for a socket displaced by a newer one holding the same seat token.
+ *
+ * The old socket is told what happened rather than simply dropped, because from
+ * its side those two look identical and only one of them means "you are now
+ * playing in another tab".
+ */
+export const CLOSE_REPLACED = 4008
+
+export function createSession(
+  id: string,
+  slot = 0,
+  queue = createInputQueue(),
+  token = '',
+): SessionState {
   return {
     id,
     slot,
+    token,
     queue,
     greeted: false,
     rejected: false,
@@ -200,6 +236,12 @@ export function applyMessage(
           session: session.id,
           mapHash: identity.mapHash,
           room: identity.room,
+          // The key to this seat, and the only thing that gets this player back
+          // into *this side* of *this match* after their socket dies
+          // (`lifecycle.ts`). Sent in the welcome rather than on demand because
+          // the moment a client needs it is the moment it has no socket to ask
+          // over.
+          token: session.token,
         },
       ],
     }
