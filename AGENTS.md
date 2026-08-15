@@ -7,7 +7,10 @@ every convention below exists to protect that one sentence.
 
 Vocabulary is in [`CONTEXT.md`](./CONTEXT.md). Physics numbers are in
 [`docs/physics-spec.md`](./docs/physics-spec.md); renderer settings and their
-reasoning are in [`docs/renderer.md`](./docs/renderer.md).
+reasoning are in [`docs/renderer.md`](./docs/renderer.md); the audio
+architecture and the sounds themselves are in
+[`docs/audio.md`](./docs/audio.md). Asset licences are in
+[`CREDITS.md`](./CREDITS.md), and a file that is not in there does not ship.
 
 ---
 
@@ -23,6 +26,8 @@ reasoning are in [`docs/renderer.md`](./docs/renderer.md).
 | `pnpm run no-physics`| fails if a physics engine has appeared in `pnpm-lock.yaml` |
 | `pnpm run guardrails`| proves the boundaries reject violations                |
 | `pnpm run map:bake`  | compiles `maps/*.ts` to `maps/baked/*.json` (`--check` verifies) |
+| `pnpm run audio:bake`| synthesises `packages/client/public/audio/*.wav` (`--check` verifies) |
+| `pnpm run audio:verify`| the audio acceptance checks in a real browser — own CI job |
 | `pnpm run ci`        | all six, in that order — what CI runs                  |
 | `pnpm run e2e`       | the browser smoke test — needs Chromium, own CI job    |
 
