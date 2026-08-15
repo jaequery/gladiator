@@ -104,16 +104,20 @@ describe('the host is isomorphic', () => {
     // purpose. `inputQueue.ts` joined it with the tick scheduler: a room drains
     // one command per peer per sub-step, and the buffer that holds them has to
     // run in a tab as well.
-    // `log.ts` joined it with structured logging, and it is on this side of the
-    // line for the same reason `clock.ts` is: the sink and the wall-clock are
-    // injected, so the module itself names neither `console` nor `Date.now`.
-    // `validate.ts` and `rateLimit.ts` joined it with the security hardening,
-    // for the same reason as `inputQueue.ts` — the frame door is a room's, so
-    // the listen server runs into exactly the door the deployed server does.
+    // `lagcomp.ts` joined it with lag compensation, for the same reason — a
+    // listen server judges a railgun shot exactly as Fly does, or single-player
+    // would be a second set of rules after all. `validate.ts` and
+    // `rateLimit.ts` joined it with the security hardening, for the same reason
+    // again — the frame door is a room's, so the listen server runs into
+    // exactly the door the deployed server does. And `log.ts` joined it with
+    // structured logging, on this side of the line for the same reason
+    // `clock.ts` is: the sink and the wall-clock are injected, so the module
+    // itself names neither `console` nor `Date.now`.
     expect(names).toEqual([
       'clock.ts',
       'clockSync.ts',
       'inputQueue.ts',
+      'lagcomp.ts',
       'log.ts',
       'rateLimit.ts',
       'room.ts',

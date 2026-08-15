@@ -67,15 +67,19 @@ import type { Duplex } from 'node:stream'
 
 import {
   CloseReason,
+  DEFAULT_MATCH_RULES,
+  NEW_MATCH_SCORE,
   PROTOCOL_VERSION,
   createDemoRecorder,
   type MatchRules,
+  type MatchScore,
 } from '@gladiator/sim'
 import { WebSocketServer, type WebSocket } from 'ws'
 
 import { systemClock, type Clock } from './clock.ts'
 import type { ServerConfig } from './config.ts'
 import { writeDemoFile } from './demoFile.ts'
+import { createTrafficMeter, healthReport, readinessOf, type Readiness } from './health.ts'
 import { createJitterProbe, type JitterProbe } from './jitter.ts'
 import { createLogger, type Log } from './log.ts'
 import { startHostLoop, systemScheduler, type Scheduler } from './loop.ts'
@@ -84,16 +88,21 @@ import { SERVER_MAP, SERVER_MAP_HASH, SERVER_PLAN } from './map.ts'
 import { wsTransport } from './net/wsTransport.ts'
 import { clientKey, createKeyedLimiter } from './rateLimit.ts'
 import { createRoom, type Room } from './room.ts'
-import { describeRoomCode } from './roomCode.ts'
+import { describeRoomCode, normalizeRoomCode } from './roomCode.ts'
 import { createRoomRegistry, seedForRoom, type RoomRegistry } from './rooms.ts'
+import { createResumeAuthority, type ResumeAuthority } from './resume.ts'
 import { createTickScheduler, type Timer, type TickScheduler } from './scheduler.ts'
 import { CLOSE_NO_SUCH_ROOM } from './session.ts'
+import { DRAIN_RETRY_AFTER_MS } from './shutdown.ts'
 
 /** How often to ping an idle socket, to notice a peer that has gone away. */
 const HEARTBEAT_MS = 20_000
 
 /** The query parameter a client puts a room code in. */
 export const ROOM_QUERY_PARAM = 'room'
+
+/** The query parameter a reconnecting client puts its resume ticket in. */
+export const RESUME_QUERY_PARAM = 'resume'
 
 export type GladiatorServer = {
   readonly http: Server
@@ -104,6 +113,20 @@ export type GladiatorServer = {
   /** The rooms this machine is holding. */
   readonly rooms: RoomRegistry
   readonly scheduler: TickScheduler
+  /** This machine's ticket authority, for the drain. `resume.ts`. */
+  readonly resume: ResumeAuthority
+  /**
+   * Stop accepting: `/healthz` turns 503 and new upgrades are refused.
+   *
+   * Idempotent, and deliberately *not* the same thing as closing — the sockets
+   * already open are untouched, because the reason to stop accepting is almost
+   * always that this machine is leaving and the matches on it need the time.
+   * `shutdown.ts` is what calls it and what does the rest.
+   */
+  beginDraining(): void
+  readonly draining: boolean
+  /** Whether new players should be sent here, and why not. `health.ts`. */
+  readiness(): Readiness
   close(): Promise<void>
 }
 
@@ -143,15 +166,25 @@ export type StartOptions = {
  * parse against.
  */
 export function roomCodeOf(url: string | undefined): string | null {
+  return queryOf(url, ROOM_QUERY_PARAM)
+}
+
+/** The resume ticket a reconnecting client is presenting, or `null`. */
+export function resumeTicketOf(url: string | undefined): string | null {
+  return queryOf(url, RESUME_QUERY_PARAM)
+}
+
+function queryOf(url: string | undefined, name: string): string | null {
   if (url === undefined) return null
   // Total, because the argument is a request target an attacker wrote. Node's
   // HTTP parser accepts absolute-form targets, so `GET http://[ HTTP/1.1` gets
   // this far and `new URL` throws on it — inside an `upgrade` handler, which is
   // an uncaught exception and therefore the whole process. A target we cannot
-  // parse names no room, which is a sentence the client already handles.
+  // parse carries no room and no ticket, which is a sentence both callers
+  // already handle.
   let query: string | null
   try {
-    query = new URL(url, 'http://gladiator.invalid').searchParams.get(ROOM_QUERY_PARAM)
+    query = new URL(url, 'http://gladiator.invalid').searchParams.get(name)
   } catch {
     return null
   }
@@ -171,7 +204,20 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
   const clock = options.clock ?? systemClock()
   const beats = options.scheduler ?? systemScheduler()
   const isOriginAllowed = createOriginPolicy(config)
-  const startedAtMs = Date.now()
+  const startedAtMs = clock.nowMs()
+  const rules = options.rules ?? DEFAULT_MATCH_RULES
+  const traffic = createTrafficMeter()
+  const resume = createResumeAuthority({ secret: config.resumeSecret, rules })
+
+  /**
+   * Whether this machine is on its way out.
+   *
+   * One boolean read from three places — the health endpoint, the upgrade
+   * handler and the drain itself — because "should a new player be sent here"
+   * and "is this process leaving" have to be the same question or a deploy
+   * will race itself.
+   */
+  let draining = false
 
   const connections = new Map<WebSocket, { alive: boolean; readonly address: string }>()
 
@@ -240,8 +286,9 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
     log,
     onClosing: keepDemo,
     ...(options.random === undefined ? {} : { random: options.random }),
-    create: (code: string): Room =>
+    create: (code: string, score: MatchScore): Room =>
       createRoom({
+        score,
         map: SERVER_MAP,
         // Shared, because it is a function of the map and every room on this
         // machine plays the same one. `map.ts`.
@@ -254,7 +301,7 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
         // player gets — rather than every room on the machine replaying the
         // same sequence. `rooms.ts`.
         seed: seedForRoom(code),
-        ...(options.rules === undefined ? {} : { rules: options.rules }),
+        rules,
         peerId: () => randomUUID(),
         log,
         // A recording is the command stream this room executes. Only when this
@@ -268,7 +315,12 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
                 map: { name: SERVER_MAP.source.name, hash: SERVER_MAP_HASH },
                 seed: seedForRoom(code),
                 protocol: PROTOCOL_VERSION,
-                ...(options.rules === undefined ? {} : { rules: options.rules }),
+                rules,
+                // Carried into the header rather than left implicit: a room
+                // rebuilt after a deploy starts its match at a score, and a
+                // replay that started at nil-nil would diverge from its own
+                // trace on the first sample. `sim/src/demo.ts`.
+                ...(score === NEW_MATCH_SCORE ? {} : { score }),
               }),
             }),
       }),
@@ -287,35 +339,42 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
     },
   })
 
+  const readiness = (): Readiness =>
+    readinessOf({ draining, rooms: rooms.stats(), scheduler: ticks.stats(), nowMs: clock.nowMs() })
+
   const http = createServer((request, response) => {
     if (request.url === '/healthz') {
-      const body = JSON.stringify({
-        ok: true,
+      const report = healthReport({
+        draining,
+        rooms: rooms.stats(),
+        scheduler: ticks.stats(),
+        nowMs: clock.nowMs(),
         build: config.build,
-        protocol: PROTOCOL_VERSION,
-        // Served so that "is the client on the right arena" is answerable with
-        // curl, without opening a socket and reading a welcome frame.
         map: { name: SERVER_MAP.source.name, hash: SERVER_MAP_HASH },
-        uptimeSeconds: Math.round((Date.now() - startedAtMs) / 1000),
+        startedAtMs,
         sessions: connections.size,
         // Client addresses the connect limiter is currently holding a bucket
         // for. Served because a number that only ever grows is the signature of
         // an address-forging flood, and it is invisible in every other counter.
         addresses: connects.size,
-        rooms: rooms.stats(),
-        // Served, not just logged. The p99 on the machine that is actually
-        // running is the only one worth quoting, it changes under load, and
-        // `scheduler.withinBudget` is the deploy's own verdict on whether this
-        // machine class can hold a tick rate. `docs/deploy.md`.
-        scheduler: ticks.stats(),
         jitter: jitter.snapshot(),
+        traffic: traffic.stats,
+        canResume: resume.enabled,
         // Whether this machine is recording matches, so "did the demo capture
         // I turned on actually take" is answerable with curl rather than by
         // waiting for a room to close. `docs/deploy.md`.
         recording: config.demoDir !== null,
       })
+      response.writeHead(report.status, { 'content-type': 'application/json' })
+      response.end(report.body)
+      return
+    }
+    // Liveness, and it never fails on purpose: the only correct response to it
+    // failing is to kill the process, and a machine that is merely draining or
+    // full is a machine holding duels that must not be killed. `health.ts`.
+    if (request.url === '/livez') {
       response.writeHead(200, { 'content-type': 'application/json' })
-      response.end(body)
+      response.end(JSON.stringify({ alive: true, build: config.build, draining }))
       return
     }
     if (request.url === '/') {
@@ -335,12 +394,30 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
     perMessageDeflate: false,
   })
 
-  const rejectUpgrade = (socket: Duplex, status: number, reason: string, extra = '') => {
+  const rejectUpgrade = (
+    socket: Duplex,
+    status: number,
+    reason: string,
+    headers: readonly string[] = [],
+  ) => {
+    const extra = headers.length > 0 ? `${headers.join('\r\n')}\r\n` : ''
     socket.write(`HTTP/1.1 ${status} ${reason}\r\n${extra}Connection: close\r\n\r\n`)
     socket.destroy()
   }
 
   http.on('upgrade', (request: IncomingMessage, socket: Duplex, head: Buffer) => {
+    // Checked before the origin, because it is the more decisive of the two and
+    // because a draining machine has nothing to gain from telling a stranger
+    // what it thinks of their origin. `Retry-After` is in seconds by the HTTP
+    // spec, and it is the same number the drain frame carries in milliseconds.
+    if (draining) {
+      log('upgrade refused: draining')
+      rejectUpgrade(socket, 503, 'Service Unavailable', [
+        `Retry-After: ${Math.ceil(DRAIN_RETRY_AFTER_MS / 1000)}`,
+      ])
+      return
+    }
+
     const verdict = isOriginAllowed(request.headers.origin)
     if (!verdict.allowed) {
       // Logged, because "the preview deploy cannot connect" is otherwise a
@@ -363,7 +440,7 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
         budgetPerSecond: config.connectBudgetPerSecond,
         burst: config.connectBurst,
       })
-      rejectUpgrade(socket, 429, 'Too Many Requests', 'Retry-After: 1\r\n')
+      rejectUpgrade(socket, 429, 'Too Many Requests', ['Retry-After: 1'])
       return
     }
     if (openFrom(address) >= config.maxConnectionsPerAddress) {
@@ -372,7 +449,7 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
         address,
         open: config.maxConnectionsPerAddress,
       })
-      rejectUpgrade(socket, 429, 'Too Many Requests', 'Retry-After: 5\r\n')
+      rejectUpgrade(socket, 429, 'Too Many Requests', ['Retry-After: 5'])
       return
     }
 
@@ -429,11 +506,24 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
         )
         return
       }
-      opened.room.join(wsTransport(socket))
+      opened.room.join(wsTransport(socket, traffic))
       return
     }
 
-    const found = rooms.get(asked)
+    // A ticket is only ever consulted for the room it names, and only ever
+    // *after* the live registry has been asked. A match still running on this
+    // machine is the truth about its own score; a ticket is what is left when
+    // there is no match to ask. `resume.ts`.
+    const ticket = resumeTicketOf(request.url)
+    const claim = ticket === null ? null : resume.verify(ticket)
+    if (claim !== null && !claim.ok) log(`resume refused: ${claim.reason}`)
+    const resumed =
+      claim !== null && claim.ok && claim.claim.room === normalizeRoomCode(asked)
+        ? claim.claim
+        : null
+
+    const found =
+      rooms.get(asked) ?? (resumed === null ? null : rooms.adopt(resumed.room, resumed.score))
     if (found === null) {
       // Both "that is not a code" and "that code names no room" land here, and
       // they are deliberately one sentence. Telling a guesser which of the two
@@ -456,7 +546,7 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
       return
     }
 
-    found.room.join(wsTransport(socket))
+    found.room.join(wsTransport(socket, traffic), resumed?.slot)
   })
 
   // The socket heartbeat: is this pipe still there. A question about TCP, at a
@@ -497,9 +587,19 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
         port,
         rooms,
         scheduler: ticks,
+        resume,
         get sessions() {
           return connections.size
         },
+        get draining() {
+          return draining
+        },
+        beginDraining() {
+          if (draining) return
+          draining = true
+          log('draining: /healthz is now 503 and new upgrades are refused')
+        },
+        readiness,
         close: () =>
           new Promise<void>((done) => {
             heartbeat.stop()

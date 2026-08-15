@@ -14,8 +14,8 @@ export const DEFAULT_PORT = 8787
 
 /**
  * The Vercel project the client is deployed as. Preview deployments are
- * `<project>-<something>.vercel.app`, so this is what makes the preview regex
- * project-scoped rather than "anything on vercel.app". See `docs/deploy.md`.
+ * `<project>-<something>-<scope>.vercel.app`, so this is half of what makes the
+ * preview pattern a control rather than a wildcard. See `origin.ts`.
  */
 export const DEFAULT_VERCEL_PROJECT = 'gladiator'
 
@@ -91,6 +91,13 @@ export type ServerConfig = {
   readonly allowedOrigins: readonly string[]
   /** The Vercel project whose preview deployments are allowed. */
   readonly vercelProject: string
+  /**
+   * The Vercel team or account slug preview hostnames end with.
+   *
+   * Empty means no preview pattern at all — `origin.ts` fails closed rather
+   * than falling back to a looser one, and the boot log says which it did.
+   */
+  readonly vercelScope: string
   /** Whether `http://localhost:*` may connect. Off in production. */
   readonly allowLocalhost: boolean
   readonly maxPayloadBytes: number
@@ -101,6 +108,14 @@ export type ServerConfig = {
   readonly maxConnectionsPerAddress: number
   /** Where the real client address is, behind a proxy. `''` means "nowhere". */
   readonly trustedIpHeader: string
+  /**
+   * The HMAC secret that signs resume tickets (`resume.ts`).
+   *
+   * Shared by every machine of the app, because the machine that *checks* a
+   * ticket is by construction never the one that minted it. Empty means this
+   * deploy hands out no tickets and a deploy ends the matches it interrupts.
+   */
+  readonly resumeSecret: string
   /**
    * Where to write a demo of every match, or `null` for "do not record".
    *
@@ -133,6 +148,7 @@ export function readConfig(env: Record<string, string | undefined>): ServerConfi
     build: env['GLADIATOR_BUILD'] ?? 'dev',
     allowedOrigins: readList(env['ALLOWED_ORIGINS']),
     vercelProject: env['VERCEL_PROJECT'] ?? DEFAULT_VERCEL_PROJECT,
+    vercelScope: env['VERCEL_SCOPE'] ?? '',
     allowLocalhost: env['NODE_ENV'] !== 'production',
     maxPayloadBytes: readInteger(env['MAX_PAYLOAD_BYTES'], MAX_PAYLOAD_BYTES),
     connectBudgetPerSecond: readInteger(
@@ -148,6 +164,7 @@ export function readConfig(env: Record<string, string | undefined>): ServerConfi
     // string is a deliberate "there is no proxy in front of me" and must not
     // fall through to the Fly default.
     trustedIpHeader: (env['TRUSTED_IP_HEADER'] ?? DEFAULT_TRUSTED_IP_HEADER).toLowerCase(),
+    resumeSecret: env['RESUME_SECRET'] ?? '',
     demoDir: readPath(env['GLADIATOR_DEMO_DIR']),
   }
 }

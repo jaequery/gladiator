@@ -39,7 +39,7 @@
  * try/catch, and a room that threw is closed and counted (`faulted`) rather than
  * left in the map to throw again on the next frame. GLAD-V7M6PQ.
  */
-import { CloseReason, hashString } from '@gladiator/sim'
+import { CloseReason, NEW_MATCH_SCORE, hashString, type MatchScore } from '@gladiator/sim'
 
 import type { Clock } from './clock.ts'
 import { NO_LOG, type Log } from './log.ts'
@@ -130,6 +130,22 @@ export type RoomRegistry = {
    * has to be told, and an exception is not a sentence.
    */
   create(): RoomEntry | null
+  /**
+   * Open a room under a code somebody already holds, at a score.
+   *
+   * The other way a room comes into being, and the only one that does not mint:
+   * a deploy took the machine that held this match away, and both players are
+   * arriving at its replacement with a signed ticket naming the code they were
+   * in and the score they were on (`resume.ts`, `shutdown.ts`). Whichever of
+   * the two reaches the new machine first rebuilds the room; the second one
+   * finds it through {@link RoomRegistry.get} like any other join, which is why
+   * this does not need to know there are two of them.
+   *
+   * `null` when the machine is full or the code is not a code. A code that is
+   * already live is *not* an error — the caller looked it up first, and one
+   * that appeared in between belongs to the peer that got there first.
+   */
+  adopt(code: string, score: MatchScore): RoomEntry | null
   /** The room a player typed, or `null`. Folds the code first. */
   get(code: string | undefined | null): RoomEntry | null
   /** Close and forget a room. Returns whether there was one. */
@@ -149,13 +165,15 @@ export type RoomRegistryOptions = {
   /** Read for the empty-room reaper. Never reaches a simulation. */
   readonly clock: Clock
   /**
-   * Open a room under `code`.
+   * Open a room under `code`, at `score`.
    *
    * A callback rather than the map and the build, so the registry knows nothing
    * about what a room is made of — which is what lets a test register rooms
-   * over loopbacks without loading an arena.
+   * over loopbacks without loading an arena. The score is passed straight
+   * through for the same reason: a resumed match is the room's business, and
+   * all the registry has to know is that a room can be opened at one.
    */
-  readonly create: (code: string) => Room
+  readonly create: (code: string, score: MatchScore) => Room
   /** Injected, so a test can fix the draw. `roomCode.ts`. */
   readonly random?: Uint32Source
   /**
@@ -223,6 +241,22 @@ export function createRoomRegistry(options: RoomRegistryOptions): RoomRegistry {
     live.room.close(closeCode, reason)
   }
 
+  /** Put a room in the map under a code that is known to be free. */
+  const open = (code: string, score: MatchScore, nowMs: number): Live => {
+    const live: Live = {
+      code,
+      room: options.create(code, score),
+      createdMs: nowMs,
+      // Empty from the instant it exists. The host's own connection lands a
+      // moment later and clears this; if it never does, the reaper takes the
+      // room a minute later and the code goes back into the space.
+      emptySinceMs: nowMs,
+    }
+    rooms.set(code, live)
+    created += 1
+    return live
+  }
+
   /**
    * Run `what` for one room, and let the others carry on if it throws.
    *
@@ -271,17 +305,7 @@ export function createRoomRegistry(options: RoomRegistryOptions): RoomRegistry {
       for (let attempt = 0; attempt < MINT_ATTEMPTS; attempt += 1) {
         const code = mintRoomCode(options.random)
         if (rooms.has(code)) continue
-        const live: Live = {
-          code,
-          room: options.create(code),
-          createdMs: nowMs,
-          // Empty from the instant it exists. The host's own connection lands a
-          // moment later and clears this; if it never does, the reaper takes the
-          // room a minute later and the code goes back into the space.
-          emptySinceMs: nowMs,
-        }
-        rooms.set(code, live)
-        created += 1
+        const live = open(code, NEW_MATCH_SCORE, nowMs)
         log('registry.opened', { room: code, tick: 0, live: rooms.size, capacity: maxRooms })
         return viewOf(live)
       }
@@ -289,6 +313,33 @@ export function createRoomRegistry(options: RoomRegistryOptions): RoomRegistry {
       // Unreachable in practice; see MINT_ATTEMPTS. Refusing beats looping.
       log('registry.mint_failed', { level: 'error', attempts: MINT_ATTEMPTS, live: rooms.size })
       return null
+    },
+
+    adopt(code: string, score: MatchScore): RoomEntry | null {
+      const normalized = normalizeRoomCode(code)
+      if (normalized === null) return null
+      const existing = rooms.get(normalized)
+      if (existing !== undefined) return viewOf(existing)
+      if (rooms.size >= maxRooms) {
+        log('registry.full', {
+          level: 'warn',
+          room: normalized,
+          tick: 0,
+          resume: true,
+          live: rooms.size,
+          capacity: maxRooms,
+        })
+        return null
+      }
+      const live = open(normalized, score, clock.nowMs())
+      log('registry.resumed', {
+        room: normalized,
+        tick: 0,
+        score: `${score.wins[0]}-${score.wins[1]}`,
+        roundsPlayed: score.roundsPlayed,
+        live: rooms.size,
+      })
+      return viewOf(live)
     },
 
     get(code: string | undefined | null): RoomEntry | null {

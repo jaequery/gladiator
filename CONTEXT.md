@@ -363,6 +363,26 @@ characters of Crockford base32 — the digits and the letters minus I, L, O and 
 *and at the connection rate it enforces* is `docs/deploy.md`. A code is a lobby,
 not a credential.
 
+**Drain** — what a machine does between SIGTERM and exiting
+(`packages/server/src/shutdown.ts`). Stops being ready, hands every seated
+player a **resume ticket**, closes the rooms with a 1001 "going away", and waits
+for the sockets — inside 20 s against `fly.toml`'s 30 s `kill_timeout`. It does
+not wait for the round to finish; what it promises is that nobody is cut off
+silently. `NOTES.md` §4 (GLAD-G41FQ9).
+
+**Resume ticket** — a match reduced to what can cross a machine: the room code,
+the seat, and the scoreline, HMAC-signed with a deploy-wide `RESUME_SECRET` and
+good for two minutes (`packages/server/src/resume.ts`). Signed because a score
+carried by a client is otherwise a score the client can choose. Handed back as
+`?resume=` on the next connection, where it rebuilds the room under the same
+code at the same score. A **world** never crosses — only a score.
+
+**Readiness** — "should new players be sent here", answered by `/healthz` with a
+200 or a 503 (`packages/server/src/health.ts`). False while draining, full, or
+not ticking. Deliberately not the same question as **liveness** (`/livez`),
+which never fails on purpose: the only correct response to *that* failing is to
+kill the process, and a busy process is holding two people's duel.
+
 **Tick scheduler** — the one timer on the machine
 (`packages/server/src/scheduler.ts`). Wakes ~62.5 times a second aiming at
 absolute boundaries rather than sleeping an interval, folds the elapsed
@@ -419,7 +439,28 @@ The *whole* state, because a client that rebuilt only the entities could draw
 the world and could not reproduce its hash.
 
 **Lag compensation** — the server rewinding other players to where the shooter
-saw them when deciding whether a shot hit (GLAD-5QGO11).
+saw them when deciding whether a hitscan shot hit. The distance back is
+`clamp(rtt / 2 + interpDelay, 0, 300 ms)` — half the round trip because that is
+how stale the shooter's newest snapshot was, plus the **interpolation delay**
+because that is how much further back they were drawing it. The arithmetic and
+its two constants are `packages/sim/src/lagcomp.ts`, so client and server cannot
+hold different opinions about them; the history buffer and the rewind are
+`packages/server/src/lagcomp.ts`. GLAD-5QGO11.
+
+**Rewind seam** — how a rewind reaches the simulation: `TickHooks.rewind`, a
+function that is handed the shot to take and owns the `finally` that puts every
+hitbox back. Only the *target* moves, only for the length of one hitscan trace,
+and only `origin` — the damage the shot dealt belongs to the present. A rocket
+is never rewound at all: it is compensated in where and when it is *born* and
+collides against present-tick hitboxes for the rest of its flight.
+
+**Predicted self-splash** — a client applying its own rocket's splash to itself
+before the host has confirmed it, so a rocket jump launches on the frame the
+button was pressed instead of one round trip later. Allowed only for a rocket
+whose flight stayed more than 32 units clear of every opponent hitbox
+(`packages/sim/src/splash.ts`); otherwise that one rocket falls back to
+server-only, which is what Quake 3 does for every rocket. The client's half is
+`packages/client/src/net/rocketPredict.ts`. GLAD-5QGO11.
 
 **Weapon** — which of the two an entity is holding, as a netstate field
 (`packages/sim/src/weapon.ts`). What they *do* is `weapons.ts` and

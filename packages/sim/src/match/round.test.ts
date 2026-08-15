@@ -32,7 +32,13 @@ import type { UserCmd } from '../usercmd.ts'
 import { AMMO_UNLIMITED, WEAPONS, spawnProjectile } from '../weapons.ts'
 import { MatchPhase, NO_WINNER, RESPAWN_DELAY_TICKS, matchRules } from './match.ts'
 import type { MatchRules } from './match.ts'
-import { advanceMatch, damageReserve, roundOutcome, startMatch } from './round.ts'
+import {
+  advanceMatch,
+  damageReserve,
+  isPlayableScore,
+  roundOutcome,
+  startMatch,
+} from './round.ts'
 import { SelfDamage } from './selfDamage.ts'
 import type { SelfDamageMode } from './selfDamage.ts'
 import { DUEL_SLOTS, SPAWN_ARMOR, SPAWN_HEALTH, buildSpawnPlan } from './spawn.ts'
@@ -216,6 +222,43 @@ describe('a headless match', () => {
     expect(state.match.winner).toBe(DUEL_SLOTS[0])
     expect(state.match.wins).toEqual([3, 0])
     expect(state.match.round).toBe(3)
+  })
+
+  it('can be started from a score, which is how a duel survives a deploy', () => {
+    // A room is a live world in one process's memory, so a machine going away
+    // destroys it (GLAD-G41FQ9). What crosses to the next machine is three
+    // numbers, and this is where they are put back: the next round starts from
+    // spawn points like any other, at the scoreline the players earned.
+    const state = createGameState(11)
+    startMatch(state, PLAN, { wins: [1, 2], roundsPlayed: 3 })
+
+    expect(state.match.phase).toBe(MatchPhase.Live)
+    expect(state.match.wins).toEqual([1, 2])
+    // Round four, because three have been decided — not round one again, and
+    // not round three replayed.
+    expect(state.match.round).toBe(4)
+    // Everything else is a fresh round: full health, no leftover winner.
+    expect(state.match.lastRoundWinner).toBe(NO_WINNER)
+    expect(playerIn(state, DUEL_SLOTS[0]).health).toBe(SPAWN_HEALTH)
+  })
+
+  it('refuses a score that is not a match still being played', () => {
+    const rules = matchRules()
+    // Already won, so `advanceMatch` would end it on the first sub-step and
+    // both players would watch a round that never happened.
+    expect(isPlayableScore({ wins: [3, 0], roundsPlayed: 3 }, rules)).toBe(false)
+    // More wins than rounds decided: arithmetic nobody could have played.
+    expect(isPlayableScore({ wins: [2, 2], roundsPlayed: 3 }, rules)).toBe(false)
+    // Past the round cap, and negative, and fractional.
+    expect(isPlayableScore({ wins: [0, 0], roundsPlayed: rules.maxRounds }, rules)).toBe(false)
+    expect(isPlayableScore({ wins: [-1, 0], roundsPlayed: 1 }, rules)).toBe(false)
+    expect(isPlayableScore({ wins: [0.5, 0], roundsPlayed: 1 }, rules)).toBe(false)
+    // And one that is fine.
+    expect(isPlayableScore({ wins: [2, 2], roundsPlayed: 4 }, rules)).toBe(true)
+
+    expect(() => startMatch(createGameState(11), PLAN, { wins: [3, 0], roundsPlayed: 3 })).toThrow(
+      RangeError,
+    )
   })
 
   it('goes the distance when the rounds are shared out', () => {

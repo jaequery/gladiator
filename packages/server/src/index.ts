@@ -6,12 +6,16 @@
  */
 import { PROTOCOL_VERSION, TICK_INTERVAL_MS, countSimEvents } from '@gladiator/sim'
 
+import { systemClock } from './clock.ts'
 import { readConfig } from './config.ts'
 import { createJitterProbe } from './jitter.ts'
 import { createLogger } from './log.ts'
+import { describeOriginPolicy } from './origin.ts'
+import { generateResumeSecret } from './resume.ts'
 import { MAX_ROOMS } from './rooms.ts'
 import { HOST_FRAME_MS } from './scheduler.ts'
 import { startServer } from './server.ts'
+import { drainServer, installSignalHandlers } from './shutdown.ts'
 import { BYTE_BUDGET_PER_SECOND, FRAME_BUDGET_PER_SECOND } from './validate.ts'
 
 /** How long to keep reporting jitter into the boot log. */
@@ -58,7 +62,11 @@ log('server.listening', {
   tickHz: 1000 / TICK_INTERVAL_MS,
   maxRooms: MAX_ROOMS,
   allowedOrigins: config.allowedOrigins.join(' '),
-  vercelProject: `${config.vercelProject}*.vercel.app`,
+  vercelProject: config.vercelProject,
+  // Empty means no preview may connect, which is the fail-closed state and not
+  // a default — so it is worth a field of its own rather than an inference.
+  vercelScope: config.vercelScope,
+  originPolicy: describeOriginPolicy(config),
   allowLocalhost: config.allowLocalhost,
   demoDir: config.demoDir,
 })
@@ -82,6 +90,23 @@ log('server.limits', {
   addressFrom: config.trustedIpHeader === '' ? 'socket' : config.trustedIpHeader,
 })
 
+// Said at boot rather than discovered during a deploy. A machine that cannot
+// mint a resume ticket is a machine whose deploy ends every match on it, and
+// the secret has to be the *same* on both machines — so a per-process fallback
+// would be a working test and a broken production. `resume.ts`, `NOTES.md`.
+if (server.resume.enabled) {
+  log('resume.enabled', { detail: 'RESUME_SECRET is set — matches survive a deploy' })
+} else {
+  log('resume.disabled', {
+    level: 'warn',
+    detail: 'no RESUME_SECRET, so every live match ends at the next deploy',
+    fix:
+      config.build === 'dev'
+        ? `RESUME_SECRET=${generateResumeSecret()} pnpm --filter @gladiator/server dev`
+        : 'flyctl secrets set RESUME_SECRET="$(openssl rand -hex 32)"',
+  })
+}
+
 // The number that matters is the one measured on the machine class actually
 // serving players, so it is measured there and logged there. `/healthz` carries
 // the live version; this is the one that ends up in the deploy log.
@@ -97,23 +122,30 @@ const report = setTimeout(() => {
 report.unref()
 
 /**
- * Fly sends SIGTERM and then waits `kill_timeout` before SIGKILL. Closing the
- * sockets ourselves means clients see a 1001 "going away" and can tell a deploy
- * apart from a crash. Graceful drain proper — finishing the round in flight —
- * is GLAD-G41FQ9.
+ * Fly sends SIGTERM and then waits `kill_timeout` before SIGKILL, and
+ * `shutdown.ts` is what fits inside that window: stop being ready, hand every
+ * peer a resume ticket, close the rooms with a 1001, and wait for the sockets
+ * before exiting. A second signal skips all of it — see `installSignalHandlers`.
  */
-const shutdown = (signal: string) => {
-  log('server.shutdown', {
-    signal,
-    rooms: server.rooms.size,
-    speedClamps: counters.speedClamps,
-    selfSplashes: counters.selfSplashes,
-    scheduler: server.scheduler.describe(),
-  })
-  void server.close().then(() => {
-    process.exit(0)
-  })
-}
-
-process.on('SIGTERM', () => shutdown('SIGTERM'))
-process.on('SIGINT', () => shutdown('SIGINT'))
+installSignalHandlers({
+  process,
+  log,
+  drain: async (signal) => {
+    log('server.shutdown', {
+      signal,
+      rooms: server.rooms.size,
+      speedClamps: counters.speedClamps,
+      selfSplashes: counters.selfSplashes,
+      scheduler: server.scheduler.describe(),
+    })
+    const drained = await drainServer({ server, resume: server.resume, clock: systemClock(), log })
+    log('server.drained', {
+      waitedMs: Math.round(drained.waitedMs),
+      rooms: drained.rooms,
+      told: drained.told,
+      ticketed: drained.ticketed,
+      timedOut: drained.timedOut,
+    })
+    return drained
+  },
+})
