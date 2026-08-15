@@ -246,16 +246,68 @@ device's `baseLatency` is the other half. §5.
 
 ---
 
+## The HUD
+
+**HUD model** — the deeply-readonly *copy* of everything the readout is allowed
+to know, projected out of `GameState` once a frame. `render/animState.ts`'s
+`playerNetState` for the readout instead of the model, and the only door in:
+`packages/client/src/ui/hudModel.ts`.
+
+**In-match HUD** — the player-facing readout: health, armour, weapon, cooldown,
+round score, crosshair and hit feedback. `ui/hud.ts`. Distinct from the
+**diagnostics panel** in the top-left (`client/src/hud.ts`), which is the
+netcode's instrument and the browser test's.
+
+**Hit confirmation** — the mark that says a shot landed, derived from the
+opponent's health going down on the frame the state says it did. `ui/feedback.ts`;
+its ears are `audio/cues.ts`.
+
+**Damage indicator** — the arc that says where a hit came from, derived from the
+*knockback* rather than from an attacker position the state does not carry.
+Stored as a world bearing and re-projected against the current yaw, so it stays
+pinned to the attacker as the player turns. `ui/feedback.ts`.
+
+**Cooldown ring** — the refire interval drawn round the crosshair. Scaled by
+`nextFireTick - lastFireTick`, which is the interval of the weapon that *fired*
+rather than the one now in hand — the two weapons share one timer.
+
+**HUD box** — an element marked `data-hud-box`: part of the set the browser test
+measures at 16:9, 21:9 and 4:3 and requires to be on screen and not overlapping
+anything else. `scripts/e2e.mjs`.
+
+---
+
 ## The network
 
-**Listen server** — a server running inside the client process. How
-single-player works: the bot match runs the real server code over a loopback
-transport, so there is one code path, not two (GLAD-4G4W2T).
+**Host** — whatever is authoritative over a world: `packages/server/src/room.ts`
+and the modules it reaches. Runs unchanged behind a WebSocket on Fly and inside
+a browser tab behind a loopback, which is why `@gladiator/server` is a
+dependency of the client and not only of the deploy.
 
-**Loopback transport** — a `Transport` implementation that hands messages
-straight to the other end with no socket in between.
+**Listen server** — a host running inside the client process
+(`packages/client/src/net/listenServer.ts`). How single-player works: the bot
+match runs the real host over a loopback transport, so there is one code path,
+not two (GLAD-4G4W2T). `?local=1` boots one today.
 
-**Room** — one match's worth of server state, addressed by a room code.
+**Loopback transport** — a `Transport` implementation that hands messages to the
+other end with no socket in between. It still runs the real codec — a string is
+UTF-8 encoded and decoded, a `Uint8Array` is copied — because sharing a mutable
+reference across a "network" is the one failure the pattern has. Delivery is a
+`queueMicrotask`, so a send can never re-enter a tick.
+
+**Lagged transport** — a decorator that puts the network back for tests:
+latency, jitter, loss, reordering and duplication from a seeded PRNG, released
+by a `pump(nowMs)` rather than a timer. Test harness only; single-player ships
+at ~0 ms.
+
+**Clock** — wall-clock as an injected value (`packages/server/src/clock.ts`). A
+host reads one to notice a peer that has gone quiet, and never to decide how far
+to advance the world: a room's world is a function of the commands it received,
+which is what makes one recorded input stream produce one hash over a socket and
+in-process.
+
+**Room** — one match's worth of host state, addressed by a room code. Seats
+peers, owns one `GameState`, holds no timer and opens no socket.
 
 **Room code** — the short string a player sends a friend to be dueled by.
 

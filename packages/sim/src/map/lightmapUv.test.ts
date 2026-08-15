@@ -87,17 +87,26 @@ describe('lightmapUnwrap', () => {
   it('never puts two faces on the same texel', () => {
     // The failure this whole file exists to prevent: two walls sharing a patch
     // renders a level lit from the wrong one, which is a *plausible* picture.
+    //
+    // One assertion at the end rather than one per texel. A quarter of a
+    // million `expect` calls is slow enough to time out on a busy machine, and
+    // a flaky guard against a silent bug is worse than no guard at all.
     const unwrap = lightmapUnwrap(geometry)
     const owner = new Int32Array(unwrap.atlasWidth * unwrap.atlasHeight).fill(-1)
+    let collision: string | null = null
     for (const patch of unwrap.patches) {
-      for (let y = 0; y < patch.height; y += 1) {
+      for (let y = 0; y < patch.height && collision === null; y += 1) {
         for (let x = 0; x < patch.width; x += 1) {
           const at = (patch.y + y) * unwrap.atlasWidth + (patch.x + x)
-          expect(owner[at]).toBe(-1)
+          if (owner[at] !== -1) {
+            collision = `faces ${owner[at]} and ${patch.face} share texel ${patch.x + x},${patch.y + y}`
+            break
+          }
           owner[at] = patch.face
         }
       }
     }
+    expect(collision).toBeNull()
   })
 
   it('leaves the padding between two patches empty', () => {
