@@ -33,6 +33,9 @@ export {
 } from './collide.ts'
 export type { Brush, CollisionWorld, Plane, PlaneSpec } from './collide.ts'
 
+export { countSimEvents } from './counters.ts'
+export type { SimCounterHooks, SimCounters } from './counters.ts'
+
 export {
   G_KNOCKBACK,
   KNOCKBACK_DAMAGE_CAP,
@@ -46,8 +49,10 @@ export {
   distanceToBox,
   knockbackSpeed,
   knockbackTicksFor,
+  onSelfSplash,
   radiusDamage,
 } from './damage.ts'
+export type { SelfSplash } from './damage.ts'
 
 export {
   createWriter,
@@ -308,9 +313,30 @@ export {
   formatTraceLiteral,
   runReplay,
   runReplayHosted,
+  sampleTickAt,
   sampleTicks,
 } from './replay.ts'
 export type { Replay, ReplaySpawn, ScriptFrame, TraceDivergence, TraceSample } from './replay.ts'
+
+export {
+  DEFAULT_MAX_DEMO_FRAMES,
+  DEMO_VERSION,
+  createDemoRecorder,
+  decodeDemo,
+  describeDemo,
+  encodeDemo,
+  replayDemo,
+  verifyDemo,
+} from './demo.ts'
+export type {
+  Demo,
+  DemoFrame,
+  DemoHeader,
+  DemoPlayback,
+  DemoRecorder,
+  DemoRecorderOptions,
+  ReplayDemoOptions,
+} from './demo.ts'
 
 export {
   advanceRng,

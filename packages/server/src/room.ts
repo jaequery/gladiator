@@ -75,6 +75,8 @@ import {
   startMatch,
   tick as simTick,
   type ClientMessage,
+  type Demo,
+  type DemoRecorder,
   type GameState,
   type LoadedMap,
   type MatchRules,
@@ -90,6 +92,7 @@ import type { Clock } from './clock.ts'
 import { createClockSync, type ServerClockSync } from './clockSync.ts'
 import { createInputQueue, type InputQueue } from './inputQueue.ts'
 import { createLagCompensation, type LagCompStats } from './lagcomp.ts'
+import { NO_LOG, scopeToRoom, type Log } from './log.ts'
 import {
   CLOSE_BAD_FRAME,
   CLOSE_ROOM_FULL,
@@ -151,7 +154,23 @@ export type RoomOptions = {
    * may reach for. The Node server passes the real one; a test passes a counter.
    */
   readonly peerId?: (index: number) => string
-  readonly log?: (line: string) => void
+  /**
+   * Where this room's events go. One JSON object per event (`log.ts`).
+   *
+   * The room stamps its own code and its own live tick on to everything it
+   * writes, so a call site here never has to remember to — see
+   * {@link scopeToRoom}.
+   */
+  readonly log?: Log
+  /**
+   * Record the command stream this room executes, for playback later.
+   *
+   * Off by default: a recorder is a growing array, and a machine holding two
+   * hundred rooms should not be holding two hundred of them unless somebody
+   * asked. `sim/src/demo.ts` explains the format, and the *file* is written a
+   * layer up — nothing in here has a filesystem (`demoFile.ts`).
+   */
+  readonly recorder?: DemoRecorder
 }
 
 export type RoomPeer = {
@@ -233,6 +252,14 @@ export type Room = {
   sweep(nowMs: number): void
   hash(): number
   snapshot(): RoomSnapshot
+  /**
+   * The recording so far, or `null` when this room was not asked to keep one.
+   *
+   * A value rather than a file: nothing on this side of the line has a
+   * filesystem. `server/src/demoFile.ts` is what writes one on Node, and a
+   * browser tab downloads it.
+   */
+  demo(): Demo | null
   close(code?: number, reason?: string): void
 }
 
@@ -257,9 +284,9 @@ function frameOf(message: ServerMessage): string {
 export function createRoom(options: RoomOptions): Room {
   const capacity = options.capacity ?? DUEL_CAPACITY
   const idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS
-  const log = options.log ?? (() => undefined)
   const clock = options.clock
   const id = options.id ?? 'room'
+  const recorder = options.recorder ?? null
 
   const identity: ServerIdentity = {
     build: options.build,
@@ -283,6 +310,11 @@ export function createRoom(options: RoomOptions): Room {
   // `RoomOptions.plan`.
   const plan: SpawnPlan = options.plan ?? buildSpawnPlan(options.map.source, options.map.world)
   const world = options.map.world
+
+  // Scoped once, here, rather than at each call site: every line this room
+  // writes carries its code and the tick the world is on at the moment of
+  // writing. Those two are the coordinates a bug report arrives in.
+  const log = scopeToRoom(options.log ?? NO_LOG, id, () => state.tick)
 
   const peers: PeerRecord[] = []
   let joined = 0
@@ -410,7 +442,11 @@ export function createRoom(options: RoomOptions): Room {
   const startWhenFull = (): void => {
     if (state.match.phase !== MatchPhase.Warmup) return
     if (peers.filter(playing).length < capacity) return
-    log(`room ${id}: both seats filled, starting the match at tick ${state.tick}`)
+    log('room.match_start', { peers: peers.length, capacity })
+    // Recorded before the edge is taken, because a replay has to take it at the
+    // same tick — `startMatch` is the one thing that happens to a world that is
+    // not in the command stream. `sim/src/demo.ts`.
+    recorder?.matchStarted(state.tick)
     startMatch(state, plan)
   }
 
@@ -464,7 +500,12 @@ export function createRoom(options: RoomOptions): Room {
       const peerId = options.peerId?.(joined) ?? `${id}-${joined}`
 
       if (slot === NO_SLOT) {
-        log(`room ${id}: refused ${peerId}, ${peers.length}/${capacity} seats taken`)
+        log('room.join_refused', {
+          level: 'warn',
+          peer: peerId,
+          seated: peers.length,
+          capacity,
+        })
         transport.send(
           frameOf({
             t: 'fault',
@@ -505,6 +546,7 @@ export function createRoom(options: RoomOptions): Room {
         open: true,
       }
       peers.push(record)
+      log('room.join', { peer: peerId, slot, seated: peers.length, capacity })
 
       transport.setHandlers({
         onOpen: () => {
@@ -513,7 +555,7 @@ export function createRoom(options: RoomOptions): Room {
         onMessage: (message) => receive(record, message),
         onClose: () => forget(record),
         onError: (error) => {
-          log(`room ${id}: ${peerId} errored: ${error.message}`)
+          log('room.peer_error', { level: 'error', peer: peerId, slot, error: error.message })
         },
       })
 
@@ -543,13 +585,19 @@ export function createRoom(options: RoomOptions): Room {
           if (taken.consumed === 0) starved += 1
           inputs[record.slot] = taken.cmd
         }
+        // Before the sub-step, with the world it is about to run on: a demo is
+        // the *input* stream, so what is recorded is what `tick()` is handed
+        // rather than what it produced. `sim/src/demo.ts`.
+        recorder?.record(state, inputs)
+
         simTick(state, inputs, world, plan, hooks)
 
-        // After the sub-step, so the entry filed under tick *t* is where
-        // everybody was at the *end* of tick *t* — the same moment the snapshot
-        // for tick *t* describes, and therefore the same moment the shooter was
-        // drawing when they aimed. Recording before the tick would put every
-        // rewind exactly one sub-step out.
+        // The lag-compensation history goes the other way round, *after* the
+        // sub-step, so the entry filed under tick *t* is where everybody was at
+        // the *end* of tick *t* — the same moment the snapshot for tick *t*
+        // describes, and therefore the same moment the shooter was drawing when
+        // they aimed. Recording it before the tick would put every rewind
+        // exactly one sub-step out.
         lagcomp.record(state)
       }
 
@@ -567,7 +615,13 @@ export function createRoom(options: RoomOptions): Room {
           continue
         }
         if (nowMs - record.lastHeardMs >= idleTimeoutMs) {
-          log(`room ${id}: ${record.id} went quiet for ${idleTimeoutMs} ms`)
+          log('room.peer_idle', {
+            level: 'warn',
+            peer: record.id,
+            slot: record.slot,
+            quietMs: Math.round(nowMs - record.lastHeardMs),
+            timeoutMs: idleTimeoutMs,
+          })
           record.transport.close(CloseReason.Abnormal, 'idle')
           forget(record)
           continue
@@ -600,6 +654,8 @@ export function createRoom(options: RoomOptions): Room {
       starved,
       lagcomp: lagcomp.stats,
     }),
+
+    demo: () => recorder?.finish(state) ?? null,
 
     close(code = CloseReason.Normal, reason = '') {
       for (const record of [...peers]) {

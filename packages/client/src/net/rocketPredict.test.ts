@@ -7,6 +7,10 @@
  * leaves the player exactly where an unfired one would have; and the knockback
  * window that eventually arrives is measured in *ticks from the detonation the
  * snapshot describes*, never from when the packet happened to land.
+ *
+ * What is deliberately not here: whether a launch this client *did* predict was
+ * one the host agreed with. That is a comparison of predicted vitals against a
+ * snapshot's, and it is `mispredict.test.ts`.
  */
 import {
   BUTTON_ATTACK,
@@ -33,12 +37,7 @@ import { describe, expect, it } from 'vitest'
 
 import { CLIENT_MAP } from '../map.ts'
 import { createPredictor } from './prediction.ts'
-import { CorrectionBand, type Correction } from './reconcile.ts'
-import {
-  SELF_SPLASH_WINDOW_TICKS,
-  createRocketPredictor,
-  type RocketPredictor,
-} from './rocketPredict.ts'
+import { createRocketPredictor, type RocketPredictor } from './rocketPredict.ts'
 
 const LOCAL_SLOT = 0
 const OPPONENT_SLOT = 1
@@ -202,8 +201,9 @@ describe('the decision, once taken', () => {
   })
 
   it('is not a decision at all for a rocket that went off across the map', () => {
-    // Nothing to predict and nothing to defer, so nothing is counted — and no
-    // phantom entry lands in the window a correction is blamed against.
+    // Nothing to predict and nothing to defer, so nothing is counted: a player
+    // who shoots at walls should not look like one whose predicate keeps
+    // firing.
     const state = world()
     const at = self(state).origin
     const rocket = spawnEntity(state, {
@@ -236,64 +236,6 @@ describe('the decision, once taken', () => {
     tracker.observe(state, theirs, [0, 0, 0], [100, 0, 0])
     expect(tracker.allow(state, theirs)).toBe(true)
     expect(tracker.stats.tracked).toBe(0)
-  })
-})
-
-describe('counting mispredicts', () => {
-  const correction = (band: CorrectionBand, predictedTick: number): Correction => ({
-    band,
-    distance: band === CorrectionBand.Snap ? 200 : 60,
-    offset: [0, 0, 0],
-    replayed: 0,
-    tick: predictedTick,
-    predictedTick,
-  })
-
-  function predictedAt(tick: number): { tracker: RocketPredictor; lines: string[] } {
-    const lines: string[] = []
-    const state = world()
-    const tracker = trackerOver(state, (line) => lines.push(line))
-    const predictor = createPredictor({
-      state,
-      world: CLIENT_MAP.world,
-      slot: LOCAL_SLOT,
-      hooks: { selfSplash: tracker },
-    })
-    for (let i = 0; i < tick; i += 1) predictor.predict(i === tick - 1 ? ROCKET_AT_FEET : IDLE)
-    expect(tracker.stats.predicted).toBe(1)
-    return { tracker, lines }
-  }
-
-  it('blames a large correction that lands inside the knockback window', () => {
-    const { tracker, lines } = predictedAt(4)
-    tracker.note(correction(CorrectionBand.Loud, 4 + 3))
-
-    expect(tracker.stats.mispredicted).toBe(1)
-    expect(lines.some((line) => line.includes('self-splash mispredict'))).toBe(true)
-  })
-
-  it('does not blame one that lands after it', () => {
-    const { tracker } = predictedAt(4)
-    tracker.note(correction(CorrectionBand.Loud, 4 + SELF_SPLASH_WINDOW_TICKS + 1))
-    expect(tracker.stats.mispredicted).toBe(0)
-  })
-
-  it('does not blame an ordinary correction at all', () => {
-    const { tracker } = predictedAt(4)
-    tracker.note(correction(CorrectionBand.Soft, 5))
-    tracker.note(correction(CorrectionBand.None, 5))
-    expect(tracker.stats.mispredicted).toBe(0)
-  })
-
-  it('counts nothing when there was no predicted launch to blame', () => {
-    const state = world()
-    const tracker = trackerOver(state)
-    tracker.note(correction(CorrectionBand.Snap, 40))
-    expect(tracker.stats.mispredicted).toBe(0)
-  })
-
-  it('is a window derived from the knockback the splash arms', () => {
-    expect(SELF_SPLASH_WINDOW_TICKS).toBe(knockbackTicksFor(WEAPONS[0].splashDamage))
   })
 })
 

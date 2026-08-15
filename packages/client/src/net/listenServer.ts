@@ -32,7 +32,15 @@
  * loopback of its own, which is why `Room` takes a capacity rather than
  * assuming one.
  */
-import type { LoadedMap, Transport } from '@gladiator/sim'
+import {
+  PROTOCOL_VERSION,
+  SKELETON_SEED,
+  createDemoRecorder,
+  type Demo,
+  type DemoRecorder,
+  type LoadedMap,
+  type Transport,
+} from '@gladiator/sim'
 import { systemClock, type Clock } from '@gladiator/server/clock'
 import { createLoopbackPair, type LoopbackPair } from '@gladiator/server/net/loopbackTransport'
 import { createRoom, type Room } from '@gladiator/server/room'
@@ -56,6 +64,15 @@ export type ListenServerOptions = {
    * every one of them past the first thirty-two refused at the door.
    */
   readonly clock?: Clock
+  /**
+   * Record the command stream this tab's host executes.
+   *
+   * The same recorder a Fly machine uses, for the same reason: single-player is
+   * the multiplayer code path, so a bug seen alone is a bug reproducible from a
+   * demo. `?dev=1` turns it on and the panel offers the file
+   * (`sim/src/demo.ts`).
+   */
+  readonly record?: boolean
 }
 
 export type ListenServer = {
@@ -91,11 +108,30 @@ export type ListenServer = {
    * whether the host in this tab is keeping up.
    */
   beat(nowMs: number): number
+  /** Sub-steps recorded so far, or `null` when this host is not recording. */
+  readonly recordedFrames: number | null
+  /** The recording so far, or `null`. `sim/src/demo.ts`. */
+  demo(): Demo | null
   stop(): void
 }
 
 export function createListenServer(options: ListenServerOptions): ListenServer {
   const pair: LoopbackPair = createLoopbackPair()
+  // Spelled once, because the room and the recorder have to agree about it: a
+  // demo replayed under a different seed draws a different spawn pair on the
+  // first round and diverges before anybody has pressed a key.
+  const seed = options.seed ?? SKELETON_SEED
+  const id = options.id ?? 'LOCAL1'
+  const recorder: DemoRecorder | null =
+    options.record === true
+      ? createDemoRecorder({
+          build: options.build,
+          room: id,
+          map: { name: options.map.source.name, hash: options.map.hash },
+          seed,
+          protocol: PROTOCOL_VERSION,
+        })
+      : null
   const room = createRoom({
     map: options.map,
     // A real clock by default, because a listen server is a real host: it is
@@ -105,10 +141,11 @@ export function createListenServer(options: ListenServerOptions): ListenServer {
     // one on Fly produce the same hashes from the same input.
     clock: options.clock ?? systemClock(),
     build: options.build,
-    id: options.id ?? 'LOCAL1',
-    ...(options.seed === undefined ? {} : { seed: options.seed }),
+    id,
+    seed,
     ...(options.capacity === undefined ? {} : { capacity: options.capacity }),
     peerId: (index) => `local-${index}`,
+    ...(recorder === null ? {} : { recorder }),
   })
   room.join(pair.server)
 
@@ -122,6 +159,12 @@ export function createListenServer(options: ListenServerOptions): ListenServer {
     transport: pair.client,
     room,
     pair,
+
+    get recordedFrames() {
+      return recorder?.frames ?? null
+    },
+
+    demo: () => room.demo(),
 
     beat(nowMs: number): number {
       const elapsedMs = lastMs === null ? 0 : nowMs - lastMs

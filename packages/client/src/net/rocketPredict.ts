@@ -34,25 +34,28 @@
  * first time a rocket detonates the answer is recorded, and every replay after
  * that is handed the same one.
  *
- * ## What a mispredict is, and why it is a heuristic
+ * ## What this counts, and what counts the other half
  *
- * A snapshot carries the *result* of the host's splash, never its reasoning, so
- * there is nothing on the wire that says "your launch was refused". What there
- * is, is the correction that follows: a Loud or Snap band landing within the
- * knockback window of a launch this client predicted is that launch not having
- * happened. The attribution is not a proof — a hard snap in that window could be
- * something else entirely — and it is counted and logged **separately** from the
- * general correction counters precisely so that it can be read as the estimate
- * it is rather than folded into a number that means something else.
+ * Two numbers, and they answer opposite questions. This file owns the one only
+ * it can know: how often the predicate **deferred** a launch, which is the
+ * mechanism working as designed. Whether a launch this client *did* predict was
+ * one the host agreed with is `net/mispredict.ts`, which answers it exactly —
+ * by comparing the vitals it predicted for a tick against the vitals the
+ * snapshot for that tick carries — rather than by blaming a correction band that
+ * landed nearby. That is the sharper instrument and there is deliberately only
+ * one of it: two counters both called "self-splash mispredicts", one exact and
+ * one a guess, is the drift `AGENTS.md` is written to prevent.
+ *
+ * The two are read side by side, in `hud.ts` and in the dev readout: deferrals
+ * going up is the predicate protecting the player, and mispredicts going up is
+ * the predicate not being conservative enough.
  */
 import {
   EntityKind,
   PLAYER_MAXS,
   PLAYER_MINS,
-  WEAPONS,
   distanceToBox,
   findPlayer,
-  knockbackTicksFor,
   segmentClearsPlayer,
   weaponDef,
   type EntityState,
@@ -60,19 +63,6 @@ import {
   type SelfSplashPolicy,
   type Vec3,
 } from '@gladiator/sim'
-
-import { CorrectionBand, type Correction } from './reconcile.ts'
-
-/**
- * How long after a predicted launch a large correction is blamed on it, in
- * sub-steps.
- *
- * The knockback window of a full splash — 200 ms, 25 sub-steps — derived from
- * the weapon table rather than written out. It is the interval during which a
- * predicted launch is still visibly driving the player, and therefore the
- * interval in which its absence is what a correction would be measuring.
- */
-export const SELF_SPLASH_WINDOW_TICKS = knockbackTicksFor(WEAPONS[0].splashDamage)
 
 /**
  * How many rockets' decisions are remembered.
@@ -89,24 +79,17 @@ export type SelfSplashStats = {
   readonly tracked: number
   /** Detonations where the launch was predicted rather than waited for. */
   readonly predicted: number
-  /** Detonations deferred to the host because the path was not provably clear. */
-  readonly suppressed: number
   /**
-   * Predicted launches the host appears not to have agreed with.
+   * Detonations deferred to the host because the path was not provably clear.
    *
-   * Counted separately from every other correction statistic, and a heuristic —
-   * see the header.
+   * The mechanism working. Whether a *predicted* launch turned out to be wrong
+   * is `net/mispredict.ts`'s number — see the header.
    */
-  readonly mispredicted: number
+  readonly suppressed: number
 }
 
 export type RocketPredictor = SelfSplashPolicy & {
   readonly stats: SelfSplashStats
-  /**
-   * Offer a correction for attribution. Called once per reconciliation, from
-   * wherever the correction is already being classified.
-   */
-  note(correction: Correction): void
   reset(): void
 }
 
@@ -139,10 +122,8 @@ export function createRocketPredictor(options: RocketPredictOptions): RocketPred
   // free. Keyed by entity id, which both peers agree about because it comes out
   // of the same `nextEntityId` in the same state.
   const decisions = new Map<number, Decision>()
-  /** The ticks at which a launch was predicted, oldest first. */
-  const launches: number[] = []
 
-  const stats = { tracked: 0, predicted: 0, suppressed: 0, mispredicted: 0 }
+  const stats = { tracked: 0, predicted: 0, suppressed: 0 }
 
   /** The local player, if this world has one. */
   const local = (state: GameState): EntityState | null => {
@@ -160,9 +141,9 @@ export function createRocketPredictor(options: RocketPredictOptions): RocketPred
    * Is this detonation close enough to owe its owner anything?
    *
    * A rocket that went off across the map is not a decision — there is no
-   * launch to predict and none to defer, and counting one would put a phantom
-   * entry in the window `note` blames corrections against. Measured the way
-   * splash is measured, to the nearest point on the box (`damage.ts`).
+   * launch to predict and none to defer, and counting one would make a player
+   * who shoots at walls look like one whose predicate keeps firing. Measured
+   * the way splash is measured, to the nearest point on the box (`damage.ts`).
    */
   const reachesOwner = (state: GameState, rocket: EntityState): boolean => {
     const self = local(state)
@@ -220,34 +201,12 @@ export function createRocketPredictor(options: RocketPredictOptions): RocketPred
         return false
       }
 
+      // Predicted, and from here on it is `net/mispredict.ts`'s business
+      // whether the host agreed: the splash this is about to let through calls
+      // `applyDamage` on the owner, which fires `onSelfSplash`, which is what
+      // that ledger counts against the next snapshot's vitals.
       stats.predicted += 1
-      launches.push(state.tick)
-      // Bounded by the attribution window rather than by a capacity, because
-      // what it holds is "recent", and everything older can never be the answer
-      // to the question `note` asks.
-      while (launches.length > 0 && (launches[0] as number) < state.tick - SELF_SPLASH_WINDOW_TICKS) {
-        launches.shift()
-      }
       return true
-    },
-
-    note(correction: Correction) {
-      if (correction.band !== CorrectionBand.Loud && correction.band !== CorrectionBand.Snap) {
-        return
-      }
-
-      const at = correction.predictedTick
-      const blamed = launches.some(
-        (tick) => tick <= at && at - tick <= SELF_SPLASH_WINDOW_TICKS,
-      )
-      if (!blamed) return
-
-      stats.mispredicted += 1
-      log(
-        `gladiator: self-splash mispredict — ${correction.distance.toFixed(0)} qu of ` +
-          `${correction.band} correction at tick ${correction.tick}, within ` +
-          `${SELF_SPLASH_WINDOW_TICKS} ticks of a predicted launch`,
-      )
     },
 
     get stats(): SelfSplashStats {
@@ -256,7 +215,6 @@ export function createRocketPredictor(options: RocketPredictOptions): RocketPred
 
     reset() {
       decisions.clear()
-      launches.length = 0
     },
   }
 }
