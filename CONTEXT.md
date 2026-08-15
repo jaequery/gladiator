@@ -293,8 +293,37 @@ sent as an event so it survives a dropped snapshot.
 **Netstate / snapshot** — the serialised slice of sim state the server sends to
 clients each tick.
 
-**Clock sync** — agreeing on tick numbering between client and server, and the
-input buffer policy that absorbs jitter (GLAD-5995PA).
+**Clock sync** — agreeing on tick numbering between client and server. The
+server pings and the client echoes (`ServerPing` / `ClientPong`), so the round
+trip is measured on the server's clock and never reported by the client; the
+client estimates the offset from those pings and works out which tick it is
+predicting into. `packages/server/src/clockSync.ts`,
+`packages/client/src/net/clockSync.ts`; the argument is `AGENTS.md` under **Clock
+sync, and who holds the stopwatch** (GLAD-5995PA).
+
+**Lead** — how far ahead of the server a client simulates: half the measured
+round trip, rounded up, plus the **jitter buffer** depth. Feed-forward from the
+RTT alone, deliberately not steered on the buffer depth the server reports.
+
+**Slew** — correcting the client's clock by handing the frame accumulator a few
+extra or fewer milliseconds, bounded to an eighth of the frame, rather than
+jumping the tick counter. A jump is a jump the player sees, because the camera is
+written from simulation state every frame. Past `SNAP_TICKS` it snaps instead.
+
+**Input queue** — the per-peer jitter buffer in front of the server's tick
+(`packages/server/src/inputQueue.ts`). Holds `JITTER_BUFFER_TICKS` commands on
+purpose, drains one per tick, and never stalls: a stall on one peer's socket
+would hitch the other peer's game. The four failure modes and what each costs are
+`AGENTS.md` under **The input buffer policy**.
+
+**Repeat-last** — the missing-command policy: when nothing is buffered, the last
+command runs again with the trigger cleared, for at most half a second. It is
+what keeps a lost packet from dropping a player out of a strafe-jump; the bound
+is what keeps a disconnected one from running off the map.
+
+**Command rate limit** — commands a peer may have executed per **wall-clock
+second**, measured on the server's clock. Without it a client sends 500 Hz of
+input and moves faster than everyone else.
 
 ---
 

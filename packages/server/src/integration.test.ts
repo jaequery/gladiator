@@ -245,6 +245,15 @@ describe('cross-environment hash agreement', () => {
             welcomed = true
             return
           }
+          if (parsed.t === 'ping') {
+            // Clock sync runs alongside the hash echo and is answered the way a
+            // real client answers it. Nothing about it may touch the world —
+            // which is half of what this test is asserting, since a ping that
+            // advanced a tick would show up as a hash for a tick we never
+            // simulated three lines below.
+            socket.send(JSON.stringify({ t: 'pong', id: parsed.id }))
+            return
+          }
           if (parsed.t !== 'hash') {
             reject(new Error(`unexpected frame: ${parsed.t}`))
             return
@@ -332,4 +341,40 @@ describe('cross-environment hash agreement', () => {
     )
     expect(hashes[0]).toBe(hashes[1])
   })
+})
+
+describe('clock sync on a real socket', () => {
+  it('pings a connected client and measures the trip on its own clock', async () => {
+    // The one assertion nothing in-process can make: the room's beat is
+    // actually wired to a timer in the deployed process, and the ping reaches a
+    // browser-shaped client through the real framing. Without this, clock sync
+    // could be perfect and never fire.
+    const server = await start()
+
+    const measured = await new Promise<number>((resolve, reject) => {
+      const socket = connect(server.port)
+      const seen: number[] = []
+      socket.on('error', reject)
+      socket.on('message', (data) => {
+        const parsed = parseServerMessage(String(data))
+        if (parsed?.t !== 'ping') return
+        seen.push(parsed.rttMs)
+        // The first ping goes out before any trip has completed and says so;
+        // the second carries what the server measured off our answer to the
+        // first, which is the number this ticket exists to produce.
+        if (seen.length >= 2 && parsed.rttMs >= 0) {
+          resolve(parsed.rttMs)
+          socket.close()
+          return
+        }
+        socket.send(JSON.stringify({ t: 'pong', id: parsed.id }))
+      })
+      socket.once('open', () => socket.send(helloFrame()))
+    })
+
+    expect(measured).toBeGreaterThanOrEqual(0)
+    // Loopback on the same machine. Anything near a second is a beat that is
+    // not beating rather than a slow network.
+    expect(measured).toBeLessThan(200)
+  }, 20_000)
 })

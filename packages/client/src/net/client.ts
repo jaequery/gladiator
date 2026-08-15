@@ -20,13 +20,26 @@
  * which is why its contract requires a synthetic open, and why `connect()` here
  * is "install handlers" rather than "dial".
  *
+ * ## It also keeps the clock
+ *
+ * The other conversation on this socket is clock sync: the host pings, this
+ * answers with nothing but the id, and `clockSync.ts` turns the pings into an
+ * estimate of which tick the server is on and how far ahead of it this client
+ * should be simulating. The round trip in {@link NetSnapshot.rttMs} is the
+ * *server's* measurement, arriving in the ping — this module deliberately does
+ * not time anything itself, because the number decides how far lag compensation
+ * rewinds and a client that reported it could ask to be rewound further.
+ *
  * Reconnection, room codes and the rest of the connection lifecycle are
- * GLAD-DVDV6P; prediction and reconciliation are GLAD-6RT64L. What is here is
- * the smallest thing that can tell the truth about agreement.
+ * GLAD-DVDV6P; prediction and reconciliation are GLAD-6RT64L — and it is
+ * prediction that will consume {@link NetClient.clock}, by slewing the frame
+ * accumulator toward `targetTick`. What is here is the smallest thing that can
+ * tell the truth about agreement, plus the clock that agreement will need.
  */
 import {
   PROTOCOL_VERSION,
   TransportState,
+  UNKNOWN_RTT,
   type ServerMessage,
   type Transport,
   type UserCmd,
@@ -36,6 +49,8 @@ import {
   encodeCmd,
   parseServerMessage,
 } from '@gladiator/sim'
+
+import { createClockSync, type ClientClockSync } from './clockSync.ts'
 
 /** How many ticks of our own hashes to keep, for the server to catch up to. */
 const HASH_HISTORY = 4096
@@ -94,11 +109,43 @@ export type NetSnapshot = {
    * nothing of the kind.
    */
   readonly dropped: number
+  /**
+   * The round trip in whole milliseconds, **as the server measured it**, or
+   * `null` before it has measured one.
+   *
+   * Not timed here. The client used to stopwatch its own command batch against
+   * the hash that came back, which was a fine number for a readout and exactly
+   * the wrong one for anything that matters: lag compensation rewinds by this,
+   * so a client that reports it is a client that can ask to be rewound further
+   * (GLAD-5QGO11). It now comes off the ping. `clockSync.ts`.
+   */
   readonly rttMs: number | null
+  /**
+   * The tick we believe the server is on, or `null` before the first ping.
+   *
+   * Estimated from the pings, not from the hashes: a hash says which tick the
+   * server had *reached when it answered us*, which is a different question and
+   * one whose answer is already stale by a one-way trip.
+   */
+  readonly serverTickEstimate: number | null
+  /** Ticks the client should be simulating ahead of the server. */
+  readonly leadTicks: number
+  /** Our commands the server was holding as of the last ping. */
+  readonly queuedAtServer: number
+  /** Pings answered. Zero for a long time means clock sync is not working. */
+  readonly pings: number
 }
 
 export type NetClient = {
   connect(): void
+  /**
+   * The clock estimate this session is keeping.
+   *
+   * Exposed rather than folded into {@link NetClient.snapshot} because the
+   * frame loop asks it a question with an argument — "what tick is it *now*" —
+   * and a snapshot taken ten times a second cannot answer that.
+   */
+  readonly clock: ClientClockSync
   /** Record the hash our own simulation produced for `tick`. */
   record(tick: number, hash: number): void
   /** Queue a command for `tick`; it goes out on the next {@link flush}. */
@@ -171,7 +218,8 @@ export function createNetClient(options: NetOptions): NetClient {
 
   const outbox: WireCmd[] = []
   let outboxStartTick = 0
-  let sentAtMs: number | null = null
+  const clock = createClockSync()
+  let pings = 0
 
   const transport = options.transport
   let status: NetStatus = transport === null ? 'unconfigured' : 'idle'
@@ -188,7 +236,6 @@ export function createNetClient(options: NetOptions): NetClient {
   let compared = 0
   let mismatched = 0
   let dropped = 0
-  let rttMs: number | null = null
 
   const ourHashAt = (tick: number): number | null => {
     const slot = ((tick % HASH_HISTORY) + HASH_HISTORY) % HASH_HISTORY
@@ -231,13 +278,22 @@ export function createNetClient(options: NetOptions): NetClient {
       return
     }
 
-    // A hash. This is the whole point of the ticket.
+    if (parsed.t === 'ping') {
+      // Answered on the spot, and with nothing in the reply but the id. Every
+      // millisecond between receiving a ping and sending its pong is a
+      // millisecond added to the round trip the server measures — and therefore
+      // to the lead this client is told to run at, and to how much of its own
+      // input the server buffers before executing it. Being slow here is a
+      // self-inflicted handicap, which is why nothing is done first.
+      transport?.send(JSON.stringify({ t: 'pong', id: parsed.id }))
+      clock.observe(parsed, now())
+      pings += 1
+      return
+    }
+
+    // A hash. This is the whole point of the walking skeleton.
     serverTick = parsed.tick
     serverHash = parsed.hash
-    if (sentAtMs !== null) {
-      rttMs = now() - sentAtMs
-      sentAtMs = null
-    }
     const ours = ourHashAt(parsed.tick)
     if (ours === null) {
       // The tick has already fallen out of our history, which only happens if
@@ -251,6 +307,8 @@ export function createNetClient(options: NetOptions): NetClient {
   }
 
   return {
+    clock,
+
     connect() {
       if (transport === null) return
       status = 'connecting'
@@ -313,7 +371,6 @@ export function createNetClient(options: NetOptions): NetClient {
         return
       }
       transport.send(JSON.stringify({ t: 'cmds', startTick: outboxStartTick, cmds: outbox }))
-      if (sentAtMs === null) sentAtMs = now()
       outbox.length = 0
     },
 
@@ -330,7 +387,11 @@ export function createNetClient(options: NetOptions): NetClient {
       compared,
       mismatched,
       dropped,
-      rttMs,
+      rttMs: clock.rttMs === UNKNOWN_RTT ? null : clock.rttMs,
+      serverTickEstimate: clock.serverTick(now()),
+      leadTicks: clock.leadTicks,
+      queuedAtServer: clock.queued,
+      pings,
     }),
 
     close() {

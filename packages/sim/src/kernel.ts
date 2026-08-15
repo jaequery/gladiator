@@ -77,8 +77,9 @@ export const NO_INPUTS: TickInputs = []
  * Where the commands for a sub-step come from.
  *
  * A function rather than a queue so the kernel never owns buffering policy.
- * The server closes over its per-client input buffers (GLAD-5995PA), the
- * client over its own predicted commands, a replay test over a fixed script.
+ * The server closes over its per-client input buffers
+ * (`server/src/inputQueue.ts`), the client over its own predicted commands, a
+ * replay test over a fixed script.
  */
 export type CommandSource = (tick: number) => TickInputs
 
