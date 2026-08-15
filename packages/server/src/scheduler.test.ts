@@ -124,7 +124,12 @@ describe('aiming at the next boundary', () => {
     expect(timer.delayMs).toBe(HOST_FRAME_MS)
   })
 
-  it('holds the tick rate over a minute of jittery wakeups', () => {
+  // Vitest's default 5 s is not enough for this one on a busy machine: it runs
+  // 3,750 frames and asks for `stats()` on every one of them, which re-computes
+  // the lateness quantiles each time. It is arithmetic rather than waiting, so
+  // the answer is time rather than a smaller run — the whole point is a *minute*
+  // of wall-clock.
+  it('holds the tick rate over a minute of jittery wakeups', { timeout: 60_000 }, () => {
     // The number that matters: a minute of wall-clock is 7500 sub-steps,
     // whatever the timer did in between. A scheduler that kept its lateness
     // would come out short and the server's tick counter would walk away from

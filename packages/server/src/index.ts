@@ -6,11 +6,15 @@
  */
 import { PROTOCOL_VERSION, TICK_INTERVAL_MS, onSpeedClamp } from '@gladiator/sim'
 
+import { systemClock } from './clock.ts'
 import { readConfig } from './config.ts'
 import { createJitterProbe } from './jitter.ts'
+import { describeOriginPolicy } from './origin.ts'
+import { generateResumeSecret } from './resume.ts'
 import { MAX_ROOMS } from './rooms.ts'
 import { HOST_FRAME_MS } from './scheduler.ts'
 import { startServer } from './server.ts'
+import { drainServer, installSignalHandlers } from './shutdown.ts'
 
 /** How long to keep reporting jitter into the boot log. */
 const JITTER_REPORT_MS = 60_000
@@ -32,9 +36,26 @@ console.log(
   `gladiator server listening on :${server.port} — build ${config.build}, protocol ${PROTOCOL_VERSION}, ` +
     `ticking at ${1000 / HOST_FRAME_MS} Hz into ${1000 / TICK_INTERVAL_MS} Hz sub-steps, ` +
     `up to ${MAX_ROOMS} rooms, ` +
-    `origins: ${config.allowedOrigins.length > 0 ? config.allowedOrigins.join(' ') : '(none listed)'} ` +
-    `+ ${config.vercelProject}*.vercel.app${config.allowLocalhost ? ' + localhost' : ''}`,
+    describeOriginPolicy(config),
 )
+
+// Said at boot rather than discovered during a deploy. A machine that cannot
+// mint a resume ticket is a machine whose deploy ends every match on it, and
+// the secret has to be the *same* on both machines — so a per-process fallback
+// would be a working test and a broken production. `resume.ts`, `NOTES.md`.
+if (server.resume.enabled) {
+  console.log('resume: RESUME_SECRET is set — matches survive a deploy')
+} else if (config.build === 'dev') {
+  console.warn(
+    'resume: no RESUME_SECRET, so a restart ends every live match. For local development:\n' +
+      `  RESUME_SECRET=${generateResumeSecret()} pnpm --filter @gladiator/server dev`,
+  )
+} else {
+  console.warn(
+    'resume: no RESUME_SECRET on a deployed build — every live match ends at the next deploy. ' +
+      'Set it with: flyctl secrets set RESUME_SECRET="$(openssl rand -hex 32)"',
+  )
+}
 
 // The number that matters is the one measured on the machine class actually
 // serving players, so it is measured there and logged there. `/healthz` carries
@@ -51,19 +72,28 @@ const report = setTimeout(() => {
 report.unref()
 
 /**
- * Fly sends SIGTERM and then waits `kill_timeout` before SIGKILL. Closing the
- * sockets ourselves means clients see a 1001 "going away" and can tell a deploy
- * apart from a crash. Graceful drain proper — finishing the round in flight —
- * is GLAD-G41FQ9.
+ * Fly sends SIGTERM and then waits `kill_timeout` before SIGKILL, and
+ * `shutdown.ts` is what fits inside that window: stop being ready, hand every
+ * peer a resume ticket, close the rooms with a 1001, and wait for the sockets
+ * before exiting. A second signal skips all of it — see `installSignalHandlers`.
  */
-const shutdown = (signal: string) => {
-  console.log(
-    `${signal} received — ${server.rooms.size} rooms live, ${server.scheduler.describe()}`,
-  )
-  void server.close().then(() => {
-    process.exit(0)
-  })
-}
-
-process.on('SIGTERM', () => shutdown('SIGTERM'))
-process.on('SIGINT', () => shutdown('SIGINT'))
+installSignalHandlers({
+  process,
+  log: (line) => console.log(line),
+  drain: async (signal) => {
+    console.log(
+      `${signal} received — ${server.rooms.size} rooms live, ${server.scheduler.describe()}`,
+    )
+    const report = await drainServer({
+      server,
+      resume: server.resume,
+      clock: systemClock(),
+      log: (line) => console.log(line),
+    })
+    console.log(
+      `drained in ${Math.round(report.waitedMs)} ms: ${report.rooms} rooms, ${report.told} peers told, ` +
+        `${report.ticketed} ticketed${report.timedOut ? ' — deadline reached' : ''}`,
+    )
+    return report
+  },
+})

@@ -46,6 +46,7 @@ import {
   PROTOCOL_VERSION,
   TransportState,
   UNKNOWN_RTT,
+  type ServerDrain,
   type ServerMessage,
   type ServerSnapshot,
   type Transport,
@@ -165,6 +166,14 @@ export type NetSnapshot = {
    * a client predicting into a world nobody is correcting.
    */
   readonly snapshots: number
+  /**
+   * The host's "I am deploying" notice, once it has arrived.
+   *
+   * Kept after the socket closes on purpose: it is what tells the difference
+   * between a duel that ended and a duel whose machine went away, and the
+   * resume ticket in it is the only copy of the score.
+   */
+  readonly drain: ServerDrain | null
 }
 
 export type NetClient = {
@@ -220,6 +229,16 @@ export type NetOptions = {
    * `net/prediction.ts` is what registers here.
    */
   readonly onSnapshot?: (snapshot: ServerSnapshot) => void
+  /**
+   * Called when the host says it is deploying, before the socket closes.
+   *
+   * The seam the reconnect policy hangs off (GLAD-DVDV6P): the frame carries
+   * the room code, how long to wait, and this peer's signed resume ticket, and
+   * a client that reconnects with `?room=<room>&resume=<ticket>` is put back
+   * into the same duel at the same score on the machine that replaced this one.
+   * `server/shutdown.ts` sends it.
+   */
+  readonly onDrain?: (notice: ServerDrain) => void
 }
 
 /**
@@ -302,6 +321,7 @@ export function createNetClient(options: NetOptions): NetClient {
   let compared = 0
   let mismatched = 0
   let dropped = 0
+  let drain: ServerDrain | null = null
 
   const ourHashAt = (tick: number): number | null => {
     const slot = ((tick % HASH_HISTORY) + HASH_HISTORY) % HASH_HISTORY
@@ -341,6 +361,18 @@ export function createNetClient(options: NetOptions): NetClient {
     if (parsed.t === 'fault') {
       status = 'error'
       message = `server rejected this session: ${parsed.code} — ${parsed.detail}`
+      return
+    }
+
+    if (parsed.t === 'drain') {
+      // The host is deploying. Kept rather than acted on: this module owns one
+      // socket and has no opinion about opening another, and the close that
+      // follows in a moment sets the status. What it does owe is that the
+      // ticket is not thrown away — it is the whole of the match's score, and
+      // there is exactly one copy of it (`server/resume.ts`).
+      drain = parsed
+      message = `the server is deploying — rejoin ${parsed.room} in a moment`
+      options.onDrain?.(parsed)
       return
     }
 
@@ -412,6 +444,10 @@ export function createNetClient(options: NetOptions): NetClient {
           // A mismatch closes the pipe on purpose; keep the useful message.
           if (status === 'version-mismatch' || status === 'map-mismatch') return
           status = 'closed'
+          // Same rule for a deploy: the drain frame already said what happened
+          // and where the match went, and "disconnected (code 1001)" on top of
+          // it is how a diagnosable event becomes a mystery.
+          if (drain !== null) return
           message = `disconnected (code ${code}${reason === '' ? '' : `: ${reason}`})`
         },
       })
@@ -468,6 +504,7 @@ export function createNetClient(options: NetOptions): NetClient {
       queuedAtServer: clock.queued,
       pings,
       snapshots,
+      drain,
     }),
 
     close() {

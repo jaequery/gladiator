@@ -63,6 +63,7 @@ import {
   CloseReason,
   DUEL_SLOTS,
   MatchPhase,
+  NEW_MATCH_SCORE,
   NO_SLOT,
   SKELETON_SEED,
   TransportState,
@@ -78,6 +79,7 @@ import {
   type GameState,
   type LoadedMap,
   type MatchRules,
+  type MatchScore,
   type ServerMessage,
   type SpawnPlan,
   type Transport,
@@ -131,6 +133,17 @@ export type RoomOptions = {
   /** The match this room plays. Defaults to the Rocket Arena best-of-five. */
   readonly rules?: MatchRules
   /**
+   * The scoreline this room's match begins at. Nil-nil unless it is a resume.
+   *
+   * A room rebuilt on the machine that replaced the one a deploy took away
+   * (`resume.ts`, `shutdown.ts`): the two clients bring back a signed score, so
+   * the duel continues at 2-1 instead of starting again. It is applied at the
+   * same moment a fresh match would have started — when the second player
+   * arrives — because a room with one player in it is not a match yet whichever
+   * way it got here.
+   */
+  readonly score?: MatchScore
+  /**
    * Where a round may stand its players.
    *
    * A function of the map, so it costs `spawns² × 9` traces to build and is
@@ -172,6 +185,15 @@ export type RoomPeer = {
   /** Commands buffered for this peer and not yet executed. */
   readonly queued: number
   readonly open: boolean
+  /**
+   * Send this peer one frame, from outside the room.
+   *
+   * The room says everything it has to say by itself; this exists for the one
+   * thing that is true of the *machine* rather than of the match — that it is
+   * about to go away (`shutdown.ts`). Per peer rather than per room because the
+   * frame it carries is per peer: a resume ticket names a seat.
+   */
+  send(message: ServerMessage): void
   close(code?: number, reason?: string): void
 }
 
@@ -205,8 +227,14 @@ export type Room = {
    * is by the time `connection` fires — and installs its own handlers on it.
    * A room with no seat left replies with a fault and closes, rather than
    * dropping the connection with no explanation.
+   *
+   * `prefer` asks for a particular seat and is honoured when that seat is free.
+   * It exists for a resumed match (`resume.ts`): the score is indexed by slot,
+   * so two players who came back in the other order would find the scoreline
+   * had swapped with them. Everywhere else there is nothing to prefer — the
+   * seats are symmetric — and the first free one is taken.
    */
-  join(transport: Transport): RoomPeer
+  join(transport: Transport, prefer?: number): RoomPeer
   /**
    * Advance the world by exactly `steps` sub-steps, then tell every peer where
    * it got to. Returns the steps run.
@@ -294,7 +322,10 @@ export function createRoom(options: RoomOptions): Room {
    */
   const inputs: (UserCmd | null)[] = [null, null]
 
-  const freeSlot = (): number => {
+  const freeSlot = (prefer?: number): number => {
+    if (prefer !== undefined && DUEL_SLOTS.includes(prefer)) {
+      if (!peers.some((peer) => peer.slot === prefer)) return prefer
+    }
     for (const slot of DUEL_SLOTS) {
       if (!peers.some((peer) => peer.slot === slot)) return slot
     }
@@ -318,6 +349,9 @@ export function createRoom(options: RoomOptions): Room {
     },
     get open() {
       return record.open
+    },
+    send(message: ServerMessage) {
+      record.transport.send(frameOf(message))
     },
     close(code = CloseReason.Normal, reason = '') {
       record.transport.close(code, reason)
@@ -383,8 +417,12 @@ export function createRoom(options: RoomOptions): Room {
   const startWhenFull = (): void => {
     if (state.match.phase !== MatchPhase.Warmup) return
     if (peers.filter(playing).length < capacity) return
-    log(`room ${id}: both seats filled, starting the match at tick ${state.tick}`)
-    startMatch(state, plan)
+    const score = options.score ?? NEW_MATCH_SCORE
+    log(
+      `room ${id}: both seats filled, starting the match at tick ${state.tick}` +
+        (score === NEW_MATCH_SCORE ? '' : ` from ${score.wins[0]}-${score.wins[1]}`),
+    )
+    startMatch(state, plan, score)
   }
 
   /**
@@ -431,8 +469,8 @@ export function createRoom(options: RoomOptions): Room {
 
     capacity,
 
-    join(transport: Transport): RoomPeer {
-      const slot = peers.length >= capacity ? NO_SLOT : freeSlot()
+    join(transport: Transport, prefer?: number): RoomPeer {
+      const slot = peers.length >= capacity ? NO_SLOT : freeSlot(prefer)
       joined += 1
       const peerId = options.peerId?.(joined) ?? `${id}-${joined}`
 
@@ -454,6 +492,7 @@ export function createRoom(options: RoomOptions): Room {
           rttMs: UNKNOWN_RTT,
           queued: 0,
           open: false,
+          send: (message: ServerMessage) => transport.send(frameOf(message)),
           close: (code = CloseReason.Normal, reason = '') => transport.close(code, reason),
         }
       }

@@ -180,6 +180,50 @@ describe('parseServerMessage', () => {
     })
   })
 
+  it('parses a drain notice, ticket and all', () => {
+    const ticket = `g1.${'a'.repeat(120)}.${'b'.repeat(43)}`
+    expect(
+      parseServerMessage(
+        JSON.stringify({ t: 'drain', room: 'H7K2Q9', retryAfterMs: 3000, resume: ticket }),
+      ),
+    ).toEqual({ t: 'drain', room: 'H7K2Q9', retryAfterMs: 3000, resume: ticket })
+
+    // An empty ticket is legal and means something specific: this deploy has no
+    // signing secret, so the match cannot be resumed — as against a frame that
+    // failed to parse, which would tell a client nothing at all.
+    expect(
+      parseServerMessage(JSON.stringify({ t: 'drain', room: 'H7K2Q9', retryAfterMs: 0, resume: '' })),
+    ).toMatchObject({ t: 'drain', resume: '' })
+  })
+
+  it('refuses a drain notice that is missing a field, or carrying a novel', () => {
+    for (const over of [
+      { room: undefined },
+      { retryAfterMs: undefined },
+      { resume: undefined },
+      { retryAfterMs: -1 },
+      { retryAfterMs: 1.5 },
+      // Bounded, because it arrives in a URL on the way back and a URL nobody
+      // bounded is a place to put a megabyte. `MAX_RESUME_TICKET_CHARS`.
+      { resume: 'x'.repeat(513) },
+      { room: 'H'.repeat(33) },
+    ]) {
+      const frame: Record<string, unknown> = {
+        t: 'drain',
+        room: 'H7K2Q9',
+        retryAfterMs: 3000,
+        resume: 'g1.a.b',
+        ...over,
+      }
+      for (const [key, value] of Object.entries(over)) {
+        if (value === undefined) delete frame[key]
+      }
+      expect(parseServerMessage(JSON.stringify(frame)), `accepted ${JSON.stringify(over)}`).toBe(
+        null,
+      )
+    }
+  })
+
   it('parses a ping, including the one before any round trip has completed', () => {
     expect(
       parseServerMessage(JSON.stringify({ t: 'ping', id: 3, tick: 900, rttMs: 42, queued: 2 })),

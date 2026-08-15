@@ -13,6 +13,10 @@ architecture and the sounds themselves are in
 licence rules are in [`docs/assets.md`](./docs/assets.md). Asset licences are
 recorded in [`credits.json`](./credits.json) and rendered to
 [`CREDITS.md`](./CREDITS.md), and a file that is not in there does not ship.
+Deploying is [`docs/deploy.md`](./docs/deploy.md) — the runbook — and
+[`NOTES.md`](./NOTES.md), the operational decisions it rests on: the region and
+its latency budget, the origin allowlist, the machine class and what it costs,
+and what a deploy does to a match in progress.
 
 ---
 
@@ -595,8 +599,10 @@ have to reach the same *process*, because a room is a `GameState` being advanced
 125 times a second and there is no version of that which shards; a registry in
 Redis would tell a second machine which code belonged to which room and have
 nothing useful to do with the answer. So v1 pins to one machine and the registry
-is definitionally consistent because there is only one of it. Scaling out is
-GLAD-G41FQ9.
+is definitionally consistent because there is only one of it. Scaling out — to a
+second region, which is the only thing that would justify it — needs a
+room-to-machine directory and a way to route an upgrade at it, and the argument
+for when that is worth building is `NOTES.md` §1.
 
 **The alphabet is `0123456789ABCDEFGHJKMNPQRSTVWXYZ`** — no `I`, `L` or `O`,
 because a person reading a code off a screen cannot tell them from `1` and `0`,
@@ -616,6 +622,47 @@ them their character set is right.
 
 Thirty bits, the guess rate at the concurrency this deploy admits, and the
 empty-room reaper that stops codes leaking are `docs/deploy.md`.
+
+### A deploy hands the score to the players, because there is nowhere else
+
+`packages/server/src/shutdown.ts` and `resume.ts` (GLAD-G41FQ9). The registry
+above has a consequence nobody wants and everybody has to live with: a room is a
+live world in *this* process's memory, so a machine going away destroys it.
+There is nothing on the next machine to reconnect *to*, which is why a reconnect
+policy alone could never have been enough.
+
+**So the score crosses and the world does not.** On SIGTERM every seated peer is
+handed a `ServerDrain` frame carrying its room code, when to come back, and a
+**resume ticket**: the room, the seat and the scoreline, HMAC-signed with a
+deploy-wide `RESUME_SECRET`. The client comes back with
+`?room=<code>&resume=<ticket>`, the next machine verifies it, rebuilds the room
+under the same code, and starts the next round from spawn points like any other.
+A resumed match is a duel continued, not a world restored — a world is not a
+thing two peers can be handed halfway through and agree about afterwards.
+
+**The ticket is signed for the same reason the round trip is measured on the
+server.** A number that decides something must not come from the party it
+decides for: an unsigned score crossing a machine inside a client would make
+"resume me at 2-0" a button. The secret is shared by every machine of the app,
+because the machine that reads a ticket is by construction never the one that
+minted it, and a per-process fallback would pass every test and work in
+production never.
+
+**`/healthz` is readiness and `/livez` is liveness, and they are not the same
+question.** The first is allowed to say no — draining, full, or the scheduler
+has not run a frame in two seconds — and a `503` takes the machine out of
+rotation for *new* connections while leaving the sockets already open alone.
+The second never fails on purpose: the only correct response to it failing is to
+kill the process, and killing a process because it is busy holding a duel is the
+failure `health.ts` exists to prevent. Wakeup jitter over budget deliberately
+does **not** make a machine unready — it is a machine class to change, not a
+machine to take out of rotation.
+
+**What the drain does not promise is to finish the round.** `kill_timeout` is
+30 s and a best-of-five runs for minutes. What it promises is that nobody is cut
+off silently: a 1001 rather than a 1006, and a ticket rather than a shrug. The
+reconnect policy on the other side of that seam — backoff, grace window,
+forfeit — is GLAD-DVDV6P's.
 
 ### Nothing but bytes crosses the loopback
 

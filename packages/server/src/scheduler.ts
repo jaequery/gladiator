@@ -241,6 +241,15 @@ export type SchedulerStats = {
   readonly budgetMs: number
   /** Whether {@link SchedulerStats.p99LatenessMs} is inside the budget. */
   readonly withinBudget: boolean
+  /**
+   * When the last frame ran, on this scheduler's clock. Zero before the first.
+   *
+   * Not a measure of quality — that is the lateness quantiles — but of
+   * *aliveness*: a machine whose scheduler last ran a frame two seconds ago is
+   * a machine that is up, listening, and not simulating anybody's match, which
+   * is exactly the state a liveness check cannot see. `health.ts` reads it.
+   */
+  readonly lastFrameMs: number
 }
 
 export type TickScheduler = {
@@ -373,6 +382,7 @@ export function createTickScheduler(options: SchedulerOptions): TickScheduler {
       // A scheduler that has not run is not "within budget" by luck; it has
       // nothing to say, and `frames` next to it is how a reader tells which.
       withinBudget: p99 <= budgetMs,
+      lastFrameMs,
     }
   }
 

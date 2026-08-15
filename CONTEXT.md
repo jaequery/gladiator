@@ -322,6 +322,26 @@ characters of Crockford base32 — the digits and the letters minus I, L, O and 
 `packages/server/src/roomCode.ts`; the guess rate at this deploy's concurrency
 is `docs/deploy.md`.
 
+**Drain** — what a machine does between SIGTERM and exiting
+(`packages/server/src/shutdown.ts`). Stops being ready, hands every seated
+player a **resume ticket**, closes the rooms with a 1001 "going away", and waits
+for the sockets — inside 20 s against `fly.toml`'s 30 s `kill_timeout`. It does
+not wait for the round to finish; what it promises is that nobody is cut off
+silently. `NOTES.md` §4 (GLAD-G41FQ9).
+
+**Resume ticket** — a match reduced to what can cross a machine: the room code,
+the seat, and the scoreline, HMAC-signed with a deploy-wide `RESUME_SECRET` and
+good for two minutes (`packages/server/src/resume.ts`). Signed because a score
+carried by a client is otherwise a score the client can choose. Handed back as
+`?resume=` on the next connection, where it rebuilds the room under the same
+code at the same score. A **world** never crosses — only a score.
+
+**Readiness** — "should new players be sent here", answered by `/healthz` with a
+200 or a 503 (`packages/server/src/health.ts`). False while draining, full, or
+not ticking. Deliberately not the same question as **liveness** (`/livez`),
+which never fails on purpose: the only correct response to *that* failing is to
+kill the process, and a busy process is holding two people's duel.
+
 **Tick scheduler** — the one timer on the machine
 (`packages/server/src/scheduler.ts`). Wakes ~62.5 times a second aiming at
 absolute boundaries rather than sleeping an interval, folds the elapsed
