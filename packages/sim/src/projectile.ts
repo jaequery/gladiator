@@ -39,8 +39,10 @@
 import { PLAYER_MAXS, PLAYER_MINS } from './bbox.ts'
 import type { CollisionWorld } from './collide.ts'
 import { applyDamage, radiusDamage } from './damage.ts'
+import type { TickHooks } from './kernel.ts'
 import { addScaledVec3, copyVec3, normalizeVec3, vec3 } from './math.ts'
 import type { MutVec3 } from './math.ts'
+import type { SelfSplashPolicy } from './splash.ts'
 import { EntityFlag, EntityKind, NO_ENTITY, removeEntity } from './state.ts'
 import type { EntityState, GameState } from './state.ts'
 import { TICK_INTERVAL_MS } from './tick.ts'
@@ -80,7 +82,13 @@ export function projectilePosition(out: MutVec3, projectile: EntityState, tick: 
  * next one — which is the prestep doing its job, and the reason a rocket jump
  * lands on the tick the button was pressed.
  */
-export function moveProjectiles(state: GameState, world: CollisionWorld): void {
+export function moveProjectiles(
+  state: GameState,
+  world: CollisionWorld,
+  hooks: TickHooks | null = null,
+): void {
+  const policy = hooks?.selfSplash ?? null
+
   // Backwards, because detonating removes entities from the array being walked.
   for (let i = state.entities.length - 1; i >= 0; i -= 1) {
     const rocket = state.entities[i]
@@ -115,32 +123,42 @@ export function moveProjectiles(state: GameState, world: CollisionWorld): void {
       }
     }
 
+    // Where this sub-step actually got to. `traceRay` already stopped
+    // `SURFACE_CLIP_EPSILON` short of a surface, so an explosion against a wall
+    // happens an eighth of a unit clear of it rather than inside it — where the
+    // occlusion test would find the wall between the blast and everything in
+    // the room.
     if (fraction === 1 && hit === null) {
-      copyVec3(rocket.origin, nextOrigin)
+      copyVec3(flightEnd, nextOrigin)
+    } else if (hit === null) {
+      copyVec3(flightEnd, flightTrace.endpos)
+    } else {
+      flightEnd[0] = rocket.origin[0] + (nextOrigin[0] - rocket.origin[0]) * fraction
+      flightEnd[1] = rocket.origin[1] + (nextOrigin[1] - rocket.origin[1]) * fraction
+      flightEnd[2] = rocket.origin[2] + (nextOrigin[2] - rocket.origin[2]) * fraction
+    }
 
+    // A predicting peer folds this segment into its answer about whether it may
+    // trust its own splash (`splash.ts`). Offered before the origin moves, so
+    // the pair is the segment that was swept, and offered on every sub-step
+    // including this rocket's first — which carries the 45-unit prestep, and is
+    // the whole flight of a rocket jump.
+    if (policy !== null) policy.observe(state, rocket, rocket.origin, flightEnd)
+
+    copyVec3(rocket.origin, flightEnd)
+
+    if (fraction === 1 && hit === null) {
       // The fuse. A rocket that runs out of time *explodes* where it is rather
       // than being quietly removed, which is Quake's `G_ExplodeMissile` and is
       // also the only version that cannot be used as a way to make a rocket
       // stop existing on one peer a tick before the other.
       if (rocket.expireTick >= 0 && rocket.expireTick <= state.tick) {
-        impactProjectile(state, world, rocket, null)
+        impactProjectile(state, world, rocket, null, policy)
       }
       continue
     }
 
-    // `traceRay` already stopped `SURFACE_CLIP_EPSILON` short of the surface,
-    // so an explosion against a wall happens an eighth of a unit clear of it
-    // rather than inside it — where the occlusion test would find the wall
-    // between the blast and everything in the room.
-    if (hit === null) {
-      copyVec3(rocket.origin, flightTrace.endpos)
-    } else {
-      rocket.origin[0] += (nextOrigin[0] - rocket.origin[0]) * fraction
-      rocket.origin[1] += (nextOrigin[1] - rocket.origin[1]) * fraction
-      rocket.origin[2] += (nextOrigin[2] - rocket.origin[2]) * fraction
-    }
-
-    impactProjectile(state, world, rocket, hit)
+    impactProjectile(state, world, rocket, hit, policy)
   }
 }
 
@@ -161,6 +179,7 @@ function impactProjectile(
   world: CollisionWorld,
   rocket: EntityState,
   hit: EntityState | null,
+  policy: SelfSplashPolicy | null = null,
 ): void {
   const def = weaponDef(rocket.weapon)
 
@@ -170,6 +189,14 @@ function impactProjectile(
   }
 
   if (def.splashDamage > 0) {
+    // The one question a predicting client is allowed to answer differently
+    // from the host, and it is asked about the shooter alone: everyone else in
+    // the blast is damaged exactly as they always were, because the uncertainty
+    // is about a launch this peer may be wrong to have predicted, not about the
+    // explosion.
+    const deferredId =
+      policy === null || policy.allow(state, rocket) ? NO_ENTITY : rocket.ownerId
+
     radiusDamage(
       state,
       world,
@@ -178,6 +205,8 @@ function impactProjectile(
       def.splashRadius,
       rocket.ownerId,
       hit === null ? NO_ENTITY : hit.id,
+      state.match.rules.selfDamage,
+      deferredId,
     )
   }
 
@@ -195,8 +224,9 @@ export function explodeProjectile(
   state: GameState,
   world: CollisionWorld,
   rocket: EntityState,
+  policy: SelfSplashPolicy | null = null,
 ): void {
-  impactProjectile(state, world, rocket, null)
+  impactProjectile(state, world, rocket, null, policy)
 }
 
 /**
@@ -204,5 +234,6 @@ export function explodeProjectile(
  * under the same single-threaded, synchronous guarantee as the rest of the sim.
  */
 const nextOrigin: MutVec3 = vec3()
+const flightEnd: MutVec3 = vec3()
 const impactDir: MutVec3 = vec3()
 const flightTrace = createTrace()

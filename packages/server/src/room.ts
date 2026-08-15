@@ -84,6 +84,7 @@ import {
   type MatchScore,
   type ServerMessage,
   type SpawnPlan,
+  type TickHooks,
   type Transport,
   type TransportMessage,
   type UserCmd,
@@ -92,6 +93,7 @@ import {
 import type { Clock } from './clock.ts'
 import { createClockSync, type ServerClockSync } from './clockSync.ts'
 import { createInputQueue, type InputQueue } from './inputQueue.ts'
+import { createLagCompensation, type LagCompStats } from './lagcomp.ts'
 import { NO_LOG, scopeToRoom, type Log } from './log.ts'
 import {
   CLOSE_BAD_FRAME,
@@ -229,6 +231,8 @@ export type RoomSnapshot = {
   readonly gaps: number
   /** Sub-steps in which some peer's buffer was empty and the fallback ran. */
   readonly starved: number
+  /** What lag compensation has done in this room. `lagcomp.ts`. */
+  readonly lagcomp: LagCompStats
 }
 
 export type Room = {
@@ -343,6 +347,29 @@ export function createRoom(options: RoomOptions): Room {
   const peers: PeerRecord[] = []
   let joined = 0
   let starved = 0
+
+  /**
+   * A second of the world's recent past, and the rewind a hitscan shot is judged
+   * through. `lagcomp.ts`.
+   *
+   * The round trip it reads is the one *this room* measured from a ping it
+   * minted itself — never a number a client sent, because a client that could
+   * report its own round trip could report a bigger one and be rewound further.
+   * A peer that has left, or one nobody has timed yet, reports `UNKNOWN_RTT`,
+   * which still rewinds by the interpolation delay: a client draws the opponent
+   * in the past from its very first snapshot, ping or no ping.
+   */
+  const lagcomp = createLagCompensation({
+    rttMsForSlot: (slot) =>
+      peers.find((peer) => peer.slot === slot)?.clockSync.rttMs ?? UNKNOWN_RTT,
+  })
+
+  /** Who this peer is, as far as a sub-step is concerned: the host. */
+  const hooks: TickHooks = { rewind: lagcomp.rewind }
+
+  // Tick zero, so a shot in the first sub-steps of a room has somewhere to
+  // rewind to rather than being judged against the present by accident.
+  lagcomp.record(state)
 
   /**
    * The commands for one sub-step, reused.
@@ -607,7 +634,16 @@ export function createRoom(options: RoomOptions): Room {
         // the *input* stream, so what is recorded is what `tick()` is handed
         // rather than what it produced. `sim/src/demo.ts`.
         recorder?.record(state, inputs)
-        simTick(state, inputs, world, plan)
+
+        simTick(state, inputs, world, plan, hooks)
+
+        // The lag-compensation history goes the other way round, *after* the
+        // sub-step, so the entry filed under tick *t* is where everybody was at
+        // the *end* of tick *t* — the same moment the snapshot for tick *t*
+        // describes, and therefore the same moment the shooter was drawing when
+        // they aimed. Recording it before the tick would put every rewind
+        // exactly one sub-step out.
+        lagcomp.record(state)
       }
 
       report()
@@ -661,6 +697,7 @@ export function createRoom(options: RoomOptions): Room {
       commands: peers.reduce((total, peer) => total + peer.session.commands, 0),
       gaps: peers.reduce((total, peer) => total + peer.session.gaps, 0),
       starved,
+      lagcomp: lagcomp.stats,
     }),
 
     demo: () => recorder?.finish(state) ?? null,

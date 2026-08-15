@@ -33,6 +33,7 @@ import {
   countSimEvents,
   createTrace,
   encodeDemo,
+  type EntityState,
   findPlayer,
   type GameState,
   hashState,
@@ -67,6 +68,7 @@ import { createEntityBuffer, createInterpolationClock } from './net/interpolate.
 import { createListenServer } from './net/listenServer.ts'
 import { createPredictor } from './net/prediction.ts'
 import { CorrectionBand, decayMsFor } from './net/reconcile.ts'
+import { createRocketPredictor } from './net/rocketPredict.ts'
 import { websocketTransport } from './net/websocketTransport.ts'
 import { type PlayerNetState, playerNetState } from './render/animState.ts'
 import {
@@ -534,10 +536,53 @@ async function boot(): Promise<void> {
   // past from real data, on a clock of its own; `renderOffset.ts` holds whatever
   // a correction moved and gives it back over a tenth of a second, *outside* the
   // state, because a world left half-corrected is the world the next replay
-  // starts from.
-  const predictor = createPredictor({ state, world: CLIENT_MAP.world, slot: LOCAL_SLOT })
+  // starts from. The 80 ms is bought back by lag compensation on the host, and
+  // `rocketPredict.ts` below is the one thing this tab is allowed to predict
+  // *about* it (GLAD-5QGO11).
   const opponentHistory = createEntityBuffer({ localSlot: LOCAL_SLOT })
   const opponentClock = createInterpolationClock()
+
+  /**
+   * Everywhere an opponent might be, as far as this tab can tell.
+   *
+   * Both ends of the uncertainty the self-splash predicate guards: where the
+   * newest authoritative state has them, and where they are being *drawn*, 80 ms
+   * further back. Refilled once a frame from the sample the renderer is about to
+   * use, so the predicate — which is asked per rocket per sub-step — is reading
+   * an array rather than re-running an interpolation. One frame of staleness on
+   * a deliberately conservative test is nothing.
+   */
+  const opponentOrigins: [number, number, number][] = []
+  const readOpponents = (drawn: readonly EntityState[]): void => {
+    opponentOrigins.length = 0
+    for (const entity of state.entities) {
+      if (entity.kind !== EntityKind.Player) continue
+      if (entity.slot === LOCAL_SLOT) continue
+      opponentOrigins.push([entity.origin[0], entity.origin[1], entity.origin[2]])
+    }
+    for (const entity of drawn) {
+      if (entity.kind !== EntityKind.Player) continue
+      opponentOrigins.push([entity.origin[0], entity.origin[1], entity.origin[2]])
+    }
+  }
+
+  // Which of our own rockets we are willing to be thrown by before the host has
+  // confirmed it. `net/rocketPredict.ts` argues the predicate; the client's
+  // whole share of `TickHooks` is this one answer.
+  const selfSplash = createRocketPredictor({
+    slot: LOCAL_SLOT,
+    opponents: () => opponentOrigins,
+    log: (line) => {
+      console.warn(line)
+    },
+  })
+
+  const predictor = createPredictor({
+    state,
+    world: CLIENT_MAP.world,
+    slot: LOCAL_SLOT,
+    hooks: { selfSplash },
+  })
   const renderOffset = createRenderOffset()
   /** Set by a hard snap; the frame loop throws the queued ticks away and clears it. */
   let snapped = false
@@ -906,11 +951,17 @@ async function boot(): Promise<void> {
     // the scripted stand-in. That stand-in is reached when nobody else is in
     // the snapshots at all, which is a page with no opponent on the other end
     // of it.
-    const drawnPlayers = opponentHistory
-      .sample(opponentClock.renderTick)
-      .entities.flatMap((entity) =>
-        entity.kind === EntityKind.Player ? [playerNetState(entity)] : [],
-      )
+    const drawn = opponentHistory.sample(opponentClock.renderTick).entities
+
+    // The self-splash predicate reads this on the *next* frame's ticks. Filled
+    // from the sample the picture is about to be drawn from, so "where they are
+    // drawn" means literally that rather than a second interpolation that could
+    // disagree with the first.
+    readOpponents(drawn)
+
+    const drawnPlayers = drawn.flatMap((entity) =>
+      entity.kind === EntityKind.Player ? [playerNetState(entity)] : [],
+    )
     const opponents: PlayerNetState[] =
       drawnPlayers.length > 0 ? drawnPlayers : dummy ? [dummyAt(state.tick, alpha)] : []
 
@@ -1016,6 +1067,14 @@ async function boot(): Promise<void> {
       net: netNow,
       corrected: predictor.stats.soft + predictor.stats.loud + predictor.stats.snaps,
       pending: predictor.pending,
+      // The two halves, from the two things that can each only know one of
+      // them: the predicate says how often it declined to predict a launch, and
+      // the ledger says how often a launch it *did* predict turned out to be
+      // one the host disagreed with.
+      selfSplash: {
+        deferred: selfSplash.stats.suppressed,
+        mispredicted: predictor.mispredicts.stats.selfSplash,
+      },
     })
 
     // The quick-match panel, on the same beat: a wait is quoted in whole
