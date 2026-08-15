@@ -134,6 +134,23 @@ export { formatDiagnostics, validateMap } from './map/validate.ts'
 export type { MapDiagnostic } from './map/validate.ts'
 
 export {
+  DUEL_SLOTS,
+  RESPAWN_DELAY_TICKS,
+  SIGHT_TARGETS,
+  SPAWN_HEALTH,
+  SPAWN_PROTECTION_TICKS,
+  buildSpawnPlan,
+  isSpawnProtected,
+  playersOverlap,
+  selectSpawnPair,
+  spawnPlayer,
+  spawnRound,
+  spawnSeparation,
+  spawnsAreBlind,
+} from './match/spawn.ts'
+export type { SpawnEvent, SpawnPair, SpawnPlan } from './match/spawn.ts'
+
+export {
   addScaledVec3,
   angleVectors,
   copyVec3,

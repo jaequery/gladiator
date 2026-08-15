@@ -37,8 +37,18 @@ The reason self-damage exists.
 mid-air, exploiting how Quake's `pmove` projects acceleration onto velocity.
 Along with rocket-jumping, the skill ceiling of the movement.
 
-**Telefrag** — spawning inside another player and killing them by arrival.
-Spawn selection has to have a policy about it (GLAD-AKODBZ).
+**Telefrag** — spawning inside another player and killing them by arrival. The
+policy is Quake's: the arrival lives and the occupant dies, so that camping a
+spawn pad is the worst idea in the arena. `docs/physics-spec.md` §6.4.
+
+**Spawn plan** — the pairs of a map's spawn points a round may start on: far
+enough apart, and unable to see each other. Worked out once per map from the
+geometry (`match/spawn.ts`), so that a round start is two draws from the seeded
+PRNG and no tracing at all. §6.2.
+
+**Spawn protection** — brief invulnerability after spawning. Gladiator has
+**none**, deliberately: a round-based duel starts both players out of sight of
+each other, so there is nothing for it to protect against. §6.4.
 
 ---
 

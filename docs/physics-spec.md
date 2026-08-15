@@ -18,6 +18,7 @@ messages. Most of them are still to be written:
 | 3.x | Weapons: rockets, splash, railgun             | GLAD-0QWRYK  |
 | 4.x | The map format, its baker and its validator   | **below**    |
 | 5.x | Reachability: the climbs a level is built around | **below**  |
+| 6.x | Spawning: selection, facing, telefrag, protection | **below** |
 
 ---
 
@@ -947,3 +948,91 @@ a player arriving at a ledge face on the way down mantles up to `STEP_SIZE`
 above their apex. That is measured, not assumed: the test asserts each technique
 gets on to a ledge of exactly its height and fails on one
 `STEP_SIZE + 8` above it.
+
+---
+
+## §6 Spawning
+
+`packages/sim/src/match/spawn.ts`. Where a round puts the two players, which
+way they are looking, and what happens when somebody is already standing there.
+
+A map carries spawn points and the bake proves each one is a legal place to
+stand (§4.4). None of that says which two of them a round starts on, and "the
+first two, every time" is the answer that ships if nobody writes one down.
+
+### §6.1 The constants
+
+| Constant | Value | Meaning |
+| -------- | ----- | ------- |
+| `SPAWN_HEALTH` | 100 | what every player stands up with, every round |
+| `SPAWN_PROTECTION_TICKS` | **0** | no invulnerability — see §6.4 |
+| `RESPAWN_DELAY_TICKS` | 375 = `3 · TICK_RATE` | three seconds between rounds |
+| `MIN_SPAWN_SEPARATION` | 512 | the floor a *pair* has to clear (§4.4) |
+| `SIGHT_TARGETS` | 9 points | the eye and the eight corners of the box |
+
+The feet go `SURFACE_CLIP_EPSILON` above the point, not on it: a spawn names a
+floor height, and a resting body sits an eighth of a unit clear of the floor
+(§2.2).
+
+### §6.2 Selection is a plan plus two dice rolls
+
+`buildSpawnPlan` asks the geometry once, at load: which *pairs* of a map's
+spawns are at least `MIN_SPAWN_SEPARATION` apart **and** cannot see each other.
+A round start is then two draws from the seeded PRNG carried in `GameState` —
+which pair, then which end each player gets — and nothing else. That is what
+makes a replay reproduce a match: the draws come out of state that is hashed,
+cloned and rewound with everything else.
+
+The second draw is not decoration. Without it the same pair seats the same
+player in the same corner forever, and a map that is only *nearly* symmetric
+hands one of them a small permanent advantage. It is a coin flip rather than an
+alternation because alternation is a rule a player can count rounds against.
+
+A map with no legal pair does not bake: `no-blind-spawn-pair` (§4.4).
+
+### §6.3 What "cannot see each other" means
+
+A hitscan from the eye to any of the nine `SIGHT_TARGETS` on the other player's
+box, in **both** directions, using the same `traceRay` the railgun will use.
+
+Eye-to-eye alone is the version everyone writes first, and it calls two spawns
+blind when one player's shoulder is in plain view around a pillar. The corners
+are where a partial sightline appears first, so they are what is asked about.
+Both directions, because the eye is 50 units up and the body it is looking for
+is 56 tall, so a ledge can hide one of them and not the other.
+
+It is a sampling and not a proof — a world concave enough to show only the
+middle of a box would fool it — but it is the question that matters, asked with
+the trace that will answer it in a duel.
+
+### §6.4 Telefrag, and no spawn protection
+
+**Arriving on an occupied point kills the occupant.** Quake's answer, and the
+right one: refusing the spawn or nudging the arrival aside would make standing
+on a spawn pad a tactic, and a player who can deny an opponent their spawn has
+won the round without firing. Killing the squatter makes camping a spawn the
+worst idea in the arena.
+
+At a duel's round start it is unreachable by construction. `spawnRound` moves
+*both* bodies before either is allowed to kill anything, so a player still
+standing where the last round left them is a body that has not been moved yet
+rather than an occupant. Telefrag is the policy for a spawn at any other moment
+— a reconnect (GLAD-DVDV6P), or a mode with more than two players.
+
+**Spawn protection is zero, deliberately.** The format is the argument: rounds
+start both players at a known instant, out of each other's sight, half an arena
+apart. There is no spawn to camp and no spawn to be killed on, so invulnerability
+would protect nobody and would instead hand whoever charges first a free
+approach. The seam is `isSpawnProtected`, which reads `spawnTick` — already
+carried, encoded and hashed — so turning it on later is one number rather than
+an audit of every place a player can be hurt.
+
+### §6.5 Facing
+
+A player spawns with `angles = [0, spawn.yaw, 0]`: level, no roll, looking the
+way the map says. The kernel overwrites an entity's angles from the next
+`UserCmd`, so this is an *instruction* the state carries rather than a value
+that persists — the peer with a mouse on it has to adopt it into its own view
+angles, which `packages/client/src/main.ts` does once, at boot. Without that,
+the first command a player sends spins them back to due north on the frame
+after they spawn.

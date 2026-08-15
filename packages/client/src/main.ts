@@ -18,6 +18,7 @@
  * would be a second opinion about what a frame is.
  */
 import {
+  ANGLE_UNITS_PER_DEGREE,
   EntityFlag,
   SKELETON_SEED,
   TICK_RATE,
@@ -223,6 +224,20 @@ async function boot(): Promise<void> {
   // from the same artifact. `SKELETON_ARENA` stays as the sim's own default and
   // as the golden replay's world.
   const state = createMapState(CLIENT_MAP.source, SKELETON_SEED)
+
+  // Adopt the yaw the spawn point was authored with.
+  //
+  // The camera is a puppet of the simulation, but *view angles* are the one
+  // piece of float state the client is authoritative over — they go into the
+  // `UserCmd` the server lag-compensates against, which is why the input
+  // controller owns them (`input/controller.ts`). The kernel writes an
+  // entity's angles from whatever command arrives next, so a spawn's facing is
+  // an instruction the state carries and the peer with a mouse on it has to
+  // obey: without this line the first command a player sends spins them back
+  // to due north on the frame after they spawn. Policy is `match/spawn.ts`.
+  const spawned = findPlayer(state, LOCAL_SLOT)
+  if (spawned !== null) input.angles.yawDegrees = spawned.angles[1] / ANGLE_UNITS_PER_DEGREE
+
   // `tick()` advances the world in place, so the frame before is a *copy* —
   // `AGENTS.md` says this out loud because holding a reference instead is a bug
   // that only shows up as a rendering stutter.
