@@ -41,7 +41,7 @@ import type { Vec3 } from './axis.ts'
 import { PLAYER_MAXS, PLAYER_MINS, PLAYER_VIEW_HEIGHT } from './bbox.ts'
 import type { CollisionWorld } from './collide.ts'
 import { applyDamage, knockbackSpeed } from './damage.ts'
-import type { TickInputs } from './kernel.ts'
+import type { TickHooks, TickInputs } from './kernel.ts'
 import { addScaledVec3, angleVectors, snapVector, vec3 } from './math.ts'
 import type { MutVec3 } from './math.ts'
 import { EntityFlag, EntityKind, NO_SLOT, spawnEntity } from './state.ts'
@@ -220,7 +220,12 @@ export function muzzlePoint(out: MutVec3, entity: EntityState, forward: Vec3): M
  * into. Fire first and `PM_CheckJump`, which *assigns* `velocity[2]`, would
  * throw the explosion away and there would be no such thing as a rocket jump.
  */
-export function fireWeapons(state: GameState, inputs: TickInputs, world: CollisionWorld): void {
+export function fireWeapons(
+  state: GameState,
+  inputs: TickInputs,
+  world: CollisionWorld,
+  hooks: TickHooks | null = null,
+): void {
   // Indexed, because firing appends rockets to the same array.
   const count = state.entities.length
 
@@ -245,7 +250,7 @@ export function fireWeapons(state: GameState, inputs: TickInputs, world: Collisi
     if ((cmd.buttons & BUTTON_ATTACK) === 0) continue
     if (state.tick < entity.nextFireTick) continue
 
-    fireWeapon(state, world, entity, entity.weapon)
+    fireWeapon(state, world, entity, entity.weapon, hooks)
   }
 }
 
@@ -254,12 +259,34 @@ export function fireWeapons(state: GameState, inputs: TickInputs, world: Collisi
  *
  * Exported because the bot's aim tests and the netcode's replay both want to
  * fire a shot without assembling a `UserCmd` and a tick around it.
+ *
+ * ## The ray comes from the command, by construction
+ *
+ * `shooter.angles` is not a value this entity accumulated — the movement phase,
+ * earlier in this same sub-step, *assigned* it from `cmd.pitch` and `cmd.yaw`
+ * (`kernel.ts`). So the direction below is literally the aim the player had on
+ * screen when they pressed the button, which is the only aim it would be fair to
+ * judge a lag-compensated shot against: rewinding the target to where the
+ * shooter saw them, and then firing down a ray the shooter did not choose, would
+ * compensate half of one problem.
+ *
+ * ## Where the rewind goes, and where it deliberately does not
+ *
+ * Only the hitscan runs inside it. A rocket is compensated in *where and when it
+ * is born* — the muzzle is the shooter's own position at the tick their command
+ * executed, and `spawnTick` is that tick — and never afterwards: it is never
+ * forward-simulated by the shooter's latency (150 ms at 900 qu/s would teleport
+ * it 135 units, past its own splash radius and through thin geometry) and the
+ * players it flies at are never rewound (`projectile.ts` collides it against
+ * present-tick hitboxes, or you would be hit by rockets that visibly passed
+ * behind you).
  */
 export function fireWeapon(
   state: GameState,
   world: CollisionWorld,
   shooter: EntityState,
   weapon: number,
+  hooks: TickHooks | null = null,
 ): void {
   const def = weaponDef(weapon)
 
@@ -272,8 +299,25 @@ export function fireWeapon(
   angleVectors(shooter.angles[0], shooter.angles[1], 0, aimForward, null, null)
   muzzlePoint(muzzle, shooter, aimForward)
 
-  if (def.speed > 0) spawnProjectile(state, shooter, def, muzzle, aimForward)
-  else fireRailgun(state, world, shooter, def, muzzle, aimForward)
+  if (def.speed > 0) {
+    spawnProjectile(state, shooter, def, muzzle, aimForward)
+    return
+  }
+
+  const rewind = hooks?.rewind ?? null
+  if (rewind === null) {
+    fireRailgun(state, world, shooter, def, muzzle, aimForward)
+    return
+  }
+
+  // One closure per rail shot — 1500 ms of refire apart, so not the steady
+  // state this package allocates nothing in. It is worth it for the shape:
+  // `HitscanRewind` owns the `finally`, so a rewind cannot be left half-undone
+  // by a trace that threw. The scratch vectors it closes over are safe because
+  // the call is synchronous and nothing between here and the trace writes them.
+  rewind(state, shooter, () => {
+    fireRailgun(state, world, shooter, def, muzzle, aimForward)
+  })
 }
 
 /* --------------------------------------------------------------------------

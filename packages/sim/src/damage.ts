@@ -38,7 +38,7 @@ import type { MutVec3 } from './math.ts'
 import { resolveDamage } from './match/selfDamage.ts'
 import type { SelfDamageMode } from './match/selfDamage.ts'
 import { isSpawnProtected } from './match/spawn.ts'
-import { EntityFlag, EntityKind } from './state.ts'
+import { EntityFlag, EntityKind, NO_ENTITY } from './state.ts'
 import type { EntityState, GameState } from './state.ts'
 import { TICK_INTERVAL_MS } from './tick.ts'
 import { createTrace, traceRay } from './trace.ts'
@@ -277,6 +277,15 @@ const damageTrace = createTrace()
  * rocket to the chest deals 100 and not 200. Pass `NO_ENTITY` when there was no
  * direct hit.
  *
+ * `deferredId` is a *second* entity this explosion must not reach, and it exists
+ * for exactly one caller: a predicting client that could not prove its own
+ * rocket's flight was clear passes the shooter's own id, which leaves that share
+ * of the blast to arrive in the next snapshot instead of being guessed at
+ * (`splash.ts`). It is `NO_ENTITY` on the authoritative host, which is never
+ * uncertain about a splash it just computed. Two ids rather than one because
+ * both can apply at once: a rocket that hit the opponent in the chest ignores
+ * *them* for splash and may still owe its owner a launch.
+ *
  * Returns the number of players it damaged.
  */
 export function radiusDamage(
@@ -288,6 +297,7 @@ export function radiusDamage(
   attackerId: number,
   ignoreId: number,
   mode: SelfDamageMode = state.match.rules.selfDamage,
+  deferredId: number = NO_ENTITY,
 ): number {
   if (radius < 1) return 0
 
@@ -296,6 +306,7 @@ export function radiusDamage(
   for (const target of state.entities) {
     if (target.kind !== EntityKind.Player) continue
     if (target.id === ignoreId) continue
+    if (target.id === deferredId) continue
     if ((target.flags & EntityFlag.Dead) !== 0) continue
 
     const dist = distanceToBox(point, target.origin, PLAYER_MINS, PLAYER_MAXS)

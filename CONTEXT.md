@@ -378,7 +378,28 @@ The *whole* state, because a client that rebuilt only the entities could draw
 the world and could not reproduce its hash.
 
 **Lag compensation** — the server rewinding other players to where the shooter
-saw them when deciding whether a shot hit (GLAD-5QGO11).
+saw them when deciding whether a hitscan shot hit. The distance back is
+`clamp(rtt / 2 + interpDelay, 0, 300 ms)` — half the round trip because that is
+how stale the shooter's newest snapshot was, plus the **interpolation delay**
+because that is how much further back they were drawing it. The arithmetic and
+its two constants are `packages/sim/src/lagcomp.ts`, so client and server cannot
+hold different opinions about them; the history buffer and the rewind are
+`packages/server/src/lagcomp.ts`. GLAD-5QGO11.
+
+**Rewind seam** — how a rewind reaches the simulation: `TickHooks.rewind`, a
+function that is handed the shot to take and owns the `finally` that puts every
+hitbox back. Only the *target* moves, only for the length of one hitscan trace,
+and only `origin` — the damage the shot dealt belongs to the present. A rocket
+is never rewound at all: it is compensated in where and when it is *born* and
+collides against present-tick hitboxes for the rest of its flight.
+
+**Predicted self-splash** — a client applying its own rocket's splash to itself
+before the host has confirmed it, so a rocket jump launches on the frame the
+button was pressed instead of one round trip later. Allowed only for a rocket
+whose flight stayed more than 32 units clear of every opponent hitbox
+(`packages/sim/src/splash.ts`); otherwise that one rocket falls back to
+server-only, which is what Quake 3 does for every rocket. The client's half is
+`packages/client/src/net/rocketPredict.ts`. GLAD-5QGO11.
 
 **Weapon** — which of the two an entity is holding, as a netstate field
 (`packages/sim/src/weapon.ts`). What they *do* is `weapons.ts` and

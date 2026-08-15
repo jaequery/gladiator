@@ -47,6 +47,8 @@
  * moonwalking.
  */
 import {
+  INTERP_DELAY_MS,
+  INTERP_DELAY_TICKS,
   TICK_INTERVAL_MS,
   applyWireState,
   cloneEntity,
@@ -59,18 +61,16 @@ import {
 import { lerp, lerpAngleUnits } from '../render/view.ts'
 
 /**
- * How far behind the newest snapshot the opponent is drawn, in milliseconds.
+ * How far behind the newest snapshot the opponent is drawn, in milliseconds,
+ * and the same number in ticks.
  *
- * 80 ms is ten ticks: enough to hold the pair of states an interpolation needs
- * through the jitter of a real link, and little enough that lag compensation
- * has a small window to rewind. Quake 3 shipped 50 ms and Source ships 100;
- * this sits between them because the tick rate is 125 Hz rather than 20, so a
- * given millisecond of buffer buys more states.
+ * Re-exported rather than defined here, and that move is the point: it stopped
+ * being this module's private constant the moment the host started rewinding by
+ * it. `sim/src/lagcomp.ts` owns it now, because the server may not import the
+ * client and two copies of this number would drift apart by one edit — with the
+ * symptom being rails that miss by a fixed amount nobody could account for.
  */
-export const INTERP_DELAY_MS = 80
-
-/** {@link INTERP_DELAY_MS} in ticks. Exact: 8 divides 80. */
-export const INTERP_DELAY_TICKS = INTERP_DELAY_MS / TICK_INTERVAL_MS
+export { INTERP_DELAY_MS, INTERP_DELAY_TICKS }
 
 /**
  * How far past the newest snapshot a position may be extrapolated, in

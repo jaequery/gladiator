@@ -41,6 +41,7 @@ import {
   type CollisionWorld,
   type GameState,
   type ServerSnapshot,
+  type TickHooks,
   type UserCmd,
   type Vec3,
 } from '@gladiator/sim'
@@ -141,12 +142,24 @@ export type PredictorOptions = {
   readonly world: CollisionWorld
   /** The player slot this client steers. */
   readonly slot: number
+  /**
+   * Who this peer is, for both the live tick and the replay
+   * (`sim/src/kernel.ts`).
+   *
+   * A client's half of it is one thing: whether it may apply its own rocket's
+   * splash to itself before the host has confirmed it
+   * (`net/rocketPredict.ts`). There is no rewind here — a client has no
+   * authority to judge a hitscan shot with, and predicts one against the world
+   * it has.
+   */
+  readonly hooks?: TickHooks | null
   readonly capacity?: number
 }
 
 export function createPredictor(options: PredictorOptions): Predictor {
   const { state, world, slot } = options
   const capacity = options.capacity ?? PENDING_CAPACITY
+  const hooks = options.hooks ?? null
 
   // A plain array used as a queue rather than an index-wrapped ring. The
   // acknowledged prefix is spliced off the front, which is O(n) in a handful of
@@ -204,7 +217,7 @@ export function createPredictor(options: PredictorOptions): Predictor {
         previousOrigin[2] = before[2]
       }
 
-      simTick(state, inputsFor(cmd), world)
+      simTick(state, inputsFor(cmd), world, null, hooks)
       stats.predicted += 1
 
       if (pending.length >= capacity) {
@@ -227,7 +240,7 @@ export function createPredictor(options: PredictorOptions): Predictor {
       }
       if (acked > 0) pending.splice(0, acked)
 
-      const correction = reconcile({ state, world, slot, snapshot, pending })
+      const correction = reconcile({ state, world, slot, snapshot, pending, hooks })
       if (correction === null) {
         stats.rejected += 1
         return null

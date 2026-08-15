@@ -104,7 +104,17 @@ describe('the host is isomorphic', () => {
     // purpose. `inputQueue.ts` joined it with the tick scheduler: a room drains
     // one command per peer per sub-step, and the buffer that holds them has to
     // run in a tab as well.
-    expect(names).toEqual(['clock.ts', 'clockSync.ts', 'inputQueue.ts', 'room.ts', 'session.ts'])
+    // `lagcomp.ts` joined it with lag compensation, for the same reason — a
+    // listen server judges a railgun shot exactly as Fly does, or single-player
+    // would be a second set of rules after all.
+    expect(names).toEqual([
+      'clock.ts',
+      'clockSync.ts',
+      'inputQueue.ts',
+      'lagcomp.ts',
+      'room.ts',
+      'session.ts',
+    ])
   })
 
   it('names nothing that would pin it to one runtime', () => {

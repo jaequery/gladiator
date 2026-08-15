@@ -675,7 +675,7 @@ an engineering one:
 
 **The server pings and the client echoes.** Whoever sends the ping holds the
 stopwatch, and the stopwatch has to be the server's — round-trip time decides
-how far lag compensation rewinds the world (GLAD-5QGO11), so a client that could
+how far lag compensation rewinds the world (below), so a client that could
 report its own RTT could report a bigger one and be handed extra rewind: it
 would shoot at where you *were* and win duels it did not win. `ClientPong`
 therefore carries **nothing but the id**, and there is deliberately no timestamp
@@ -836,8 +836,10 @@ it is over exactly when it says it is.
 You have no knowledge of a remote player's future input, so they are drawn
 80 ms in the past from real data, between two states the server actually
 produced. The cost — you shoot at where they were — is paid back by lag
-compensation rewinding them to exactly there (GLAD-5QGO11). The two are halves
-of one design.
+compensation rewinding them to exactly there (**Lag compensation, and predicted
+self-splash**, below). The two are halves of one design, and the 80 ms is one
+number in one place — `sim/src/lagcomp.ts` — because the host rewinds by exactly
+what this draws by.
 
 **The interpolation clock is its own clock and it is slewed.** Rendering at
 `newestSnapshotTick - delay` directly is the classic mistake: the newest tick
@@ -938,6 +940,138 @@ uncontrolled input stream to a comparison that is about one. Two peers in one
 room over two real sockets, with a match played to a decision, is
 `server/src/duel.test.ts`; entity interpolation is `interpolate.test.ts` against
 a real simulated trajectory on a jittery delivery schedule.
+
+---
+
+## Lag compensation, and predicted self-splash
+
+`packages/sim/src/lagcomp.ts` and `splash.ts` (the arithmetic and the two seams),
+`packages/server/src/lagcomp.ts` (the history and the rewind),
+`packages/client/src/net/rocketPredict.ts` (the predicate). GLAD-5QGO11.
+
+The section above ends with a cost: the opponent is drawn 80 ms in the past, so
+you shoot at where they were. This is where that is paid back, and where the one
+thing a client is allowed to guess about its own rocket is bounded.
+
+### `TickHooks` — the third thing `tick()` is handed and never writes
+
+Beside the `CollisionWorld` and the `SpawnPlan`, and unlike both of them: those
+are functions of the *map*, and this is a function of **who you are**.
+
+| Hook | Who fills it in | What it is for |
+| ---- | --------------- | -------------- |
+| `rewind` | the host | put the world back the way the shooter saw it, for one hitscan trace |
+| `selfSplash` | a predicting client | decline to be thrown by a rocket it cannot vouch for |
+
+Neither peer can do the other's, and neither is something the simulation could
+decide for itself. `null` — the default everywhere — is the simulation exactly as
+it was before any of this existed, which is why adding the parameter moved no
+hash in `determinism.test.ts`.
+
+### How far back, and why it is that number
+
+```
+viewTime = serverNow - clamp(rtt / 2 + INTERP_DELAY_MS, 0, MAX_REWIND_MS)
+```
+
+Half the round trip is how stale the newest snapshot the shooter had was; the
+interpolation delay is how much further back they were drawing it. Together they
+are the age of the picture that was aimed at.
+
+**`INTERP_DELAY_MS` lives in `packages/sim`.** It used to be
+`client/net/interpolate.ts`'s private constant and stopped being one the moment
+the host started rewinding by it — `packages/server` may not import the client,
+so two copies would drift apart by one edit and the symptom would be rails that
+miss by a fixed amount nobody could account for.
+
+**The round trip is the server's measurement and there is no path for any
+other.** `ClientPong` carries nothing but an id, on purpose (`protocol.ts`): a
+client that could report its own round trip could report a bigger one, be
+rewound further, and win duels by shooting at where you used to be. The 300 ms
+cap is a second line behind that one — at 120 ms a strafe-jumping target is 42
+units from where they are drawn, and past about a third of a second "I was behind
+cover" and "I was shot" stop being distinguishable to the person who was hit.
+
+Three details in the implementation are decisions rather than mechanics:
+
+- **The sample is interpolated, not snapped.** `rewindTicksFor` is deliberately
+  fractional and the ring reads between the two entries either side of it.
+  Snapping to the nearest recorded tick throws away up to half a sub-step of the
+  target's motion — 1.28 units at run speed, more than twice that on a strafe
+  jump — for a lerp that costs nothing.
+- **Only the target moves, and only `origin`.** The shooter is predicting
+  themselves and is effectively in the present. Health, velocity and the
+  knockback timer are *effects* of the shot and belong to it; restoring them
+  would be undoing the shot.
+- **The restore is a `finally`, and the seam's shape is what forces it.**
+  `HitscanRewind` takes the shot as a function rather than being a `begin`/`end`
+  pair, so there is exactly one place a rewind can be left half-undone. An
+  exception escaping mid-trace would not crash anything — it would quietly play
+  the rest of the match with one body 200 ms in the past.
+
+**A rocket is compensated in where and when it is born, and never again.** The
+muzzle is the shooter's own position at the sub-step their command executed and
+`spawnTick` is that sub-step, so both peers evaluate the identical closed form
+(`projectile.ts`). It is never forward-simulated by the shooter's latency — at
+900 qu/s, 150 ms would teleport it 135 units, past its own splash radius and
+through thin geometry — and the players it flies at are never rewound, or you
+would be hit by rockets that visibly passed behind you.
+
+### The one thing a client may guess about its own rocket
+
+Quake 3 predicts no self-knockback at all: a rocket jump launches you one round
+trip late. This client can do better, because it runs the identical `tick()` and
+already knows what its own rocket is about to do — but only when the flight is
+genuinely unobstructed, and **that clause is load-bearing**.
+
+You draw the opponent 80 ms in the past, so your rocket can pass through empty
+space on your screen and clip them on the host, which detonates it short,
+somewhere your splash never reaches. You predicted a 500 qu/s launch and the
+authoritative world gives you none of it; at 150 ms the accumulated error reaches
+about 115 units, a whisker under the hard-snap threshold. The failure mode is not
+a small rubber band — it is *the player teleporting out of the air*, on the one
+manoeuvre they were concentrating hardest on.
+
+So: **predict self-splash only when the rocket's path stayed more than 32 units
+clear of every opponent hitbox over its entire flight.** Otherwise that one
+rocket falls back to server-only, which is a delay rather than a lie.
+
+- **The clearance is measured by fattening the target's box**, not by a
+  segment-to-box distance: "did this come within 32 units" becomes "would a
+  rocket with a 32-unit hull have hit it", which is `rayBoxFraction` — the same
+  code the real rocket is tested against, so the two cannot fall out of step. It
+  over-approximates at the corners, and that error is deliberately in the
+  direction that refuses a prediction rather than allows one.
+- **It is a fold over the flight, not a forecast.** The opponent's future
+  positions are exactly what a client does not have; it does not need them,
+  because self-splash is applied at *detonation*, by which time every segment has
+  already been checked against where the opponent actually was.
+- **The answer is frozen once given.** Reconciliation re-flies a rocket every
+  time a snapshot lands and the opponent has moved in between, so a re-evaluated
+  predicate would make a launch appear and disappear over successive frames —
+  a worse artefact than the one it prevents.
+- **Only the shooter's share is deferred.** Everybody else in the blast is
+  damaged as normal (`radiusDamage`'s `deferredId`); the uncertainty is about a
+  launch, not about the explosion.
+
+**The knockback window has no clock in it.** `knockbackTicks` is set by the
+detonation tick and carried in the wire state, so a client that predicted the
+launch arms it on the same tick the host does, and a client that deferred it
+adopts the host's number and counts it down by exactly the sub-steps it replays
+on top. Nothing anywhere in that path is a duration in milliseconds.
+
+**A suppressed splash is a deliberate, bounded disagreement with the host**, and
+it will show up in the hash echo for the ticks between the detonation and the
+snapshot that corrects it. That is what the fallback *is*.
+
+**Mispredicts are counted separately, and the attribution is a heuristic.** A
+snapshot carries the result of the host's splash and never its reasoning, so
+nothing on the wire says "your launch was refused"; what there is, is the
+correction that follows. A Loud or Snap band inside the knockback window of a
+predicted launch is counted as one and logged on its own line, kept apart from
+the general correction counters precisely so it can be read as the estimate it
+is. The diagnostics panel shows *deferred* and *mispredicted* as two numbers,
+because the first is the mechanism working and the second is it being wrong.
 
 ---
 
