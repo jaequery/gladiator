@@ -13,6 +13,8 @@ import { writeF64, writeI32, writeU32, writeU8, writtenBytes } from './encoding.
 import type { ByteWriter } from './encoding.ts'
 import { createWriter, resetWriter } from './encoding.ts'
 import { hashBytes } from './hash.ts'
+import { DEFAULT_MATCH_RULES, cloneMatchState, createMatchState } from './match/match.ts'
+import type { MatchRules, MatchState } from './match/match.ts'
 import { vec3 } from './math.ts'
 import type { MutVec3 } from './math.ts'
 import { seedRng } from './rng.ts'
@@ -82,6 +84,16 @@ export type EntityState = {
   angles: MutVec3
   health: number
   /**
+   * Armour, in points. Absorbs 66% of every hit until it runs out.
+   *
+   * A second pool rather than more health, because the two are spent at
+   * different rates and the difference is the game: a player on 100/100 dies to
+   * two rockets, and a player who has rocket-jumped their armour away dies to
+   * one. There is nothing on the map that restores it — armour is a round's
+   * worth of budget, and `match/selfDamage.ts` is where it is spent.
+   */
+  armor: number
+  /**
    * The weapon in this entity's hands, or for a rocket, the weapon that fired
    * it. `weapon.ts`.
    *
@@ -143,6 +155,16 @@ export type GameState = {
   tick: number
   /** The PRNG stream. One uint32; see `rng.ts`. */
   rng: RngState
+  /**
+   * The round, the score and the rules. `match/match.ts`.
+   *
+   * Always present, never null: a world with no rounds in it is a match in
+   * {@link MatchPhase.Warmup}, which is a state the machine already has, rather
+   * than a special case every reader has to test for. It is in `GameState` and
+   * therefore encoded, hashed, cloned and rewound with everything else — which
+   * is what makes a replay reproduce the whole match and not just the physics.
+   */
+  match: MatchState
   /** The id the next spawn will take. Ids are never reused. */
   nextEntityId: number
   /**
@@ -157,9 +179,21 @@ export type GameState = {
   entities: EntityState[]
 }
 
-/** A fresh, empty world. */
-export function createGameState(seed: number): GameState {
-  return { tick: 0, rng: seedRng(seed), nextEntityId: 1, entities: [] }
+/**
+ * A fresh, empty world, with a match sitting in warmup.
+ *
+ * `rules` is hashed with the rest of the state, so two peers that were built
+ * with different round rules disagree at tick zero rather than at the first
+ * rocket jump.
+ */
+export function createGameState(seed: number, rules: MatchRules = DEFAULT_MATCH_RULES): GameState {
+  return {
+    tick: 0,
+    rng: seedRng(seed),
+    match: createMatchState(rules),
+    nextEntityId: 1,
+    entities: [],
+  }
 }
 
 /** Everything about a new entity except its identity and its birthday. */
@@ -171,6 +205,7 @@ export type EntityInit = {
   velocity?: MutVec3
   angles?: MutVec3
   health?: number
+  armor?: number
   weapon?: Weapon
   lastFireTick?: number
   knockbackTicks?: number
@@ -191,6 +226,7 @@ export function spawnEntity(state: GameState, init: EntityInit): EntityState {
     velocity: init.velocity ?? vec3(),
     angles: init.angles ?? vec3(),
     health: init.health ?? 0,
+    armor: init.armor ?? 0,
     weapon: init.weapon ?? Weapon.None,
     lastFireTick: init.lastFireTick ?? NEVER_FIRED,
     knockbackTicks: init.knockbackTicks ?? 0,
@@ -242,6 +278,7 @@ export function cloneEntity(entity: EntityState): EntityState {
     velocity: [entity.velocity[0], entity.velocity[1], entity.velocity[2]],
     angles: [entity.angles[0], entity.angles[1], entity.angles[2]],
     health: entity.health,
+    armor: entity.armor,
     weapon: entity.weapon,
     lastFireTick: entity.lastFireTick,
     knockbackTicks: entity.knockbackTicks,
@@ -264,6 +301,7 @@ export function cloneGameState(state: GameState): GameState {
   return {
     tick: state.tick,
     rng: state.rng,
+    match: cloneMatchState(state.match),
     nextEntityId: state.nextEntityId,
     entities: state.entities.map(cloneEntity),
   }
@@ -295,6 +333,26 @@ export function encodeInto(writer: ByteWriter, state: GameState): void {
   writeU32(writer, state.tick)
   writeU32(writer, state.rng)
   writeU32(writer, state.nextEntityId)
+
+  // The match, rules included. The rules do not change during a match, and they
+  // are written every tick anyway: a rule that is not in the hash is a rule two
+  // peers can quietly disagree about, and "one of us is running armour-only
+  // self-damage" is not something to discover from a divergent rocket jump.
+  const match = state.match
+  writeU8(writer, match.phase)
+  writeU32(writer, match.round)
+  writeU32(writer, match.wins[0])
+  writeU32(writer, match.wins[1])
+  writeI32(writer, match.phaseStartTick)
+  writeI32(writer, match.phaseEndTick)
+  writeI32(writer, match.lastRoundWinner)
+  writeI32(writer, match.winner)
+  writeU8(writer, match.rules.selfDamage)
+  writeU32(writer, match.rules.roundsToWin)
+  writeU32(writer, match.rules.maxRounds)
+  writeI32(writer, match.rules.roundTimeLimitTicks)
+  writeI32(writer, match.rules.intermissionTicks)
+
   writeU32(writer, state.entities.length)
 
   for (const entity of state.entities) {
@@ -312,6 +370,7 @@ export function encodeInto(writer: ByteWriter, state: GameState): void {
     writeF64(writer, entity.angles[1])
     writeF64(writer, entity.angles[2])
     writeF64(writer, entity.health)
+    writeF64(writer, entity.armor)
     writeU8(writer, entity.weapon)
     writeI32(writer, entity.lastFireTick)
     writeI32(writer, entity.knockbackTicks)
@@ -327,7 +386,7 @@ export function encodeInto(writer: ByteWriter, state: GameState): void {
 
 /** The canonical bytes for a state. Allocates; `encodeInto` does not. */
 export function encodeExact(state: GameState): Uint8Array {
-  const writer = createWriter(64 + state.entities.length * 160)
+  const writer = createWriter(128 + state.entities.length * 176)
   encodeInto(writer, state)
   return writtenBytes(writer).slice()
 }

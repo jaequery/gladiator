@@ -32,10 +32,10 @@
  * disagrees the change is one number and not a new rule scattered through the
  * damage code.
  *
- * **Respawn timing.** {@link RESPAWN_DELAY_TICKS} — the gap between a round
- * ending and the next round's bodies appearing. The *state machine* that counts
- * it down belongs to the round rules (GLAD-L4SYN9); the number belongs here,
- * next to the code that does the spawning.
+ * **Respawn timing.** The gap between a round ending and the next round's
+ * bodies appearing is `RESPAWN_DELAY_TICKS`, and both the number and the state
+ * machine that counts it down live in `match/match.ts` and `match/round.ts` —
+ * this file is only what happens at the end of it.
  *
  * ## Selection is a plan plus two dice rolls
  *
@@ -63,7 +63,6 @@ import { rngInt } from '../rng.ts'
 import type { RngHolder } from '../rng.ts'
 import { EntityFlag, EntityKind, NEVER_EXPIRES, findPlayer, spawnEntity } from '../state.ts'
 import type { EntityState, GameState } from '../state.ts'
-import { TICK_RATE } from '../tick.ts'
 import { SURFACE_CLIP_EPSILON, createTrace, traceRay } from '../trace.ts'
 import { NEVER_FIRED, Weapon } from '../weapon.ts'
 
@@ -75,10 +74,24 @@ import { NEVER_FIRED, Weapon } from '../weapon.ts'
  * Health a player stands up with.
  *
  * Rocket Arena's whole thesis in one constant: everyone starts every round with
- * the same thing, and nothing on the map can change that. Armour and the three
- * self-damage modes are GLAD-L4SYN9's; this is the number the spawn applies.
+ * the same thing, and nothing on the map can change that.
+ *
+ * Flat 100, not Quake 3's 125 decaying to 100. That decay exists to make the
+ * first thirty seconds of a *deathmatch* about grabbing the health you were
+ * given before you lose it, and there is no item game here for it to be part
+ * of.
  */
 export const SPAWN_HEALTH = 100
+
+/**
+ * Armour a player stands up with. The same 100, and for the same reason.
+ *
+ * It is what makes a duel take two rockets rather than one: armour absorbs 66%
+ * of every hit until it runs out (`selfDamage.ts`), so 100/100 is 100 health
+ * behind 66 points of absorption. Rocket-jumping spends it, which is the trade
+ * the default self-damage mode is built around.
+ */
+export const SPAWN_ARMOR = 100
 
 /**
  * The weapon in a player's hands when the round starts.
@@ -100,19 +113,6 @@ export const SPAWN_WEAPON = Weapon.RocketLauncher
  * know it happened.
  */
 export const SPAWN_PROTECTION_TICKS = 0
-
-/**
- * Sub-steps between a round ending and the next round's bodies appearing.
- *
- * Three seconds. Long enough to see how you died and read the score, short
- * enough that a first-to-nine match is not mostly waiting. Written in *ticks*
- * rather than milliseconds because both peers count it in ticks — a delay
- * measured against a wall clock is a delay the two of them disagree about.
- *
- * GLAD-L4SYN9 owns the state machine that counts this down; this is the number
- * it counts.
- */
-export const RESPAWN_DELAY_TICKS = 3 * TICK_RATE
 
 /** The two player slots a duel is played in. */
 export const DUEL_SLOTS: readonly [number, number] = [0, 1]
@@ -360,6 +360,7 @@ function placeAt(state: GameState, point: MapSpawn, slot: number): EntityState {
       origin,
       angles,
       health: SPAWN_HEALTH,
+      armor: SPAWN_ARMOR,
       weapon: SPAWN_WEAPON,
     })
   }
@@ -369,11 +370,16 @@ function placeAt(state: GameState, point: MapSpawn, slot: number): EntityState {
   setVec3(existing.velocity, 0, 0, 0)
   existing.flags = 0
   existing.health = SPAWN_HEALTH
+  existing.armor = SPAWN_ARMOR
   existing.weapon = SPAWN_WEAPON
   // Or the animation would draw the muzzle flash of the shot that killed them
   // last round: `lastFireTick` is a tick number, not an event, so a stale one
   // is a shot that keeps happening. See `weapon.ts`.
   existing.lastFireTick = NEVER_FIRED
+  // And its forward-looking half. A player who fired a rail in the last second
+  // of a round would otherwise stand up unable to shoot for the first second of
+  // the next one — a refire interval is a cost within a round, not across one.
+  existing.nextFireTick = 0
   existing.knockbackTicks = 0
   existing.ownerId = 0
   existing.spawnTick = state.tick

@@ -19,6 +19,16 @@ messages. Most of them are still to be written:
 | 4.x | The map format, its baker and its validator   | **below**    |
 | 5.x | Reachability: the climbs a level is built around | **below**  |
 | 6.x | Spawning: selection, facing, telefrag, protection | **below** |
+| 7.x | Round and match rules, armour, the self-damage modes | **below** |
+
+**A note on sourcing.** Everything in §0–§6 is transcribed from Quake 3's
+released source and can be checked against it line by line. §7 cannot: Rocket
+Arena shipped as a compiled mod with a readme rather than as source, and its
+rules are reconstructed from that readme, from server documentation and from
+community wikis. The *Quake* half of §7 — `CheckArmor`, the self-damage halving,
+the knockback ordering — is still source-verified; what is secondary-sourced is
+which of those knobs Rocket Arena turned, and how far. Where the two disagree,
+this document takes the version that makes the better duel and says so.
 
 ---
 
@@ -759,10 +769,11 @@ of your box, which is 72.5 points, which is **72** — and the push is derived
 from the 72, so it is 360 qu/s rather than 362.5. Knockback is a function of the
 damage the player *sees*.
 
-**Self-damage is halved after the knockback has been computed.** Rocket jumping
-lives in the gap between those two statements: 500 qu/s for 50 health, not
-250 qu/s for 50 health. GLAD-L4SYN9 chooses between three self-damage modes and
-passes its own scale in; every number here assumes the default half.
+**The knockback is computed before anything is subtracted.** Rocket jumping
+lives in that gap: the push comes off the whole 100, and only then is it decided
+what the 100 costs you — halved because it is your own, then split between
+armour and health by whichever of the three self-damage modes is in force. All
+of that is §7.2, and none of it changes the 500 qu/s.
 
 The push itself:
 
@@ -1164,11 +1175,14 @@ first two, every time" is the answer that ships if nobody writes one down.
 | Constant | Value | Meaning |
 | -------- | ----- | ------- |
 | `SPAWN_HEALTH` | 100 | what every player stands up with, every round |
+| `SPAWN_ARMOR` | 100 | and the armour that goes with it (§7.1) |
 | `SPAWN_WEAPON` | rocket launcher | which of the two is in your hands on frame one — both are always carried |
 | `SPAWN_PROTECTION_TICKS` | **0** | no invulnerability — see §6.4 |
-| `RESPAWN_DELAY_TICKS` | 375 = `3 · TICK_RATE` | three seconds between rounds |
 | `MIN_SPAWN_SEPARATION` | 512 | the floor a *pair* has to clear (§4.4) |
 | `SIGHT_TARGETS` | 9 points | the eye and the eight corners of the box |
+
+`RESPAWN_DELAY_TICKS` — the three seconds between one round ending and the next
+one's bodies appearing — belongs to the round rules and is §7.1.
 
 The feet go `SURFACE_CLIP_EPSILON` above the point, not on it: a spawn names a
 floor height, and a resting body sits an eighth of a unit clear of the floor
@@ -1236,3 +1250,169 @@ that persists — the peer with a mouse on it has to adopt it into its own view
 angles, which `packages/client/src/main.ts` does once, at boot. Without that,
 the first command a player sends spins them back to due north on the frame
 after they spawn.
+
+---
+
+## §7 Round and match rules
+
+`packages/sim/src/match/match.ts` (the shape), `match/round.ts` (the machine),
+`match/selfDamage.ts` (what a hit costs). Tests: `match/round.test.ts`.
+
+The Rocket Arena format. A **round** is one life each; a **match** is a sequence
+of rounds, first to *N*. Both players stand up at 100 health and 100 armour,
+holding both weapons with unlimited ammunition, and **nothing on the map can
+change that** — there are no pickups, no regeneration and no item timing. That
+is not a simplification of the format, it is the format: the mod existed to
+delete resource control and leave aim and movement.
+
+**Sourcing:** see the note at the top of this document. The Quake mechanics
+below are source-verified; which of them Rocket Arena switched on is not.
+
+### §7.1 The constants
+
+| Constant | Value | Meaning |
+| -------- | ----- | ------- |
+| `SPAWN_HEALTH` | 100 | health, every round, for both players |
+| `SPAWN_ARMOR` | 100 | armour, every round, for both players |
+| `DEFAULT_ROUNDS_TO_WIN` | 3 | first to three — a best-of-five duel |
+| `maxRoundsFor(3)` | 9 | the hard round cap; see §7.4 |
+| `ROUND_TIME_LIMIT_TICKS` | 15000 = `120 · TICK_RATE` | two minutes a round |
+| `RESPAWN_DELAY_TICKS` | 375 = `3 · TICK_RATE` | three seconds between rounds |
+| `ARMOR_PROTECTION` | 0.66 | the fraction of a hit armour absorbs |
+| `SELF_DAMAGE_SCALE` | 0.5 | Quake's halving of your own splash |
+| `DEFAULT_SELF_DAMAGE` | `armor_only` | see §7.2 |
+
+**100 health flat**, not Quake 3's 125 decaying to 100. That decay exists to
+make the opening of a *deathmatch* about spending the health you were given
+before you lose it, and there is no item game here for it to be part of.
+
+**100 armour** is what makes a duel take two rockets rather than one. Armour
+absorbs 66% of every hit, so a 100-point rocket costs 66 armour and 34 health;
+the second one finds 34 armour, takes all of it, and puts the remaining 66
+through a 66-health player. Two rockets, or two rails, or one of each.
+
+### §7.2 Self-damage: three modes, one default
+
+Rocket Arena's own history has three answers and the choice changes the skill
+ceiling rather than the numbers, so all three are implemented and the mode is a
+field of `MatchRules` — hashed with the rest of the state, so two peers running
+different rules disagree at tick zero rather than at the first rocket jump.
+
+Every mode runs the same pipeline, and the *order* is Quake's:
+
+```
+knockback  <- 5 * min(damage, 200)          from the FULL figure, always
+take       <- damage * 0.5                  if self-inflicted
+take       <- max(take, 1)                  Quake's `if (damage < 1) damage = 1`
+save       <- min(ceil(take * 0.66), armor) Quake's `CheckArmor`
+armor      -= save
+health     -= take - save                   unless the mode says otherwise
+```
+
+| mode | a full-power rocket jump costs | notes |
+| ---- | ------------------------------ | ----- |
+| `full` | 33 armour, 17 health | Quake 3's rule, unmodified |
+| **`armor_only`** (default) | 33 armour, 0 health | the health remainder is discarded |
+| `none` | nothing | Rocket Arena 3's rule |
+
+**Knockback is identical in all three, at 500 qu/s**, because it is derived
+before any of this — §3.3. Switching mode changes the price of a rocket jump
+without changing the jump, which is the property that makes the choice a
+*rules* decision rather than a movement one.
+
+`ceil` and `0.66` are both load-bearing. `ceil(50 · 0.66)` is 33; `ceil(50 ·
+2/3)` is 34, and one point of armour per jump is, three jumps in, the difference
+between standing on 1 armour and standing on none.
+
+**Why `armor_only` is the default.** It keeps rocket-jumping a *tempo* decision.
+A jump is free in health and costs a third of your armour, so three jumps leave
+you on 100 health and 1 armour — one rocket from dead instead of two. A beginner
+who mistimes a jump into a wall is never killed by their own mistake, and an
+expert is still spending something real to move fast. `none` deletes the trade;
+`full` keeps it and punishes the beginner.
+
+Note what falls out at the bottom of the armour bar: with nothing left to absorb
+it, a jump in `armor_only` is free again. That is the same trade read from the
+other end, not a hole — a player who spent their armour on mobility dies to one
+rocket.
+
+Measured (`match/round.test.ts`): from 100/100 in `full`, the armour and health
+after each full-power self-splash are `67/83`, `34/66`, `1/49`, `0/0`. **Exactly
+three survivable rocket jumps; the fourth kills.**
+
+### §7.3 The state machine
+
+Four phases, and `advanceMatch` runs as the kernel's **last** phase — after
+damage has landed and rockets have been removed — so a death is visible on the
+tick it happened and two peers end a round on the same tick number.
+
+```
+Warmup --startMatch--> Live --died, or the clock ran out--> Intermission --3s--> Live
+                         \                                       |
+                          \--score reached, or the round cap-----+--> Over
+```
+
+**`Warmup` is the phase a bare `createGameState` is in**, and it does nothing at
+all. That is what makes a world with no match in it — the golden replay, every
+physics test, the walking skeleton — behave exactly as it did before there were
+round rules. `startMatch` is the one external edge, because the simulation is
+not the layer that knows both players have arrived (GLAD-DVDV6P, GLAD-4G4W2T).
+
+**Commands reach a body in `Warmup` and `Live` only.** In `Intermission` and
+`Over` the world keeps simulating — gravity, friction, a body sliding to rest —
+and nobody can steer it. A corpse is frozen the same way, from the first
+movement phase after it died. Frozen bodies keep their **angles**: writing a
+null command's zero yaw into them would snap every one of them to due north,
+which is a thing a player would see.
+
+**A round start resets everything** through `spawnRound`: origin, facing,
+velocity, flags, health, armour, weapon, both fire timers and the knockback
+window. The entity is *reused* — same id, same slot — so a client interpolating
+an opponent watches them move rather than watching a stranger appear (§6). The
+refire timer is reset because a refire interval is a cost inside a round, never
+across one.
+
+**Rockets in the air are removed when a round ends, not detonated.** A round
+that has been decided cannot be un-decided by an explosion that arrives
+afterwards, and a winner who spends the intermission as a corpse is a winner the
+renderer has to draw dead.
+
+### §7.4 How a round ends, and how a match does
+
+**Somebody died.** Last man standing. If *both* died on the same sub-step — two
+rockets landing together, or a telefrag that went both ways — the round is a
+**draw**, scored to nobody. Picking a winner by entity order would hand the
+round to whoever happened to spawn first.
+
+**The clock ran out.** The round goes to the higher `health + armor`, because
+that is the figure both players spent the round trying to reduce. Exactly equal
+is a draw, and two players who never find each other are exactly equal at
+200 apiece.
+
+**A match ends** when a player reaches `roundsToWin`, or at `maxRounds`, on the
+score as it stands — which may be no winner at all. The cap exists because a
+draw is genuinely reachable and a format with no cap would let two passive
+players draw forever. A decisive first-to-three is at most five rounds; the cap
+is nine, which leaves room for four draws and then stops.
+
+### §7.5 The whole match is in the state
+
+`MatchState` lives in `GameState`, which means it is walked by `encodeExact`,
+digested by `hashState`, copied by `cloneGameState` and rewound by
+reconciliation along with everything else. Two consequences, and both are the
+reason it is there rather than beside it:
+
+- **A replay reproduces the match, not just the physics.** The spawn draws come
+  from `state.rng`, the score and the phase clock come from `state.match`, so
+  the same seed and the same inputs produce the same match — tick for tick,
+  round for round.
+- **`MatchRules` is hashed too**, even though nothing writes it during a match.
+  A rule that is not in the hash is a rule two peers can quietly disagree about,
+  and "one of us is running `armor_only`" is not a thing to discover from a
+  divergent rocket jump.
+
+The `SpawnPlan` is *not* in the state, for the same reason the `CollisionWorld`
+is not: it is a function of the map alone (§6.2). It is handed to `tick()`
+beside the world, and a world whose match is running that is ticked without one
+throws — silently never starting another round would look exactly like a hung
+server.

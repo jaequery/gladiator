@@ -5,7 +5,6 @@ import { boxBrush, createCollisionWorld } from './collide.ts'
 import {
   KNOCKBACK_DAMAGE_CAP,
   KNOCKBACK_PER_DAMAGE,
-  SELF_DAMAGE_SCALE,
   applyDamage,
   canDamage,
   distanceToBox,
@@ -14,6 +13,7 @@ import {
   radiusDamage,
 } from './damage.ts'
 import { lengthVec3, vec3 } from './math.ts'
+import { SELF_DAMAGE_SCALE, SelfDamage } from './match/selfDamage.ts'
 import { isSpawnProtected } from './match/spawn.ts'
 import { EntityFlag, EntityKind, NO_ENTITY, createGameState, spawnEntity } from './state.ts'
 import type { EntityState, GameState } from './state.ts'
@@ -89,9 +89,13 @@ describe('applyDamage', () => {
   })
 
   it('halves self-damage in health but not in knockback', () => {
+    // Stated in `full`, because that is the mode this rule *is*: the halving
+    // happens after the push has been derived from the whole 100. What the
+    // remainder then costs is `match/selfDamage.ts`'s, and the match default
+    // (`armor_only`) is exercised in `match/round.test.ts`.
     const { state, player } = worldWithPlayer()
 
-    applyDamage(state, player, player.id, [0, 0, 1], 100)
+    applyDamage(state, player, player.id, [0, 0, 1], 100, SelfDamage.Full)
 
     expect(player.velocity[2]).toBe(500)
     expect(player.health).toBe(100 - 100 * SELF_DAMAGE_SCALE)

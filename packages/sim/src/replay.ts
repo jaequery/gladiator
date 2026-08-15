@@ -65,6 +65,9 @@ export type ReplaySpawn = {
   readonly origin: readonly [number, number, number]
   readonly yawDeg: number
   readonly health: number
+  /** Armour, in points. Omitted is none, which is what a fixture written
+   *  before there was armour meant. */
+  readonly armor?: number
 }
 
 export type Replay = {
@@ -122,6 +125,7 @@ export function createReplayState(replay: Replay): GameState {
       ),
       angles: vec3(0, yawUnitsFromDegrees(spawn.yawDeg), 0),
       health: spawn.health,
+      armor: spawn.armor ?? 0,
     })
   }
   return state

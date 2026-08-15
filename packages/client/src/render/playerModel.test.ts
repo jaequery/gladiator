@@ -52,6 +52,7 @@ function entity(patch: Partial<EntityState> = {}): EntityState {
     velocity: [0, 0, 0],
     angles: [0, 0, 0],
     health: 100,
+    armor: 100,
     weapon: Weapon.RocketLauncher,
     lastFireTick: NEVER_FIRED,
     knockbackTicks: 0,

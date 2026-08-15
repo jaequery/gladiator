@@ -29,6 +29,10 @@ function shooterAt(x: number): { state: GameState; player: EntityState } {
     slot: 0,
     origin: vec3(x, 0, SURFACE_CLIP_EPSILON),
     health: 100,
+    // Armour too, because that is what a round stands a player up with — and
+    // under the default self-damage mode it is the only thing your own splash
+    // can take off you (`match/selfDamage.ts`).
+    armor: 100,
   })
   return { state, player }
 }
@@ -131,12 +135,13 @@ describe('a rocket in flight', () => {
     expect(player.health).toBe(100)
 
     // Then detonate it by hand where it stands, 45 units in front: inside the
-    // splash radius, so the shooter takes half of the falloff.
+    // splash radius, so the shooter takes half of the falloff — out of their
+    // armour, under the default mode.
     const rocket = rocketsIn(state)[0]
     expect(rocket).toBeDefined()
     if (rocket !== undefined) explodeProjectile(state, HALL, rocket)
 
-    expect(player.health).toBeLessThan(100)
+    expect(player.armor).toBeLessThan(100)
     expect(rocketsIn(state)).toHaveLength(0)
   })
 
@@ -176,7 +181,7 @@ describe('a rocket in flight', () => {
     tick(state, [cmd()], HALL)
     expect(rocketsIn(state)).toHaveLength(0)
     // It went off where it was, and the shooter 60 units away felt it.
-    expect(player.health).toBeLessThan(100)
+    expect(player.armor).toBeLessThan(100)
   })
 
   it('carries the weapon that fired it, so a renderer knows what to draw', () => {
