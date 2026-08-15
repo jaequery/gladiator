@@ -1,0 +1,346 @@
+import {
+  CloseReason,
+  NULL_CMD,
+  PROTOCOL_VERSION,
+  TransportState,
+  Weapon,
+  type Transport,
+  type TransportHandlers,
+  type TransportMessage,
+} from '@gladiator/sim'
+import { describe, expect, it } from 'vitest'
+
+import { createNetClient, mustHoldStill, resolveServerUrl } from './client.ts'
+
+/**
+ * A stand-in for the pipe, enough of one for this module: it records what was
+ * sent and lets a test push frames back.
+ *
+ * A fake *transport* rather than a fake WebSocket, which is the whole change
+ * this ticket made here: what the client talks to is an interface a socket, a
+ * loopback and (later) a WebTransport session all satisfy, so the tests below
+ * are equally true of single-player.
+ */
+class FakeTransport implements Transport {
+  readyState: TransportState = TransportState.Connecting
+  readonly sent: string[] = []
+  private handlers: TransportHandlers = {}
+
+  send(message: TransportMessage) {
+    this.sent.push(String(message))
+  }
+
+  close(code: number = CloseReason.Normal, reason = '') {
+    this.readyState = TransportState.Closed
+    this.handlers.onClose?.(code, reason)
+  }
+
+  setHandlers(handlers: TransportHandlers) {
+    this.handlers = handlers
+  }
+
+  open() {
+    this.readyState = TransportState.Open
+    this.handlers.onOpen?.()
+  }
+
+  deliver(message: unknown) {
+    this.handlers.onMessage?.(JSON.stringify(message))
+  }
+
+  fail() {
+    this.handlers.onError?.(new Error('nope'))
+  }
+
+  hangUp(code: number, reason: string) {
+    this.handlers.onClose?.(code, reason)
+  }
+
+  /**
+   * Closing, and nobody has been told yet.
+   *
+   * A real gap, not a contrivance: a socket stops accepting sends the moment
+   * `close()` is called and the close event arrives a turn or more later. Every
+   * command queued in between is dropped with the session still reading `live`.
+   */
+  stall() {
+    this.readyState = TransportState.Closing
+  }
+}
+
+/** The map hash this fake client claims to hold. */
+const MAP_HASH = 'a1b2c3d4'
+
+function connected(protocolOverride?: number) {
+  const transport = new FakeTransport()
+  const client = createNetClient({
+    transport,
+    endpoint: 'ws://test',
+    build: 'test-build',
+    mapHash: MAP_HASH,
+    now: () => 0,
+    ...(protocolOverride === undefined ? {} : { protocolOverride }),
+  })
+  client.connect()
+  transport.open()
+  return { transport, client }
+}
+
+describe('resolveServerUrl', () => {
+  it('prefers the configured URL', () => {
+    expect(resolveServerUrl('wss://gladiator.fly.dev', { protocol: 'https:', hostname: 'x' })).toBe(
+      'wss://gladiator.fly.dev',
+    )
+  })
+
+  it('falls back to the local dev server over plain http', () => {
+    expect(resolveServerUrl(undefined, { protocol: 'http:', hostname: 'localhost' })).toBe(
+      'ws://localhost:8787',
+    )
+  })
+
+  it('refuses to guess on a deployed origin', () => {
+    // Guessing here produces a browser error that names no cause. Better to
+    // say "VITE_SERVER_URL is not set" on screen.
+    expect(resolveServerUrl(undefined, { protocol: 'https:', hostname: 'gladiator.vercel.app' }))
+      .toBe(null)
+    expect(resolveServerUrl('', { protocol: 'https:', hostname: 'gladiator.vercel.app' })).toBe(null)
+  })
+})
+
+describe('net client', () => {
+  it('opens with a hello carrying the protocol version, the build and the map', () => {
+    const { transport } = connected()
+    expect(JSON.parse(transport.sent[0] ?? '{}')).toEqual({
+      t: 'hello',
+      protocol: PROTOCOL_VERSION,
+      build: 'test-build',
+      mapHash: MAP_HASH,
+    })
+  })
+
+  it('greets a transport that was already open when it arrived', () => {
+    // The loopback always is. Without the synthetic open the contract requires,
+    // this client would hang waiting for an event that had already happened —
+    // and single-player would need a branch of its own.
+    const transport = new FakeTransport()
+    transport.readyState = TransportState.Open
+    const client = createNetClient({
+      transport,
+      endpoint: 'the host in this tab',
+      build: 'b',
+      mapHash: MAP_HASH,
+    })
+    client.connect()
+    transport.open()
+    expect(JSON.parse(transport.sent[0] ?? '{}')).toMatchObject({ t: 'hello' })
+  })
+
+  it('stops the world and says which two arenas when the host refuses the map', () => {
+    // What the player must see. Continuing to simulate would mean running into
+    // walls that are not there on the authoritative side, which looks like the
+    // movement being broken and is the map being wrong.
+    const { transport, client } = connected()
+    transport.deliver({ t: 'map_mismatch', serverMapHash: '00000000', clientMapHash: MAP_HASH })
+
+    const snapshot = client.snapshot()
+    expect(snapshot.status).toBe('map-mismatch')
+    expect(mustHoldStill(snapshot.status)).toBe(true)
+    expect(snapshot.serverMapHash).toBe('00000000')
+    expect(snapshot.message).toContain(MAP_HASH)
+    expect(snapshot.message).toContain('00000000')
+    expect(snapshot.message).toContain('reload')
+  })
+
+  it('keeps the mismatch message when the host then closes the pipe', () => {
+    // The close arrives a moment after the frame. Overwriting the explanation
+    // with "disconnected (code 4004)" is how a diagnosable failure becomes a
+    // mystery.
+    const { transport, client } = connected()
+    transport.deliver({ t: 'map_mismatch', serverMapHash: '00000000', clientMapHash: MAP_HASH })
+    transport.hangUp(4004, 'map mismatch')
+    expect(client.snapshot().status).toBe('map-mismatch')
+    expect(client.snapshot().message).toContain('reload')
+  })
+
+  it('plays on when the host is holding the same arena', () => {
+    const { transport, client } = connected()
+    transport.deliver({
+      t: 'welcome',
+      protocol: PROTOCOL_VERSION,
+      build: 'srv',
+      session: 's1',
+      mapHash: MAP_HASH,
+    })
+    expect(client.snapshot().serverMapHash).toBe(MAP_HASH)
+    expect(mustHoldStill(client.snapshot().status)).toBe(false)
+  })
+
+  it('reports agreement when the hashes match', () => {
+    const { transport, client } = connected()
+    transport.deliver({ t: 'welcome', protocol: PROTOCOL_VERSION, build: 'srv', session: 's1', mapHash: MAP_HASH })
+    client.record(10, 0xdeadbeef)
+    transport.deliver({ t: 'hash', tick: 10, hash: 0xdeadbeef })
+
+    const snapshot = client.snapshot()
+    expect(snapshot.status).toBe('live')
+    expect(snapshot.agree).toBe(true)
+    expect(snapshot.compared).toBe(1)
+    expect(snapshot.mismatched).toBe(0)
+    expect(snapshot.clientHash).toBe(0xdeadbeef)
+  })
+
+  it('reports a mismatch, and keeps counting', () => {
+    const { transport, client } = connected()
+    client.record(10, 1)
+    client.record(11, 2)
+    transport.deliver({ t: 'hash', tick: 10, hash: 999 })
+    transport.deliver({ t: 'hash', tick: 11, hash: 2 })
+
+    const snapshot = client.snapshot()
+    expect(snapshot.compared).toBe(2)
+    expect(snapshot.mismatched).toBe(1)
+    expect(snapshot.agree).toBe(true) // the most recent one agreed
+  })
+
+  it('ignores a hash for a tick that has aged out, rather than calling it a desync', () => {
+    const { transport, client } = connected()
+    client.record(10, 1)
+    transport.deliver({ t: 'hash', tick: 999_999, hash: 1 })
+    expect(client.snapshot().compared).toBe(0)
+    expect(client.snapshot().agree).toBe(null)
+  })
+
+  it('turns a version mismatch into a message a player can act on', () => {
+    const { transport, client } = connected(PROTOCOL_VERSION + 1)
+    transport.deliver({
+      t: 'version_mismatch',
+      serverProtocol: PROTOCOL_VERSION,
+      clientProtocol: PROTOCOL_VERSION + 1,
+      serverBuild: '9f3c1d2',
+    })
+
+    const snapshot = client.snapshot()
+    expect(snapshot.status).toBe('version-mismatch')
+    expect(snapshot.message).toContain('server is on build 9f3c1d2')
+    expect(snapshot.message).toContain('reload')
+  })
+
+  it('keeps the version-mismatch message when the host then closes the pipe', () => {
+    const { transport, client } = connected()
+    transport.deliver({
+      t: 'version_mismatch',
+      serverProtocol: 2,
+      clientProtocol: 1,
+      serverBuild: 'abc',
+    })
+    transport.hangUp(4001, 'protocol version')
+    // A "disconnected (code 4001)" line here would replace the only message
+    // that tells the player what to do about it.
+    expect(client.snapshot().message).toContain('server is on build abc')
+  })
+
+  it('names the endpoint when the pipe fails', () => {
+    const { transport, client } = connected()
+    transport.fail()
+    expect(client.snapshot().status).toBe('error')
+    expect(client.snapshot().message).toContain('ws://test')
+  })
+
+  it('batches queued commands into one frame per flush', () => {
+    const { transport, client } = connected()
+    client.queue(5, NULL_CMD)
+    client.queue(6, { ...NULL_CMD, forwardMove: 1 })
+    client.flush()
+
+    expect(transport.sent).toHaveLength(2)
+    expect(JSON.parse(transport.sent[1] ?? '{}')).toEqual({
+      t: 'cmds',
+      startTick: 5,
+      cmds: [
+        [0, 0, 0, 0, 0, Weapon.RocketLauncher],
+        [1, 0, 0, 0, 0, Weapon.RocketLauncher],
+      ],
+    })
+  })
+
+  it('sends nothing when there is nothing queued', () => {
+    const { transport, client } = connected()
+    client.flush()
+    expect(transport.sent).toHaveLength(1) // just the hello
+  })
+
+  it('drops commands queued before the pipe is open, and counts every one', () => {
+    // The count is the point. A silently dropped command offsets the client's
+    // tick counter from the host's for the rest of the session, and every hash
+    // after that is compared against a different moment — which reads as a
+    // broken simulation and is a broken clock. `main.ts` holds the world still
+    // until the connection resolves so this cannot happen; the counter is what
+    // would make it obvious if that ever regressed.
+    const transport = new FakeTransport()
+    const client = createNetClient({
+      transport,
+      endpoint: 'ws://test',
+      build: 'b',
+      mapHash: MAP_HASH,
+    })
+    client.connect()
+    client.queue(1, NULL_CMD)
+    client.queue(2, NULL_CMD)
+    client.flush()
+    expect(transport.sent).toHaveLength(0)
+    expect(client.snapshot().dropped).toBe(2)
+
+    transport.open()
+    client.queue(3, NULL_CMD)
+    client.flush()
+    expect(JSON.parse(transport.sent[1] ?? '{}')).toMatchObject({ startTick: 3 })
+  })
+
+  it('says so on the HUD when a live session starts dropping commands', () => {
+    const { transport, client } = connected()
+    transport.deliver({ t: 'welcome', protocol: PROTOCOL_VERSION, build: 'srv', session: 's1', mapHash: MAP_HASH })
+    expect(client.snapshot().status).toBe('live')
+
+    transport.stall()
+    client.queue(1, NULL_CMD)
+    client.flush()
+
+    expect(client.snapshot().dropped).toBe(1)
+    expect(client.snapshot().status).toBe('error')
+    expect(client.snapshot().message).toContain('no longer line up')
+  })
+
+  it('prefers the close code to the drop count once the pipe has actually gone', () => {
+    // "disconnected (code 1006)" is the more useful sentence of the two: it
+    // says what happened rather than what it broke.
+    const { transport, client } = connected()
+    transport.deliver({ t: 'welcome', protocol: PROTOCOL_VERSION, build: 'srv', session: 's1', mapHash: MAP_HASH })
+    transport.close(CloseReason.Abnormal, 'gone')
+    client.queue(1, NULL_CMD)
+    client.flush()
+
+    expect(client.snapshot().dropped).toBe(1)
+    expect(client.snapshot().status).toBe('closed')
+    expect(client.snapshot().message).toContain('1006')
+  })
+
+  it('says so when the deploy has no host at all, instead of failing silently', () => {
+    const client = createNetClient({
+      transport: null,
+      endpoint: 'nowhere',
+      build: 'b',
+      mapHash: MAP_HASH,
+    })
+    client.connect()
+    expect(client.snapshot().status).toBe('unconfigured')
+    expect(client.snapshot().message).toContain('VITE_SERVER_URL')
+
+    // And playing on regardless is not "dropping" anything: there was never a
+    // host to agree with, so the drop counter must stay clean for the case that
+    // actually matters.
+    client.queue(1, NULL_CMD)
+    client.flush()
+    expect(client.snapshot().dropped).toBe(0)
+  })
+})

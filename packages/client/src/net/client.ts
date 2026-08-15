@@ -2,11 +2,23 @@
  * The client half of the hash echo.
  *
  * The client simulates its own input immediately and sends the commands on.
- * The server runs the *same* `tick()` over the *same* commands and sends back a
+ * The host runs the *same* `tick()` over the *same* commands and sends back a
  * state hash. If the two ever disagree, the shared simulation is not shared,
  * and everything built on top of it — prediction, lag compensation, the bot —
- * is built on sand. So this ticket makes that disagreement loud, on screen,
- * from the first deploy.
+ * is built on sand. So this makes that disagreement loud, on screen, from the
+ * first deploy.
+ *
+ * ## It talks to a `Transport`, not to a WebSocket
+ *
+ * This is what makes single-player run the multiplayer code path. Everything
+ * below is written against the interface in `sim/src/transport.ts`, so the same
+ * client code talks to a server on Fly through `websocketTransport.ts` and to a
+ * `Room` in this very tab through a loopback (`listenServer.ts`). There is no
+ * offline branch, because there is nothing for one to be a branch *of*.
+ *
+ * A `Transport` may already be open when it arrives — a loopback always is —
+ * which is why its contract requires a synthetic open, and why `connect()` here
+ * is "install handlers" rather than "dial".
  *
  * Reconnection, room codes and the rest of the connection lifecycle are
  * GLAD-DVDV6P; prediction and reconciliation are GLAD-6RT64L. What is here is
@@ -14,7 +26,9 @@
  */
 import {
   PROTOCOL_VERSION,
+  TransportState,
   type ServerMessage,
+  type Transport,
   type UserCmd,
   type WireCmd,
   describeMapMismatch,
@@ -96,10 +110,19 @@ export type NetClient = {
 }
 
 export type NetOptions = {
-  readonly url: string | null
+  /**
+   * The pipe to the host, or `null` when this deploy has none configured.
+   *
+   * A WebSocket to Fly, or a loopback to a `Room` running in this tab. The
+   * client cannot tell, and that is the point.
+   */
+  readonly transport: Transport | null
+  /**
+   * What to call the far end in a message a player reads — a URL, or
+   * "the host in this tab". Purely for the HUD.
+   */
+  readonly endpoint: string
   readonly build: string
-  /** Overridden by the tests; `WebSocket` in a browser. */
-  readonly socketFactory?: (url: string) => WebSocket
   /** Overridden by the tests; `performance.now` in a browser. */
   readonly now?: () => number
   /** The hash of the map this page loaded. `map.ts`. */
@@ -108,6 +131,8 @@ export type NetOptions = {
   readonly protocolOverride?: number
   /** Sent instead of {@link NetOptions.mapHash}, to prove the mismatch path. */
   readonly mapHashOverride?: string
+  /** What the HUD says when {@link NetOptions.transport} is `null`. */
+  readonly unconfiguredMessage?: string
 }
 
 /**
@@ -130,9 +155,12 @@ export function resolveServerUrl(
   return null
 }
 
+/** What the HUD says when a deploy was built with no host to talk to. */
+export const NO_SERVER_CONFIGURED =
+  'VITE_SERVER_URL is not set for this deploy, so there is no server to talk to.'
+
 export function createNetClient(options: NetOptions): NetClient {
   const now = options.now ?? (() => performance.now())
-  const socketFactory = options.socketFactory ?? ((url: string) => new WebSocket(url))
   const protocol = options.protocolOverride ?? PROTOCOL_VERSION
   const mapHash = options.mapHashOverride ?? options.mapHash
 
@@ -145,11 +173,11 @@ export function createNetClient(options: NetOptions): NetClient {
   let outboxStartTick = 0
   let sentAtMs: number | null = null
 
-  let socket: WebSocket | null = null
-  let status: NetStatus = options.url === null ? 'unconfigured' : 'idle'
+  const transport = options.transport
+  let status: NetStatus = transport === null ? 'unconfigured' : 'idle'
   let message =
-    options.url === null
-      ? 'VITE_SERVER_URL is not set for this deploy, so there is no server to talk to.'
+    transport === null
+      ? (options.unconfiguredMessage ?? NO_SERVER_CONFIGURED)
       : 'not connected yet'
   let serverBuild: string | null = null
   let serverMapHash: string | null = null
@@ -224,35 +252,35 @@ export function createNetClient(options: NetOptions): NetClient {
 
   return {
     connect() {
-      if (options.url === null) return
+      if (transport === null) return
       status = 'connecting'
-      message = `connecting to ${options.url}`
-      try {
-        socket = socketFactory(options.url)
-      } catch (cause) {
-        status = 'error'
-        message = `could not open a socket to ${options.url}: ${String(cause)}`
-        return
-      }
+      message = `connecting to ${options.endpoint}`
 
-      socket.addEventListener('open', () => {
-        socket?.send(JSON.stringify({ t: 'hello', protocol, build: options.build, mapHash }))
-      })
-      socket.addEventListener('message', (event: MessageEvent) => {
-        if (typeof event.data === 'string') onServerMessage(event.data)
-      })
-      socket.addEventListener('error', () => {
-        // Browsers deliberately give no detail here, to avoid leaking whether a
-        // host exists. Say what we can and let `close` add the code.
-        if (status === 'version-mismatch' || status === 'map-mismatch') return
-        status = 'error'
-        message = `the connection to ${options.url} failed`
-      })
-      socket.addEventListener('close', (event: CloseEvent) => {
-        // A mismatch closes the socket on purpose; keep the useful message.
-        if (status === 'version-mismatch' || status === 'map-mismatch') return
-        status = 'closed'
-        message = `disconnected (code ${event.code}${event.reason === '' ? '' : `: ${event.reason}`})`
+      transport.setHandlers({
+        // Installing handlers on an already-open transport still gets an open —
+        // the loopback is always open, and without the synthetic one this would
+        // be the special case that made single-player a second code path.
+        onOpen: () => {
+          transport.send(JSON.stringify({ t: 'hello', protocol, build: options.build, mapHash }))
+        },
+        onMessage: (frame) => {
+          // The protocol is JSON text. Bytes here would be a host speaking the
+          // *next* protocol, and guessing which is worse than saying so.
+          if (typeof frame === 'string') onServerMessage(frame)
+        },
+        onError: () => {
+          // Browsers deliberately give no detail here, to avoid leaking whether
+          // a host exists. Say what we can and let `onClose` add the code.
+          if (status === 'version-mismatch' || status === 'map-mismatch') return
+          status = 'error'
+          message = `the connection to ${options.endpoint} failed`
+        },
+        onClose: (code, reason) => {
+          // A mismatch closes the pipe on purpose; keep the useful message.
+          if (status === 'version-mismatch' || status === 'map-mismatch') return
+          status = 'closed'
+          message = `disconnected (code ${code}${reason === '' ? '' : `: ${reason}`})`
+        },
       })
     },
 
@@ -263,16 +291,16 @@ export function createNetClient(options: NetOptions): NetClient {
     },
 
     queue(tick, cmd) {
-      // No server URL at all is not a dropped command — there was never an
-      // agreement to break, and counting these would bury the ones that matter.
-      if (options.url === null) return
+      // No host at all is not a dropped command — there was never an agreement
+      // to break, and counting these would bury the ones that matter.
+      if (transport === null) return
       if (outbox.length === 0) outboxStartTick = tick
       outbox.push(encodeCmd(cmd))
     },
 
     flush() {
       if (outbox.length === 0) return
-      if (socket === null || socket.readyState !== 1 /* OPEN */) {
+      if (transport === null || transport.readyState !== TransportState.Open) {
         // Dropped rather than buffered without bound — but counted, and said
         // out loud, because a silent drop offsets the two tick counters for
         // the rest of the session. See {@link NetSnapshot.dropped}.
@@ -284,7 +312,7 @@ export function createNetClient(options: NetOptions): NetClient {
         }
         return
       }
-      socket.send(JSON.stringify({ t: 'cmds', startTick: outboxStartTick, cmds: outbox }))
+      transport.send(JSON.stringify({ t: 'cmds', startTick: outboxStartTick, cmds: outbox }))
       if (sentAtMs === null) sentAtMs = now()
       outbox.length = 0
     },
@@ -306,8 +334,7 @@ export function createNetClient(options: NetOptions): NetClient {
     }),
 
     close() {
-      socket?.close()
-      socket = null
+      transport?.close()
     },
   }
 }

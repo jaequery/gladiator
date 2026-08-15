@@ -29,6 +29,7 @@ import {
   hashState,
   mapGeometry,
   onSpeedClamp,
+  type Transport,
   type Vec3,
   tick as simTick,
 } from '@gladiator/sim'
@@ -51,7 +52,9 @@ import { createHud } from './hud.ts'
 import { createInputController } from './input/controller.ts'
 import { advance, alphaOf } from './loop.ts'
 import { CLIENT_MAP, CLIENT_MAP_HASH } from './map.ts'
-import { createNetClient, mustHoldStill, resolveServerUrl } from './net.ts'
+import { createNetClient, mustHoldStill, resolveServerUrl } from './net/client.ts'
+import { createListenServer } from './net/listenServer.ts'
+import { websocketTransport } from './net/websocketTransport.ts'
 import { type PlayerNetState, playerNetState } from './render/animState.ts'
 import { FRAME_BUDGET_MS, type FrameVerdict } from './render/frameStats.ts'
 import { type Renderer, createRenderer } from './render/renderer.ts'
@@ -176,6 +179,19 @@ function protocolOverride(search: string): number | undefined {
 function mapHashOverride(search: string): string | undefined {
   const raw = new URLSearchParams(search).get('map')
   return raw !== null && /^[0-9a-f]{8}$/.test(raw) ? raw : undefined
+}
+
+/**
+ * `?local=1` — the listen server.
+ *
+ * Hosts the authoritative `Room` in this tab and talks to it over a loopback,
+ * which is the same code path a duel on Fly takes: same handshake, same map
+ * hash check, same framing, same hash echo. It is what single-player will run
+ * on once there is a bot to play against (GLAD-TSED8V), and it is how anybody
+ * plays with no server up.
+ */
+function localMode(search: string): boolean {
+  return new URLSearchParams(search).get('local') !== null
 }
 
 /**
@@ -353,8 +369,33 @@ async function boot(): Promise<void> {
 
   const override = protocolOverride(window.location.search)
   const mapOverride = mapHashOverride(window.location.search)
+
+  // Which pipe, and nothing else. Everything below this line cannot tell a
+  // socket to Fly from a `Room` running in this tab — which is the claim the
+  // listen-server pattern makes, and the reason there is no offline branch
+  // anywhere in the frame loop.
+  //
+  // Shot mode gets neither: a reference screenshot is a picture of a page with
+  // nothing happening on it, and a page that opened a socket would be one where
+  // something was.
+  const serverUrl = resolveServerUrl(import.meta.env.VITE_SERVER_URL, window.location)
+  const listen = !shot && localMode(window.location.search)
+    ? createListenServer({ map: CLIENT_MAP, build: BUILD })
+    : null
+
+  let transport: Transport | null = null
+  let endpoint = 'nowhere'
+  if (listen !== null) {
+    transport = listen.transport
+    endpoint = 'the host in this tab'
+  } else if (!shot && serverUrl !== null) {
+    transport = websocketTransport(serverUrl)
+    endpoint = serverUrl
+  }
+
   const net = createNetClient({
-    url: resolveServerUrl(import.meta.env.VITE_SERVER_URL, window.location),
+    transport,
+    endpoint,
     build: BUILD,
     mapHash: CLIENT_MAP_HASH,
     ...(override === undefined ? {} : { protocolOverride: override }),

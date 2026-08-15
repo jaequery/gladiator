@@ -11,7 +11,7 @@
  */
 import { formatHash } from '@gladiator/sim'
 
-import type { NetSnapshot } from './net.ts'
+import type { NetSnapshot } from './net/client.ts'
 
 export type HudModel = {
   readonly build: string

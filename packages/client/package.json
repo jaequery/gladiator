@@ -8,6 +8,7 @@
     "@babylonjs/core": "9.21.1",
     "@babylonjs/loaders": "9.21.1",
     "@gladiator/bot": "workspace:*",
+    "@gladiator/server": "workspace:*",
     "@gladiator/sim": "workspace:*"
   },
   "devDependencies": {
