@@ -127,6 +127,41 @@ const TRANSCENDENTAL_BANS = [
 }))
 
 /**
+ * The post-processing chain, which is empty and stays that way.
+ *
+ * Every full-screen pass is input-to-photon latency, paid on every frame, to
+ * make a *still* frame prettier — and this is a game about a flick that has to
+ * land. Bloom, depth of field, motion blur, SSAO and a `DefaultRenderingPipeline`
+ * are each one render-target round trip, and each is exactly the sort of change
+ * that looks like an improvement in a screenshot.
+ *
+ * The look is bought elsewhere instead: baked lighting, which costs nothing at
+ * all per frame (`docs/renderer.md` §12). Tone mapping is the one thing that
+ * survives, and it is not a pass — with `applyByPostProcess` off, Babylon folds
+ * ACES into each material's fragment shader.
+ *
+ * A change that genuinely needs one has to delete a line here, which is a line
+ * in a diff someone reads rather than an import nobody notices.
+ *
+ * @type {Array<[string, string]>}
+ */
+const POST_PROCESS_BANS = [
+  'PostProcess',
+  'DefaultRenderingPipeline',
+  'PostProcessRenderPipeline',
+  'ImageProcessingPostProcess',
+  'BloomEffect',
+  'MotionBlurPostProcess',
+  'DepthOfFieldEffect',
+  'SSAORenderingPipeline',
+  'SSAO2RenderingPipeline',
+  'FxaaPostProcess',
+].map((name) => [
+  name,
+  `gladiator: \`${name}\` is banned in packages/client. The post-processing chain is empty on purpose: every full-screen pass is input-to-photon latency paid on every frame to make a still frame prettier, and this is a game about a flick landing. The look is bought with baked lighting instead, which costs nothing per frame — docs/renderer.md §5 and §12.`,
+])
+
+/**
  * What `packages/client` may not name.
  *
  * The simulation is authoritative. Babylon will happily run a *second* one —
@@ -184,6 +219,7 @@ const ENGINE_COLLISION_BANS = [
     'PhysicsBody',
     'gladiator: `PhysicsBody` is banned in packages/client. See `enablePhysics`: there is no physics engine here, on purpose.',
   ],
+  ...POST_PROCESS_BANS,
 ].map(([name, message]) => ({ selector: `Identifier[name='${name}']`, message }))
 
 export default tseslint.config(

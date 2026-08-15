@@ -24,28 +24,35 @@
  * else, at load, never per frame. Its determinant is `+1`, so triangle winding
  * survives and front faces stay front faces. `docs/physics-spec.md` §0.3.
  *
- * ## Texture coordinates are derived too
+ * ## Texture coordinates are derived too — both sets
  *
  * Quake's axial projection: each face is projected onto whichever plane its
  * normal leans on hardest, in Quake units, and divided by {@link TEXEL_SCALE}.
  * The result is one texel density everywhere in the map, with no authored UVs
  * to drift out of step with a brush somebody moved.
+ *
+ * The **second** set is the lightmap unwrap, and it does not come from here:
+ * `lightmapUnwrap` in `packages/sim` computes it, and `tools/bake-lightmap.ts`
+ * calls the same function to decide where in the atlas each face's light was
+ * written. One implementation, two callers, so the mesh and the bake cannot
+ * disagree about which wall a texel belongs to — the failure `docs/assets.md`
+ * §3 is about, whose symptom is a *plausible* picture rather than a broken one.
  */
-import type { AbstractEngine } from '@babylonjs/core/Engines/abstractEngine'
-import type { BaseTexture } from '@babylonjs/core/Materials/Textures/baseTexture'
-import { DynamicTexture } from '@babylonjs/core/Materials/Textures/dynamicTexture'
-import { Texture } from '@babylonjs/core/Materials/Textures/texture'
 import { Material } from '@babylonjs/core/Materials/material'
 import { MultiMaterial } from '@babylonjs/core/Materials/multiMaterial'
-import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial'
-import { Color3 } from '@babylonjs/core/Maths/math.color'
+import type { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial'
 import { Mesh } from '@babylonjs/core/Meshes/mesh'
 import { SubMesh } from '@babylonjs/core/Meshes/subMesh'
 import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData'
 import type { Scene } from '@babylonjs/core/scene'
-import { type MapGeometry, type MapSource, type MapSurface, quakeToEngine } from '@gladiator/sim'
+import {
+  type MapGeometry,
+  type MapSource,
+  lightmapUnwrap,
+  quakeToEngine,
+} from '@gladiator/sim'
 
-import { applyAnisotropy } from './scene.ts'
+import { type SurfaceTextures, createSurfaceMaterial, takesLightmap } from './materials.ts'
 
 /**
  * Quake units per texture repeat.
@@ -56,104 +63,24 @@ import { applyAnisotropy } from './scene.ts'
  */
 export const TEXEL_SCALE = 64
 
-/**
- * How a logical surface material is drawn.
- *
- * `MapSurface.material` is a *logical* name — the map format deliberately
- * refuses to know what a file path is (GLAD-PGS73O owns the asset pipeline), so
- * the renderer resolves the name to a look. Unknown names fall back to the
- * opaque default rather than failing: a map that names a material this build
- * has never heard of should still be playable.
- */
-type MaterialPreset = {
-  readonly alpha: number
-  readonly specular: number
-  readonly gloss: number
-}
-
-const DEFAULT_PRESET: MaterialPreset = { alpha: 1, specular: 0, gloss: 16 }
-
-const MATERIAL_PRESETS: Record<string, MaterialPreset> = {
-  concrete: DEFAULT_PRESET,
-  metal: { alpha: 1, specular: 0.18, gloss: 48 },
-  glass: { alpha: 0.28, specular: 0.4, gloss: 96 },
-}
-
 export type MapMesh = {
   readonly mesh: Mesh
   readonly vertices: number
   readonly triangles: number
   /** In `map.surfaces` order, minus any surface with no visible face. */
   readonly surfaces: readonly string[]
+  /**
+   * The materials that should be handed the map's bake, in `surfaces` order.
+   *
+   * A self-lit surface is missing from this list on purpose — nothing lights a
+   * light, and a lightmap *multiplies* what it is attached to
+   * (`materials.ts`). The renderer walks it rather than the submaterial list so
+   * the decision lives with the catalogue that made it.
+   */
+  readonly lightmapped: readonly StandardMaterial[]
   /** Stop re-deciding, every frame, something that was settled at load. */
   freeze(): void
   dispose(): void
-}
-
-/**
- * A grid, drawn once into a canvas texture.
- *
- * Stands in for the art (GLAD-PGS73O) and earns its place until then: an
- * untextured room gives a player nothing to judge speed or distance against,
- * and strafe-jumping is a skill built entirely on judging speed.
- */
-export function createGridTexture(scene: Scene, engine: AbstractEngine): DynamicTexture {
-  const size = 256
-  const texture = new DynamicTexture('grid', { width: size, height: size }, scene, true)
-  const context = texture.getContext() as unknown as CanvasRenderingContext2D
-
-  context.fillStyle = '#ffffff'
-  context.fillRect(0, 0, size, size)
-
-  // Two weights of line: the cell edge, and a quarter-cell hairline. The
-  // hairline is what stops a wall from looking like a flat colour when you are
-  // close enough to it that one cell fills the screen.
-  context.strokeStyle = 'rgba(0, 0, 0, 0.10)'
-  context.lineWidth = 1
-  for (let i = 1; i < 4; i += 1) {
-    const at = (i * size) / 4
-    context.beginPath()
-    context.moveTo(at, 0)
-    context.lineTo(at, size)
-    context.moveTo(0, at)
-    context.lineTo(size, at)
-    context.stroke()
-  }
-
-  context.strokeStyle = 'rgba(0, 0, 0, 0.38)'
-  context.lineWidth = 3
-  context.strokeRect(1.5, 1.5, size - 3, size - 3)
-
-  texture.update(false)
-  texture.wrapU = Texture.WRAP_ADDRESSMODE
-  texture.wrapV = Texture.WRAP_ADDRESSMODE
-  applyAnisotropy(texture, engine)
-  return texture
-}
-
-/** One material per surface: the map's tint, over the shared grid. */
-function createSurfaceMaterial(
-  scene: Scene,
-  surface: MapSurface,
-  grid: BaseTexture | null,
-): StandardMaterial {
-  const preset = MATERIAL_PRESETS[surface.material] ?? DEFAULT_PRESET
-  const material = new StandardMaterial(`surface:${surface.name}`, scene)
-  const [r, g, b] = surface.tint
-
-  material.diffuseColor = new Color3(r, g, b)
-  if (grid !== null) material.diffuseTexture = grid
-  // Tinted ambient, so a surface facing away from every light keeps its
-  // identity instead of going the same grey as its neighbour.
-  material.ambientColor = new Color3(r, g, b)
-  material.specularColor = new Color3(preset.specular, preset.specular, preset.specular)
-  material.specularPower = preset.gloss
-  material.alpha = preset.alpha
-  material.backFaceCulling = preset.alpha >= 1
-  // The fill light plus up to `MAX_MAP_LIGHTS` point lights. Babylon's default
-  // is 4, which would silently drop one.
-  material.maxSimultaneousLights = 5
-  return material
 }
 
 /**
@@ -208,13 +135,16 @@ export function buildMapMesh(
   scene: Scene,
   map: MapSource,
   geometry: MapGeometry,
-  /** The shared surface texture, or `null` where there is no canvas to draw one. */
-  grid: BaseTexture | null,
+  /** The shared detail textures, or `null` where there is no canvas to draw them. */
+  textures: SurfaceTextures | null,
 ): MapMesh {
   const vertexCount = geometry.positions.length / 3
   const positions = new Float32Array(geometry.positions.length)
   const normals = new Float32Array(geometry.normals.length)
   const uvs = new Float32Array(vertexCount * 2)
+  // The lightmap unwrap, from the simulation package, so this and the baker
+  // are looking at one layout. See the header.
+  const { uv2 } = lightmapUnwrap(geometry)
 
   for (let v = 0; v < vertexCount; v += 1) {
     const qx = geometry.positions[v * 3] ?? 0
@@ -246,6 +176,10 @@ export function buildMapMesh(
   data.positions = positions
   data.normals = normals
   data.uvs = uvs
+  // `uv2` is the string `VertexBuffer.UV2Kind`, and a lightmap with
+  // `coordinatesIndex = 1` samples through it. `render/lightmap.ts` is the only
+  // thing allowed to attach one; this is the buffer it insists on finding.
+  data.uvs2 = uv2
   data.indices = geometry.indices
   data.applyToMesh(mesh, false)
 
@@ -270,6 +204,7 @@ export function buildMapMesh(
 
   const multi = new MultiMaterial('arena', scene)
   const surfaces: string[] = []
+  const lightmapped: StandardMaterial[] = []
 
   // Replacing the auto-generated submesh rather than adding to it: Babylon
   // creates one covering the whole buffer the moment indices are set.
@@ -278,7 +213,9 @@ export function buildMapMesh(
     const surface = map.surfaces.find((candidate) => candidate.name === group.surface)
     if (surface === undefined) continue
     const materialIndex = multi.subMaterials.length
-    multi.subMaterials.push(createSurfaceMaterial(scene, surface, grid))
+    const material = createSurfaceMaterial(scene, surface, textures)
+    multi.subMaterials.push(material)
+    if (takesLightmap(surface)) lightmapped.push(material)
     surfaces.push(surface.name)
     const [vertexStart, vertexTotal] = vertexRange(
       geometry.indices,
@@ -315,8 +252,9 @@ export function buildMapMesh(
     vertices: vertexCount,
     triangles: geometry.indices.length / 3,
     surfaces,
+    lightmapped,
     dispose() {
-      // Not the grid: it is the renderer's, and shared.
+      // Not the detail textures: they are the renderer's, and shared.
       multi.dispose(true, true)
       mesh.dispose()
     },

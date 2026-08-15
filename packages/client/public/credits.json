@@ -41,6 +41,22 @@
       "kind": "texture"
     },
     {
+      "id": "arena1-lightmap",
+      "title": "Crucible arena lightmap",
+      "author": "Gladiator contributors",
+      "source": "https://github.com/jaequery/gladiator/blob/main/tools/bake-lightmap.ts",
+      "licence": "CC0-1.0",
+      "kind": "texture"
+    },
+    {
+      "id": "testbed-lightmap",
+      "title": "Testbed lightmap",
+      "author": "Gladiator contributors",
+      "source": "https://github.com/jaequery/gladiator/blob/main/tools/bake-lightmap.ts",
+      "licence": "CC0-1.0",
+      "kind": "texture"
+    },
+    {
       "id": "sound-rocket-fire",
       "title": "Rocket launcher firing",
       "author": "Gladiator contributors",

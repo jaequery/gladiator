@@ -218,3 +218,42 @@ describe('applyLightmap', () => {
     expect(() => applyLightmap(box, lightmap())).toThrow(/no uv2/)
   })
 })
+
+/* --------------------------------------------------------------------------
+ * The arena, which is one mesh with a material per surface
+ * ----------------------------------------------------------------------- */
+
+describe('applyLightmap over a list of materials', () => {
+  /**
+   * The arena is a single mesh with a `MultiMaterial` — one submaterial per
+   * map surface — and not all of them may have the bake. A self-lit fixture has
+   * to be left out, because a lightmap *multiplies* what it is attached to and
+   * a lamp baked dark is the opposite of a lamp.
+   *
+   * So the caller passes the list, and this stays the only place in the client
+   * that ever assigns `lightmapTexture`.
+   */
+  it('attaches to exactly the materials it is handed', async () => {
+    const mesh = await loadQuad(true)
+    const texture = new Texture(null, scene)
+    const lit = new StandardMaterial('lit', scene)
+    const lamp = new StandardMaterial('lamp', scene)
+
+    applyLightmap(mesh, texture, [lit])
+
+    expect(lit.lightmapTexture).toBe(texture)
+    expect(lit.useLightmapAsShadowmap).toBe(true)
+    // The one left out is left out.
+    expect(lamp.lightmapTexture).toBeNull()
+    // And the sampler still points at the second set — that is a property of
+    // the texture, so a level whose walls disagreed about it would be the bug
+    // this whole file is about.
+    expect(texture.coordinatesIndex).toBe(LIGHTMAP_UV_SET)
+  })
+
+  it('still refuses a mesh with no second UV set', async () => {
+    const mesh = await loadQuad(false)
+    const material = new StandardMaterial('lit', scene)
+    expect(() => applyLightmap(mesh, new Texture(null, scene), [material])).toThrow(/no uv2/)
+  })
+})

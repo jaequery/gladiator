@@ -65,29 +65,60 @@ function isLightmappable(material: Material): material is LightmappableMaterial 
 }
 
 /**
+ * Attach a baked lightmap to one material.
+ *
+ * `useLightmapAsShadowmap` is on: the bake carries the direct light as well as
+ * the bounce, so it *multiplies* the material rather than adding to it —
+ * `colour = albedo x detail x lightmap`, which is Quake's model and the one the
+ * arena's materials are written against (`materials.ts`). Off, the lightmap
+ * would be added as extra light on top of a surface that already has all of it,
+ * and every lit wall would blow out to white.
+ */
+function attach(material: Material, lightmap: BaseTexture, owner: string): void {
+  if (!isLightmappable(material)) {
+    throw new Error(`gladiator: ${owner} has no material that can carry a lightmap.`)
+  }
+  material.lightmapTexture = lightmap
+  material.useLightmapAsShadowmap = true
+}
+
+/**
  * Attach a baked lightmap to a mesh.
  *
  * Refuses a mesh with no second UV set, loudly, because the alternative is the
  * failure this whole file is about: a lightmap sampled through the tiling UVs
  * draws *something*, and something is much harder to notice than nothing.
  *
- * `useLightmapAsShadowmap` is on: the bake carries the direct light as well as
- * the bounce, so it multiplies the material rather than adding to it. Off, the
- * lit surfaces would be lit twice and the level would wash out.
+ * `materials` narrows which of a multi-material's submaterials get it. The
+ * arena is one mesh with one submaterial per surface and a self-lit surface
+ * must not be handed a bake — nothing lights a light — so the caller that owns
+ * that decision passes the list, and this function stays the only place in the
+ * client that assigns `lightmapTexture`.
  */
-export function applyLightmap(mesh: AbstractMesh, lightmap: BaseTexture): void {
+export function applyLightmap(
+  mesh: AbstractMesh,
+  lightmap: BaseTexture,
+  materials?: readonly Material[],
+): void {
   if (!mesh.isVerticesDataPresent(LIGHTMAP_VERTEX_KIND)) {
     throw new Error(
       `gladiator: ${mesh.name} has no ${LIGHTMAP_VERTEX_KIND} and cannot carry a lightmap. Export it with a second UV map — glTF's TEXCOORD_1 — from the second slot of Blender's UV Maps list. See packages/client/src/render/lightmap.ts.`,
     )
   }
 
-  const material = mesh.material
-  if (material === null || !isLightmappable(material)) {
-    throw new Error(`gladiator: ${mesh.name} has no material that can carry a lightmap.`)
+  // Set once, on the texture, rather than once per material: `coordinatesIndex`
+  // belongs to the sampler, and a level whose walls disagree about which UV set
+  // their light is in is the exact bug this file exists to prevent.
+  lightmap.coordinatesIndex = LIGHTMAP_UV_SET
+
+  if (materials !== undefined) {
+    for (const material of materials) attach(material, lightmap, mesh.name)
+    return
   }
 
-  lightmap.coordinatesIndex = LIGHTMAP_UV_SET
-  material.lightmapTexture = lightmap
-  material.useLightmapAsShadowmap = true
+  const material = mesh.material
+  if (material === null) {
+    throw new Error(`gladiator: ${mesh.name} has no material that can carry a lightmap.`)
+  }
+  attach(material, lightmap, mesh.name)
 }

@@ -30,6 +30,7 @@
  * the build if a physics engine ever appears in the lockfile.
  */
 import type { TargetCamera } from '@babylonjs/core/Cameras/targetCamera'
+import { Texture } from '@babylonjs/core/Materials/Textures/texture'
 import type { Scene } from '@babylonjs/core/scene'
 import { type MapGeometry, type MapSource, type Weapon } from '@gladiator/sim'
 
@@ -50,8 +51,11 @@ import {
   createFrameMeter,
   meterVerdict,
 } from './frameStats.ts'
+import { type FxCounts, type FxEvent, type FxSystem, type RocketView, createFx } from './fx.ts'
 import { configureKtx2 } from './ktx2.ts'
-import { type MapMesh, buildMapMesh, createGridTexture } from './mapMesh.ts'
+import { applyLightmap } from './lightmap.ts'
+import { type MapMesh, buildMapMesh } from './mapMesh.ts'
+import { type SurfaceTextures, createSurfaceTextures } from './materials.ts'
 import { type PlayerRoster, createPlayerRoster } from './playerModel.ts'
 import { addLighting, applyPose, createCamera, createScene } from './scene.ts'
 import { type RenderView, cameraPose } from './view.ts'
@@ -80,6 +84,17 @@ export type RendererOptions = {
   readonly forceWebGL?: boolean
   /** What the quality controller defends. Defaults to {@link FRAME_BUDGET_MS}. */
   readonly frameBudgetMs?: number
+  /**
+   * The map's baked lightmap, as a URL.
+   *
+   * `tools/bake-lightmap.ts` traced it and `pnpm assets:build` compressed it;
+   * the arena's materials have no run-time light at all and are exactly this
+   * texture times their albedo (`materials.ts`, `docs/renderer.md` §12). Absent
+   * draws an unlit arena, which is what a unit test with no HTTP wants — and
+   * what a browser gets for the two seconds before the fetch lands, which is
+   * why it is behind the `scene.isReady(true)` gate rather than beside it.
+   */
+  readonly lightmapUrl?: string
 }
 
 export type Renderer = {
@@ -118,9 +133,37 @@ export type Renderer = {
   readonly drawnPlayers: number
   /** The weapon the viewmodel is showing, or `Weapon.None` for no hands. */
   readonly viewmodelWeapon: Weapon
+  /** Live particles, beams and marks. `render/fx.ts`. */
+  readonly effects: FxCounts
 }
 
+/**
+ * Load the map's bake and hand it to the arena's materials.
+ *
+ * Returns the texture so the renderer can dispose it, or `null` when there is
+ * no bake to load. Failure is *not* fatal and is deliberately not awaited: a
+ * missing lightmap is a dark arena, and a dark arena a player can still duel in
+ * beats a black page with a stack trace on it.
+ */
+function attachLightmap(scene: Scene, arena: MapMesh, url: string | undefined): Texture | null {
+  if (url === undefined) return null
+  const texture = new Texture(url, scene)
+  // A lightmap is one atlas covering the whole level exactly once. Tiling it
+  // would wrap one wall's light on to another, so the address mode says so
+  // rather than relying on every UV staying inside `[0, 1]`.
+  texture.wrapU = Texture.CLAMP_ADDRESSMODE
+  texture.wrapV = Texture.CLAMP_ADDRESSMODE
+  // The only place in the client that attaches one. `docs/assets.md` §3.
+  applyLightmap(arena.mesh, texture, arena.lightmapped)
+  return texture
+}
+
+/** Shared empties, so a frame with no effects allocates nothing to say so. */
+const NO_EVENTS: readonly FxEvent[] = []
+const NO_ROCKETS: readonly RocketView[] = []
+
 export async function createRenderer(options: RendererOptions): Promise<Renderer> {
+  let textures: SurfaceTextures | undefined
   // Before anything can ask for a texture. It points Babylon's KTX2 decoder and
   // meshopt decoder at our own origin instead of cdn.babylonjs.com, and turns
   // off the two defaults that would decode a compressed texture to uncompressed
@@ -140,15 +183,27 @@ export async function createRenderer(options: RendererOptions): Promise<Renderer
 
   const scene: Scene = createScene(engine)
   const camera: TargetCamera = createCamera(scene)
-  addLighting(scene, options.map)
-  const grid = createGridTexture(scene, engine)
-  const arena: MapMesh = buildMapMesh(scene, options.map, options.geometry, grid)
+  const arena: MapMesh = buildMapMesh(
+    scene,
+    options.map,
+    options.geometry,
+    (textures = createSurfaceTextures(scene, engine)),
+  )
+  // After the arena, and it takes the mesh: the fill light is for the things
+  // that *move*, and the arena is excluded from it because its light is baked.
+  // `scene.ts` argues both halves.
+  addLighting(scene, options.map, arena.mesh)
+  const lightmap = attachLightmap(scene, arena, options.lightmapUrl)
   // Built now rather than the first time a weapon is drawn, so its shaders
   // compile behind the loading screen with everything else. It draws nothing
   // until a view arrives carrying a `self` — which the reference screenshot
   // never does. See `viewmodel.ts`.
   const viewmodel: Viewmodel = createViewmodel(scene, camera)
   const roster: PlayerRoster = createPlayerRoster(scene)
+  // Built now, like the viewmodel, so its shaders compile behind the loading
+  // screen rather than the first time something explodes. That stall is the
+  // classic version of this bug and it costs a duel.
+  const fx: FxSystem = createFx(scene, camera)
 
   // The whole point of the pre-warm: force every shader to compile now, behind
   // the loading screen, rather than the first time something is drawn.
@@ -204,18 +259,25 @@ export async function createRenderer(options: RendererOptions): Promise<Renderer
     get viewmodelWeapon() {
       return viewmodel.weapon
     },
+    get effects() {
+      return fx.counts
+    },
 
     render(view, intervalMs) {
       meter.record(intervalMs)
       recent.record(intervalMs)
 
-      applyPose(camera, cameraPose(view))
+      const pose = cameraPose(view)
+      applyPose(camera, pose)
       // After the camera and before the draw: everything below is written from
       // the same view the camera was, so a frame is one consistent moment.
       const tick = view.tick ?? 0
       const alpha = view.alpha ?? 0
       roster.draw(view.players ?? [], tick, alpha)
       drawViewmodel(view, tick, alpha)
+      // Last, because a beam has to be turned to face an eye that has already
+      // been put where it goes this frame.
+      fx.update(view.fx ?? NO_EVENTS, view.rockets ?? NO_ROCKETS, tick, alpha, pose.position)
 
       scene.render()
       frames += 1
@@ -257,10 +319,12 @@ export async function createRenderer(options: RendererOptions): Promise<Renderer
     resetFrameStats: () => meter.reset(),
 
     dispose() {
+      fx.dispose()
       roster.dispose()
       viewmodel.dispose()
       arena.dispose()
-      grid.dispose()
+      lightmap?.dispose()
+      textures?.dispose()
       scene.dispose()
       engine.dispose()
     },

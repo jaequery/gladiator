@@ -64,6 +64,32 @@
       "note": "Sampled through the second UV set \u2014 see docs/assets.md \u00a73."
     },
     {
+      "id": "arena1-lightmap",
+      "title": "Crucible arena lightmap",
+      "author": "Gladiator contributors",
+      "source": "https://github.com/jaequery/gladiator/blob/main/tools/bake-lightmap.ts",
+      "licence": "CC0-1.0",
+      "kind": "texture",
+      "textureClass": "srgb",
+      "files": [
+        "assets/textures/arena1_lightmap.png"
+      ],
+      "note": "Traced from maps/baked/arena1.json by `pnpm lightmap:bake` \u2014 direct light with shadow rays, occluded sky, one bounce. Sampled through the second UV set; the atlas layout is packages/sim/src/map/lightmapUv.ts."
+    },
+    {
+      "id": "testbed-lightmap",
+      "title": "Testbed lightmap",
+      "author": "Gladiator contributors",
+      "source": "https://github.com/jaequery/gladiator/blob/main/tools/bake-lightmap.ts",
+      "licence": "CC0-1.0",
+      "kind": "texture",
+      "textureClass": "srgb",
+      "files": [
+        "assets/textures/testbed_lightmap.png"
+      ],
+      "note": "Traced from maps/baked/testbed.json by `pnpm lightmap:bake` \u2014 direct light with shadow rays, occluded sky, one bounce. Sampled through the second UV set; the atlas layout is packages/sim/src/map/lightmapUv.ts."
+    },
+    {
       "id": "sound-rocket-fire",
       "title": "Rocket launcher firing",
       "author": "Gladiator contributors",
