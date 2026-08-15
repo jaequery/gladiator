@@ -14,6 +14,8 @@
  * shoot.
  */
 
+import { Weapon } from './weapon.ts'
+
 /** Quantisation of a full turn. 2^16, so the conversion below is exact. */
 export const ANGLE_UNITS = 65536
 
@@ -52,7 +54,7 @@ export type UserCmd = {
   /** Button bitfield. */
   readonly buttons: number
   /**
-   * The weapon the player is holding, a `Weapon` from `weapons.ts`.
+   * The weapon the player is holding, a {@link Weapon}.
    *
    * Carried on every command rather than sent as a switch *event*, for the
    * same reason the whole command is: a lost event leaves two peers holding
@@ -60,15 +62,8 @@ export type UserCmd = {
    * be lost. It is also what makes the bot's weapon selection go through
    * exactly the door a human's does.
    */
-  readonly weapon: number
+  readonly weapon: Weapon
 }
-
-/**
- * The number of weapons a command may name, so `sanitizeUserCmd` can clamp
- * without importing the table it would create an import cycle to reach.
- * `weapons.test.ts` asserts it against `WEAPONS.length`.
- */
-export const WEAPON_COUNT = 2
 
 /** Standing still, looking down the +x axis, holding the rocket launcher. */
 export const NULL_CMD: UserCmd = {
@@ -77,7 +72,7 @@ export const NULL_CMD: UserCmd = {
   yaw: 0,
   pitch: 0,
   buttons: 0,
-  weapon: 0,
+  weapon: Weapon.RocketLauncher,
 }
 
 /** Wrap a signed angle in degrees into `[0, ANGLE_UNITS)` angle units. */
@@ -123,13 +118,22 @@ export function sanitizeUserCmd(value: unknown): UserCmd {
   const raw = (value ?? {}) as Partial<Record<keyof UserCmd, unknown>>
   const yaw = clampInteger(raw.yaw, ANGLE_UNITS)
   const buttons = clampInteger(raw.buttons, 0xffff)
-  const weapon = clampInteger(raw.weapon, WEAPON_COUNT - 1)
+  // Anything that is not one of the two weapons becomes the launcher — the one
+  // a player spawns holding. `Weapon.None` is a legal *entity* state (a corpse,
+  // a rocket) and is not something a command may ask for: a player with empty
+  // hands is not a thing this game has.
+  const weapon = raw.weapon
+  const held =
+    typeof weapon === 'number' && (weapon === Weapon.RocketLauncher || weapon === Weapon.Railgun)
+      ? weapon
+      : Weapon.RocketLauncher
+
   return {
     forwardMove: clampInteger(raw.forwardMove, 1),
     sideMove: clampInteger(raw.sideMove, 1),
     yaw: ((yaw % ANGLE_UNITS) + ANGLE_UNITS) % ANGLE_UNITS,
     pitch: clampInteger(raw.pitch, MAX_PITCH_UNITS),
     buttons: buttons < 0 ? 0 : buttons,
-    weapon: weapon < 0 ? 0 : weapon,
+    weapon: held,
   }
 }

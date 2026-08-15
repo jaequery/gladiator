@@ -312,11 +312,12 @@ export {
   RADIANS_PER_ANGLE_UNIT,
   angleUnitsToRadians,
   pitchUnitsFromDegrees,
-  WEAPON_COUNT,
   sanitizeUserCmd,
   yawUnitsFromDegrees,
 } from './usercmd.ts'
 export type { UserCmd } from './usercmd.ts'
+
+export { NEVER_FIRED, Weapon, isWeapon } from './weapon.ts'
 
 export {
   AMMO_UNLIMITED,
@@ -325,7 +326,6 @@ export {
   ROCKET_LIFETIME_MS,
   ROCKET_SPEED,
   WEAPONS,
-  Weapon,
   fireWeapon,
   fireWeapons,
   muzzlePoint,

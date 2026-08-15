@@ -42,6 +42,7 @@ import { vec3 } from '../math.ts'
 import { EntityKind, createGameState, spawnEntity } from '../state.ts'
 import type { GameState } from '../state.ts'
 import { SURFACE_CLIP_EPSILON } from '../trace.ts'
+import { Weapon } from '../weapon.ts'
 import { mapCollisionBrushes } from './collide.ts'
 import { MAP_FORMAT_VERSION } from './schema.ts'
 import type {
@@ -380,6 +381,9 @@ export function createMapState(map: MapSource, seed: number): GameState {
     slot: 0,
     origin: vec3(spawn.origin[0], spawn.origin[1], spawn.origin[2] + SURFACE_CLIP_EPSILON),
     health: 100,
+    // Rocket Arena hands you both weapons at full ammo; the launcher is the one
+    // in your hands when the round starts. Selection is GLAD-0QWRYK's.
+    weapon: Weapon.RocketLauncher,
   })
   return state
 }

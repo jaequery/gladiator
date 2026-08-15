@@ -11,6 +11,7 @@ import {
   parseServerMessage,
 } from './protocol.ts'
 import { NULL_CMD, type UserCmd } from './usercmd.ts'
+import { Weapon } from './weapon.ts'
 
 describe('wire commands', () => {
   it('round-trips a command exactly', () => {
@@ -20,7 +21,7 @@ describe('wire commands', () => {
       yaw: 40000,
       pitch: -1234,
       buttons: 1,
-      weapon: 1,
+      weapon: Weapon.Railgun,
     }
     expect(decodeCmd(encodeCmd(cmd))).toEqual(cmd)
   })
@@ -32,7 +33,7 @@ describe('wire commands', () => {
       yaw: 65535,
       pitch: 16202,
       buttons: 0,
-      weapon: 0,
+      weapon: Weapon.RocketLauncher,
     }
     const overTheWire = JSON.parse(JSON.stringify(encodeCmd(cmd))) as unknown
     expect(decodeCmd(overTheWire)).toEqual(cmd)
@@ -76,16 +77,16 @@ describe('parseClientMessage', () => {
   })
 
   it('parses a command batch', () => {
-    const raw = JSON.stringify({ t: 'cmds', startTick: 7, cmds: [[1, 0, 100, 0, 1, 1]] })
+    const raw = JSON.stringify({ t: 'cmds', startTick: 7, cmds: [[1, 0, 100, 0, 1, 2]] })
     expect(parseClientMessage(raw)).toEqual({
       t: 'cmds',
       startTick: 7,
-      cmds: [[1, 0, 100, 0, 1, 1]],
+      cmds: [[1, 0, 100, 0, 1, 2]],
     })
   })
 
   it('refuses a batch bigger than the cap, an empty one, or a negative tick', () => {
-    const oversized = new Array(MAX_CMDS_PER_BATCH + 1).fill([0, 0, 0, 0, 0, 0])
+    const oversized = new Array(MAX_CMDS_PER_BATCH + 1).fill([0, 0, 0, 0, 0, 1])
     expect(parseClientMessage(JSON.stringify({ t: 'cmds', startTick: 0, cmds: oversized }))).toBe(
       null,
     )

@@ -17,6 +17,7 @@ import { vec3 } from './math.ts'
 import type { MutVec3 } from './math.ts'
 import { seedRng } from './rng.ts'
 import type { RngState } from './rng.ts'
+import { NEVER_FIRED, Weapon } from './weapon.ts'
 
 /** What an entity is. Numeric so it encodes in one byte. */
 export const EntityKind = {
@@ -81,6 +82,25 @@ export type EntityState = {
   angles: MutVec3
   health: number
   /**
+   * The weapon in this entity's hands, or for a rocket, the weapon that fired
+   * it. `weapon.ts`.
+   *
+   * Netstate rather than a client-side guess, because an opponent's weapon is
+   * something you *read* and change your movement about, and you have to be
+   * able to read it one snapshot after the server changed it. Written every
+   * tick by the fire phase (`weapons.ts`); drawn by the renderer.
+   */
+  weapon: Weapon
+  /**
+   * The tick this entity last fired on, or {@link NEVER_FIRED}.
+   *
+   * A tick number rather than a fire *event*, so it survives a dropped
+   * snapshot: see the header of `weapon.ts`. The animation derives the muzzle
+   * flash and the recoil from `tick - lastFireTick`, which means a client that
+   * joins mid-shot draws the right frame rather than none.
+   */
+  lastFireTick: number
+  /**
    * Sub-steps of knockback left. Quake 3's `ps->pm_time`.
    *
    * While it is positive the player takes no ground friction, accelerates as
@@ -93,16 +113,14 @@ export type EntityState = {
   /** The entity that is responsible for this one — a rocket's shooter. */
   ownerId: number
   /**
-   * For a player: the weapon they are holding, a {@link Weapon}. For a rocket:
-   * the weapon that fired it, which is what tells a renderer what to draw.
-   */
-  weapon: number
-  /**
    * The first tick this player may fire on again.
    *
-   * One timer for both weapons, which is Quake 3's single `ps->weaponTime`
-   * rather than a simplification: switching weapons must not be a way to fire
-   * sooner than either weapon's refire allows. `weapons.ts`.
+   * The forward-looking half of the pair `lastFireTick` opens: one says when
+   * the last shot happened, for the renderer, and this says when the next may,
+   * for the rules. They differ by the refire interval of the weapon that
+   * actually fired, which is why this is a field rather than a sum — Quake's
+   * single `ps->weaponTime`, and the reason switching weapons is never a way
+   * to fire sooner than either weapon allows. `weapons.ts`.
    */
   nextFireTick: number
   /**
@@ -153,9 +171,10 @@ export type EntityInit = {
   velocity?: MutVec3
   angles?: MutVec3
   health?: number
+  weapon?: Weapon
+  lastFireTick?: number
   knockbackTicks?: number
   ownerId?: number
-  weapon?: number
   nextFireTick?: number
   trBase?: MutVec3
   expireTick?: number
@@ -172,9 +191,10 @@ export function spawnEntity(state: GameState, init: EntityInit): EntityState {
     velocity: init.velocity ?? vec3(),
     angles: init.angles ?? vec3(),
     health: init.health ?? 0,
+    weapon: init.weapon ?? Weapon.None,
+    lastFireTick: init.lastFireTick ?? NEVER_FIRED,
     knockbackTicks: init.knockbackTicks ?? 0,
     ownerId: init.ownerId ?? NO_ENTITY,
-    weapon: init.weapon ?? 0,
     nextFireTick: init.nextFireTick ?? 0,
     trBase: init.trBase ?? vec3(),
     spawnTick: state.tick,
@@ -216,9 +236,10 @@ export function cloneEntity(entity: EntityState): EntityState {
     velocity: [entity.velocity[0], entity.velocity[1], entity.velocity[2]],
     angles: [entity.angles[0], entity.angles[1], entity.angles[2]],
     health: entity.health,
+    weapon: entity.weapon,
+    lastFireTick: entity.lastFireTick,
     knockbackTicks: entity.knockbackTicks,
     ownerId: entity.ownerId,
-    weapon: entity.weapon,
     nextFireTick: entity.nextFireTick,
     trBase: [entity.trBase[0], entity.trBase[1], entity.trBase[2]],
     spawnTick: entity.spawnTick,
@@ -285,9 +306,10 @@ export function encodeInto(writer: ByteWriter, state: GameState): void {
     writeF64(writer, entity.angles[1])
     writeF64(writer, entity.angles[2])
     writeF64(writer, entity.health)
+    writeU8(writer, entity.weapon)
+    writeI32(writer, entity.lastFireTick)
     writeI32(writer, entity.knockbackTicks)
     writeI32(writer, entity.ownerId)
-    writeU8(writer, entity.weapon)
     writeI32(writer, entity.nextFireTick)
     writeF64(writer, entity.trBase[0])
     writeF64(writer, entity.trBase[1])

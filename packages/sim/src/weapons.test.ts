@@ -17,17 +17,11 @@ import {
   BUTTON_JUMP,
   MAX_PITCH_UNITS,
   NULL_CMD,
-  WEAPON_COUNT,
+  sanitizeUserCmd,
 } from './usercmd.ts'
 import type { UserCmd } from './usercmd.ts'
-import {
-  AMMO_UNLIMITED,
-  MUZZLE_FORWARD,
-  WEAPONS,
-  Weapon,
-  muzzlePoint,
-  refireTicksOf,
-} from './weapons.ts'
+import { Weapon } from './weapon.ts'
+import { AMMO_UNLIMITED, MUZZLE_FORWARD, WEAPONS, muzzlePoint, refireTicksOf } from './weapons.ts'
 
 /**
  * A sealed box with the floor at z = 0. Big enough that a rocket fired level
@@ -95,9 +89,12 @@ describe('the weapon table', () => {
     expect(WEAPONS.map((w) => w.id)).toEqual([Weapon.RocketLauncher, Weapon.Railgun])
 
     // The table is a two-element tuple type, so a third entry is a type error
-    // rather than a review comment. `WEAPON_COUNT` is what `sanitizeUserCmd`
-    // clamps against, and this is the assertion that keeps the two in step.
-    expect(WEAPON_COUNT).toBe(WEAPONS.length)
+    // rather than a review comment. And the door agrees with it: a command can
+    // only ever name one of these two, whatever arrives on the wire.
+    for (const junk of [Weapon.None, 3, -1, 1.5, 'railgun', null]) {
+      const held = sanitizeUserCmd({ weapon: junk }).weapon
+      expect(WEAPONS.some((w) => w.id === held)).toBe(true)
+    }
   })
 
   it('gives both weapons unlimited ammo', () => {

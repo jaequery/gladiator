@@ -671,7 +671,9 @@ scramble out of deathmatch so a duel would be decided by movement and aim; a
 third weapon is a third thing to balance in exchange for no skill anybody
 learns.
 
-Code: `packages/sim/src/weapons.ts` (the table, the muzzle, the fire phase and
+Code: `packages/sim/src/weapon.ts` (which weapon an entity is *holding* — an
+identity small enough to cross the network, which the renderer reads),
+`weapons.ts` (what the weapons *do*: the table, the muzzle, the fire phase and
 the railgun), `projectile.ts` (a rocket in flight), `damage.ts` (what a hit
 does).
 

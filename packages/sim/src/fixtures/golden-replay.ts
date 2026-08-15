@@ -44,6 +44,7 @@
 
 import type { Replay, TraceSample } from '../replay.ts'
 import { BUTTON_ATTACK, BUTTON_JUMP } from '../usercmd.ts'
+import { Weapon } from '../weapon.ts'
 
 export const GOLDEN_REPLAY: Replay = {
   name: 'two-players-10s',
@@ -95,7 +96,7 @@ export const GOLDEN_REPLAY: Replay = {
     // The railgun, held: hitscan, a 1500 ms refire, and 500 qu/s of knockback
     // on anything it finds. Aimed over the arena rather than at slot 0, so the
     // fixture keeps two live players for the whole ten seconds.
-    { tick: 800, slot: 1, forwardMove: 0, sideMove: 1, yawDeg: 90, pitchDeg: -20, buttons: BUTTON_ATTACK, weapon: 1 },
+    { tick: 800, slot: 1, forwardMove: 0, sideMove: 1, yawDeg: 90, pitchDeg: -20, buttons: BUTTON_ATTACK, weapon: Weapon.Railgun },
     { tick: 1000, slot: 1, forwardMove: 1, sideMove: 1, yawDeg: -120, pitchDeg: -30, buttons: BUTTON_JUMP },
     { tick: 1001, slot: 1, forwardMove: 1, sideMove: 1, yawDeg: -120, pitchDeg: -30, buttons: 0 },
   ],
@@ -106,25 +107,25 @@ export const GOLDEN_REPLAY: Replay = {
  * 62.5 ticks, rounded to the nearest tick. See `sampleTicks`.
  */
 export const GOLDEN_TRACE: readonly TraceSample[] = [
-  { tick: 0, timeMs: 0, hash: '0a103755' },
-  { tick: 63, timeMs: 504, hash: 'fffbfc94' },
-  { tick: 125, timeMs: 1000, hash: 'f868c7a9' },
-  { tick: 188, timeMs: 1504, hash: '89b66467' },
-  { tick: 250, timeMs: 2000, hash: 'edc99fd1' },
-  { tick: 313, timeMs: 2504, hash: '775569ba' },
-  { tick: 375, timeMs: 3000, hash: '13bb4975' },
-  { tick: 438, timeMs: 3504, hash: '82ccd376' },
-  { tick: 500, timeMs: 4000, hash: 'd45a1299' },
-  { tick: 563, timeMs: 4504, hash: '79bbd37b' },
-  { tick: 625, timeMs: 5000, hash: '4e78fab0' },
-  { tick: 688, timeMs: 5504, hash: '7d4a4836' },
-  { tick: 750, timeMs: 6000, hash: '4ea4ac36' },
-  { tick: 813, timeMs: 6504, hash: '78b5dad0' },
-  { tick: 875, timeMs: 7000, hash: '6519fdb5' },
-  { tick: 938, timeMs: 7504, hash: '245231c4' },
-  { tick: 1000, timeMs: 8000, hash: 'c406d142' },
-  { tick: 1063, timeMs: 8504, hash: 'bf277fd8' },
-  { tick: 1125, timeMs: 9000, hash: '585515b8' },
-  { tick: 1188, timeMs: 9504, hash: '4e0ae51c' },
-  { tick: 1250, timeMs: 10000, hash: '4e9825b0' },
+  { tick: 0, timeMs: 0, hash: 'ac2ae0ad' },
+  { tick: 63, timeMs: 504, hash: '8f0cae48' },
+  { tick: 125, timeMs: 1000, hash: '76b9ecad' },
+  { tick: 188, timeMs: 1504, hash: '6469fe1b' },
+  { tick: 250, timeMs: 2000, hash: 'ace05785' },
+  { tick: 313, timeMs: 2504, hash: '20a6d0e4' },
+  { tick: 375, timeMs: 3000, hash: '952cf287' },
+  { tick: 438, timeMs: 3504, hash: '81913090' },
+  { tick: 500, timeMs: 4000, hash: '41663a37' },
+  { tick: 563, timeMs: 4504, hash: '05efb11f' },
+  { tick: 625, timeMs: 5000, hash: '21af00fc' },
+  { tick: 688, timeMs: 5504, hash: 'cfcd6972' },
+  { tick: 750, timeMs: 6000, hash: '20089882' },
+  { tick: 813, timeMs: 6504, hash: 'da618350' },
+  { tick: 875, timeMs: 7000, hash: '4ff0ec15' },
+  { tick: 938, timeMs: 7504, hash: 'c0819044' },
+  { tick: 1000, timeMs: 8000, hash: '810a76b8' },
+  { tick: 1063, timeMs: 8504, hash: '973f1b02' },
+  { tick: 1125, timeMs: 9000, hash: 'db6bf4f2' },
+  { tick: 1188, timeMs: 9504, hash: '5f347aae' },
+  { tick: 1250, timeMs: 10000, hash: '9e7c44aa' },
 ]

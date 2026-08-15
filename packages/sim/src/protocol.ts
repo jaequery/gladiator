@@ -18,7 +18,17 @@
  */
 import { sanitizeUserCmd, type UserCmd } from './usercmd.ts'
 
-/** Bump on any change to the message shapes below. */
+/**
+ * Bump on any change to the message shapes below — **or to what they mean**.
+ *
+ * Version 3 is both kinds at once. A command grew a sixth number, the weapon
+ * being held (GLAD-0QWRYK), so the frame changed shape. And `EntityState` grew
+ * `weapon`, `lastFireTick`, `nextFireTick` and `trBase` (GLAD-PWCON8 and
+ * GLAD-0QWRYK), which changes the canonical encoding and therefore every `hash`
+ * a peer computes for the same world. A client one deploy behind would disagree
+ * with the server about a world both of them simulated correctly, and report it
+ * as a desync — which is exactly the confusion this number exists to prevent.
+ */
 export const PROTOCOL_VERSION = 3
 
 /**

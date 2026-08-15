@@ -143,6 +143,13 @@ Two more rules that are not lintable and matter as much:
   legitimately changes the picture ships its new reference in the same commit
   (`pnpm run e2e -- --update-reference`). A re-shoot in a commit that was not
   supposed to change the picture is the question the gate exists to ask.
+- **What a player model is doing comes from `EntityState`, never from the
+  scene.** Animating an opponent from what the renderer can see — run when the
+  mesh moves, land when it stops falling — is a guess about a simulation that is
+  authoritative somewhere else, and it is wrong under exactly the conditions
+  nobody tests. `render/animState.ts` takes a deeply-`readonly` **copy** of the
+  fields it may read and folds it into an animation state; nothing downstream
+  can reach `GameState`. `docs/renderer.md` §11.
 
 ---
 
@@ -219,10 +226,10 @@ code that owns them — `GRAVITY`, `RUN_SPEED` and `JUMP_VELOCITY` in
 `pmove/accelerate.ts`; the player bounding box is `bbox.ts`; the collision
 constants — `OVERCLIP`, `STEP_SIZE`, `MIN_WALK_NORMAL`, the trace epsilon — are
 `slidemove.ts` and `trace.ts`; the map's rules — the ramp gradients, the spawn
-headroom and separation minima — are `map/schema.ts`; the weapons' are the
-table in `weapons.ts` and the push formula in `damage.ts`; angles are angle
-units,
-defined in `usercmd.ts`; sine and cosine are `trig.ts`. Everything else imports
+headroom and separation minima — are `map/schema.ts`; angles are angle units,
+defined in `usercmd.ts`; the weapon ids are `weapon.ts` and what they *do* is
+the table in `weapons.ts` and the push formula in `damage.ts`; sine and cosine
+are `trig.ts`. Everything else imports
 rather than restating. Two names for one number is the drift everything else in
 this file exists to prevent, so if you find yourself adding a `constants.ts`,
 put the constant next to the code that owns it instead.
@@ -250,9 +257,11 @@ and measured in `pmove/pmove.test.ts`.
 
 ### The weapons layer
 
-`packages/sim/src/weapons.ts` (the table, the muzzle, the fire phase, the
-railgun), `projectile.ts` (a rocket in flight), `damage.ts` (what a hit does).
-Numbers and reasoning: `docs/physics-spec.md` §3.
+`packages/sim/src/weapon.ts` (which weapon an entity holds, and when it last
+fired — netstate, because you read an opponent's weapon off their silhouette),
+`weapons.ts` (the table, the muzzle, the fire phase, the railgun),
+`projectile.ts` (a rocket in flight), `damage.ts` (what a hit does). Numbers and
+reasoning: `docs/physics-spec.md` §3.
 
 **Two weapons, and there is never a third.** `WEAPONS` is a two-element *tuple*
 type, so a third entry is a type error rather than a review comment. Neither has

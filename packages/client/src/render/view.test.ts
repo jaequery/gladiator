@@ -2,6 +2,8 @@ import { NullEngine } from '@babylonjs/core/Engines/nullEngine'
 import { Vector3 } from '@babylonjs/core/Maths/math.vector'
 import {
   BUTTON_JUMP,
+  EntityFlag,
+  NEVER_FIRED,
   PLAYER_VIEW_HEIGHT,
   SKELETON_ARENA,
   type UserCmd,
@@ -12,6 +14,7 @@ import {
   pitchUnitsFromDegrees,
   quakeToEngine,
   tick as simTick,
+  Weapon,
   yawUnitsFromDegrees,
 } from '@gladiator/sim'
 import { describe, expect, it } from 'vitest'
@@ -22,7 +25,9 @@ import {
   type CameraPose,
   type RenderView,
   cameraPose,
+  interpolateNetState,
   interpolateOrigin,
+  lerpAngleUnits,
   viewForwardQuake,
 } from './view.ts'
 
@@ -240,5 +245,59 @@ describe('the pose Babylon ends up with', () => {
     applyPose(camera, pose)
     const second = [...camera.getViewMatrix().m]
     expect(second).toEqual(first)
+  })
+})
+
+describe('interpolating a netstate', () => {
+  const base = {
+    id: 3,
+    slot: 1,
+    origin: [0, 0, 0] as Vec3,
+    velocity: [0, 0, 0] as Vec3,
+    angles: [0, 0, 0] as Vec3,
+    flags: 0,
+    health: 100,
+    weapon: Weapon.RocketLauncher,
+    lastFireTick: NEVER_FIRED,
+  }
+
+  it('takes the short way round a yaw wrap', () => {
+    // 65500 -> 36 is 72 units forward, not 65464 units backward. A plain lerp
+    // spins the opponent through 359 degrees in a single frame, which is a
+    // very convincing impression of a network problem.
+    expect(lerpAngleUnits(65500, 36, 0.5)).toBeCloseTo(65536, 6)
+    expect(lerpAngleUnits(36, 65500, 0.5)).toBeCloseTo(0, 6)
+    expect(lerpAngleUnits(1000, 2000, 0.25)).toBeCloseTo(1250, 6)
+  })
+
+  it('interpolates the continuous fields', () => {
+    const blended = interpolateNetState(
+      { ...base, origin: [0, 0, 0], velocity: [0, 0, 0] },
+      { ...base, origin: [100, -40, 8], velocity: [320, 0, -20] },
+      0.25,
+    )
+    expect([...blended.origin]).toEqual([25, -10, 2])
+    expect([...blended.velocity]).toEqual([80, 0, -5])
+  })
+
+  it('never blends a discrete one', () => {
+    // Half a weapon switch is not a thing, and neither is half a death.
+    const blended = interpolateNetState(
+      { ...base, weapon: Weapon.RocketLauncher, health: 100, flags: 0, lastFireTick: 1 },
+      { ...base, weapon: Weapon.Railgun, health: 0, flags: EntityFlag.Dead, lastFireTick: 9 },
+      0.5,
+    )
+    expect(blended.weapon).toBe(Weapon.Railgun)
+    expect(blended.health).toBe(0)
+    expect(blended.flags).toBe(EntityFlag.Dead)
+    expect(blended.lastFireTick).toBe(9)
+  })
+
+  it('produces a copy, so nothing downstream can reach the states it came from', () => {
+    const previous = { ...base, origin: [0, 0, 0] as Vec3 }
+    const current = { ...base, origin: [10, 0, 0] as Vec3 }
+    const blended = interpolateNetState(previous, current, 1)
+    expect(blended.origin).not.toBe(current.origin)
+    expect([...blended.origin]).toEqual([...current.origin])
   })
 })

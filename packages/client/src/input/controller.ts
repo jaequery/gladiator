@@ -41,7 +41,7 @@ const JUMP_KEYS = ['Space']
 const ATTACK_KEYS = ['Mouse0']
 
 /** Weapon select. Two weapons, two keys, and there will never be a third. */
-const WEAPON_KEYS: readonly (readonly [string, number])[] = [
+const WEAPON_KEYS: readonly (readonly [string, Weapon])[] = [
   ['Digit1', Weapon.RocketLauncher],
   ['Digit2', Weapon.Railgun],
 ]
@@ -84,7 +84,7 @@ export type InputController = {
 export function commandFrom(
   held: ReadonlySet<string>,
   angles: ViewAngles,
-  weapon: number = Weapon.RocketLauncher,
+  weapon: Weapon = Weapon.RocketLauncher,
 ): UserCmd {
   const forward = FORWARD_KEYS.some((key) => held.has(key)) ? 1 : 0
   const back = BACK_KEYS.some((key) => held.has(key)) ? 1 : 0
@@ -117,7 +117,7 @@ export function createInputController(
   const held = new Set<string>()
   const angles: ViewAngles = { yawDegrees: 0, pitchDegrees: 0 }
   const pointer = createPointerLock(canvas)
-  let weapon: number = Weapon.RocketLauncher
+  let weapon: Weapon = Weapon.RocketLauncher
 
   const onKeyDown = (event: KeyboardEvent) => {
     if (!TRACKED_KEYS.has(event.code)) return

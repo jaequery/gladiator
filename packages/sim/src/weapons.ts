@@ -1,6 +1,11 @@
 /**
  * The two weapons. `docs/physics-spec.md` §3.
  *
+ * Which weapon an entity is *holding* is `weapon.ts` — an identity small
+ * enough to cross the network, which is why it lives apart from this file
+ * (GLAD-PWCON8 reads it to draw an opponent). This file is what the weapons
+ * **do**.
+ *
  * A rocket launcher and a railgun, both with unlimited ammo, and **nothing
  * else, ever**. That is not a scope note that will age out — it is the design.
  * Rocket Arena removed the item scramble so that a duel is decided by movement
@@ -44,18 +49,11 @@ import type { EntityState, GameState } from './state.ts'
 import { TICK_INTERVAL_MS } from './tick.ts'
 import { createTrace, rayBoxFraction, traceRay } from './trace.ts'
 import { BUTTON_ATTACK, NULL_CMD } from './usercmd.ts'
+import { Weapon, isWeapon } from './weapon.ts'
 
 /* --------------------------------------------------------------------------
  * The table
  * ----------------------------------------------------------------------- */
-
-/** Which weapon. Numeric so it encodes in one byte, like `EntityKind`. */
-export const Weapon = {
-  RocketLauncher: 0,
-  Railgun: 1,
-} as const
-
-export type Weapon = (typeof Weapon)[keyof typeof Weapon]
 
 /**
  * `ammo` for a weapon that never runs out.
@@ -132,8 +130,10 @@ export const RAILGUN_RANGE = 8192
 /**
  * The weapon table. Exactly two entries, and the tuple type is the enforcement.
  *
- * Indexed by {@link Weapon}, so `WEAPONS[Weapon.Railgun]` is the railgun and
- * the array order is not free to change.
+ * Not indexed by {@link Weapon} — `Weapon.None` is a real value there (a
+ * corpse, a projectile, a spectator) and has no entry here, so the lookup goes
+ * through {@link weaponDef} rather than through a subscript that would be
+ * wrong for exactly one of the three.
  */
 export const WEAPONS: readonly [WeaponDef, WeaponDef] = [
   {
@@ -166,7 +166,10 @@ export const WEAPONS: readonly [WeaponDef, WeaponDef] = [
   },
 ]
 
-/** The definition for a weapon id, falling back to the rocket launcher. */
+/**
+ * What a weapon id does. `Weapon.None` and anything unrecognised fall back to
+ * the rocket launcher, which is what a player spawns holding.
+ */
 export function weaponDef(weapon: number): WeaponDef {
   return weapon === Weapon.Railgun ? WEAPONS[1] : WEAPONS[0]
 }
@@ -229,11 +232,15 @@ export function fireWeapons(state: GameState, inputs: TickInputs, world: Collisi
 
     const cmd = (entity.slot < 0 ? null : inputs[entity.slot]) ?? NULL_CMD
 
-    // The held weapon follows the command every tick. There is no switch
+    // The held weapon follows the command every tick, and this is the only
+    // place `EntityState.weapon` is written for a player — the renderer reads
+    // it from there for both players (GLAD-PWCON8). There is no switch
     // animation and no raise delay: with two weapons and one shared refire
     // timer, a switch already costs whatever is left of the last shot's
     // interval, which is the only cost that changes what a player can do.
-    entity.weapon = cmd.weapon === Weapon.Railgun ? Weapon.Railgun : Weapon.RocketLauncher
+    entity.weapon = isWeapon(cmd.weapon) && cmd.weapon !== Weapon.None
+      ? cmd.weapon
+      : Weapon.RocketLauncher
 
     if ((cmd.buttons & BUTTON_ATTACK) === 0) continue
     if (state.tick < entity.nextFireTick) continue
@@ -255,6 +262,11 @@ export function fireWeapon(
   weapon: number,
 ): void {
   const def = weaponDef(weapon)
+
+  // Both halves of the same event: `lastFireTick` looks back, for the muzzle
+  // flash and the recoil the renderer derives from it (`weapon.ts`), and
+  // `nextFireTick` looks forward, for the refire gate above.
+  shooter.lastFireTick = state.tick
   shooter.nextFireTick = state.tick + def.refireTicks
 
   angleVectors(shooter.angles[0], shooter.angles[1], 0, aimForward, null, null)

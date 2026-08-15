@@ -10,7 +10,8 @@ import { TICK_INTERVAL_MS } from './tick.ts'
 import { SURFACE_CLIP_EPSILON, rayBoxFraction } from './trace.ts'
 import { BUTTON_ATTACK, NULL_CMD } from './usercmd.ts'
 import type { UserCmd } from './usercmd.ts'
-import { ROCKET_SPEED, WEAPONS, Weapon, spawnProjectile } from './weapons.ts'
+import { Weapon } from './weapon.ts'
+import { ROCKET_SPEED, WEAPONS, spawnProjectile } from './weapons.ts'
 
 const ROCKET = WEAPONS[0]
 
