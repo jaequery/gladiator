@@ -312,13 +312,42 @@ peers, owns one `GameState`, holds no timer and opens no socket.
 **Room code** — the short string a player sends a friend to be dueled by.
 
 **Prediction** — the client simulating its own input immediately rather than
-waiting for the server, so movement feels instant (GLAD-6RT64L).
+waiting for the server, so movement feels instant
+(`packages/client/src/net/prediction.ts`). It keeps the commands the server has
+not acknowledged, because reconciliation is what it does with them.
 
 **Reconciliation** — replaying unacknowledged inputs on top of an authoritative
 server state when it arrives, correcting prediction without a visible snap.
+`packages/client/src/net/reconcile.ts`.
+
+**Correction band** — which of four things a reconciliation does about the
+distance between what was predicted and what the server says: ignore it under
+0.1 u, carry it in rendering for 100 ms under 30 u, the same for 200 ms and a
+log line under 120 u, and hard-snap past that. 120 is one splash radius. The
+rule underneath all four: the simulation takes the authoritative value
+immediately, and only rendering lags.
+
+**Render offset** — the difference a correction moved the player, held outside
+`GameState` and decayed to zero over a tenth of a second, so the camera travels
+rather than teleports. The only place a correction is allowed to be soft.
+`packages/client/src/render/renderOffset.ts`.
 
 **Entity interpolation** — rendering the *opponent* slightly in the past,
-between two received states, so their motion is smooth rather than stepped.
+between two received states, so their motion is smooth rather than stepped. 80 ms
+behind, extrapolating at most 250 ms when the snapshots stop.
+`packages/client/src/net/interpolate.ts`.
+
+**Interpolation clock** — the render tick entity interpolation draws at, which
+advances by wall-clock and *tracks* `newestSnapshotTick - 80 ms` by running a few
+percent fast or slow. It exists because rendering at that target directly makes
+correct interpolation between correct states stutter: the target moves in
+whatever lumps the network delivers. Same shape as the clock-sync **slew**,
+pointed at the picture instead of at the simulation.
+
+**Wire state** — a whole `GameState` as a flat array of numbers
+(`packages/sim/src/netstate.ts`), in the same field order `encodeExact` walks.
+The *whole* state, because a client that rebuilt only the entities could draw
+the world and could not reproduce its hash.
 
 **Lag compensation** — the server rewinding other players to where the shooter
 saw them when deciding whether a shot hit (GLAD-5QGO11).
@@ -330,8 +359,10 @@ something you *read*, one snapshot after the server changed it. Paired with
 **`lastFireTick`** — the tick they last fired on, carried as state rather than
 sent as an event so it survives a dropped snapshot.
 
-**Netstate / snapshot** — the serialised slice of sim state the server sends to
-clients each tick.
+**Netstate / snapshot** — the state the server sends a client: a **wire state**
+plus the last command of that client's the world has executed
+(`ServerSnapshot`). State rather than an event, so a client that misses one and
+receives the next has lost nothing but a frame of interpolation.
 
 **Clock sync** — agreeing on tick numbering between client and server. The
 server pings and the client echoes (`ServerPing` / `ClientPong`), so the round

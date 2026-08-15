@@ -15,6 +15,7 @@ import {
   type GameState,
   type ServerMessage,
   type UserCmd,
+  applyWireState,
   createMapState,
   describeMapMismatch,
   describeVersionMismatch,
@@ -232,6 +233,10 @@ describe('cross-environment hash agreement', () => {
       const TICKS = TICK_RATE * 60 // 7500 — a minute of simulated play
       const ourHashes = new Map<number, number>()
       const compared: Array<{ tick: number; ours: number; theirs: number }> = []
+      const snapshots: Array<{ tick: number; hash: number }> = []
+      // One world the snapshots are decoded into, reused. Every field of it is
+      // overwritten by `applyWireState` before anything reads one.
+      const rebuilt: GameState = createMapState(SERVER_MAP.source, SKELETON_SEED)
       let welcomed = false
 
       const done = new Promise<void>((resolve, reject) => {
@@ -252,6 +257,19 @@ describe('cross-environment hash agreement', () => {
             // advanced a tick would show up as a hash for a tick we never
             // simulated three lines below.
             socket.send(JSON.stringify({ t: 'pong', id: parsed.id }))
+            return
+          }
+          if (parsed.t === 'snap') {
+            // The authoritative world, whole. Decoded and hashed rather than
+            // counted: a snapshot that carried *nearly* the state would agree
+            // with the `hash` frame beside it and disagree with the world it
+            // claims to describe, and reconciliation would then build on a
+            // world the server never had (GLAD-6RT64L).
+            if (!applyWireState(rebuilt, parsed.state)) {
+              reject(new Error('the server sent a snapshot this build cannot read'))
+              return
+            }
+            snapshots.push({ tick: rebuilt.tick, hash: hashState(rebuilt) })
             return
           }
           if (parsed.t !== 'hash') {
@@ -300,6 +318,15 @@ describe('cross-environment hash agreement', () => {
       // debuggable if you know when it started.
       expect(disagreements.slice(0, 5)).toEqual([])
       expect(disagreements).toHaveLength(0)
+
+      // And the snapshots describe the same world the hashes do. This is what
+      // makes reconciliation possible at all: a client rebuilds its world from
+      // one of these and then has to agree with the server about the hash of
+      // the result. A codec that dropped one field would pass every assertion
+      // above and fail every one after it (GLAD-6RT64L).
+      expect(snapshots.length).toBe(compared.length)
+      const wrongSnapshots = snapshots.filter((entry) => ourHashes.get(entry.tick) !== entry.hash)
+      expect(wrongSnapshots.slice(0, 5)).toEqual([])
 
       // And the run actually went somewhere, rather than agreeing about a
       // player who never moved.

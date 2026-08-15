@@ -690,6 +690,115 @@ world simulated with no policy at all so the assertion has something to bite on.
 
 ---
 
+## Prediction, reconciliation and interpolation
+
+`packages/client/src/net/prediction.ts`, `reconcile.ts`, `interpolate.ts` and
+`render/renderOffset.ts`. GLAD-6RT64L. These are the three techniques that make
+an authoritative server feel local, and all three are only possible because the
+two ends run the identical `tick()` — which is what the simulation boundary at
+the top of this file exists to guarantee.
+
+**The client predicts its own input immediately and keeps the unacknowledged
+commands.** When a snapshot arrives it adopts the authoritative world and
+*replays* everything the server has not seen, which lands it back where it
+already thought it was. The wire form of a world is `sim/src/netstate.ts` and it
+is the **whole** state — tick, PRNG position, next entity id, the match, every
+entity — because a client that rebuilt only the entities would agree about the
+picture and disagree about the hash forever, which turns the desync canary into
+noise.
+
+**A snapshot carries two tick numbers and they answer different questions.**
+`state[0]` is how far the world has been advanced; `ServerSnapshot.ack` is how
+much of *this peer's* input is in it. They are equal only while a host advances
+the world by exactly the batch it was handed, which is what it does today;
+GLAD-FHKBN8's scheduler will come apart from that, and a client that had
+inferred one from the other would replay the wrong commands.
+
+### The correction bands
+
+| Distance | What happens |
+| -------- | ------------ |
+| `< 0.1 u` | nothing; below quantisation noise |
+| `0.1 to 30 u` | adopt, and carry the delta in rendering for 100 ms |
+| `30 to 120 u` | adopt, carry it for 200 ms, and log it |
+| `> 120 u` | **hard snap**: no offset, and the frame accumulator is cleared |
+
+120 is one splash radius, imported from `WEAPONS[0].splashRadius` rather than
+written out — it is the largest displacement the game can legitimately hand a
+player in a tick, so anything past it is a teleport, a telefrag or a desync.
+
+The structural rule underneath all four rows: **the simulation always takes the
+authoritative value immediately; only rendering lags.** A world left
+half-corrected is the world the *next* replay starts from, so the error
+compounds instead of decaying while every individual correction looks
+reassuringly small. `render/renderOffset.ts` is the only place a correction is
+allowed to be soft, it lives outside `GameState`, and it decays linearly so that
+it is over exactly when it says it is.
+
+### The opponent is never predicted
+
+You have no knowledge of a remote player's future input, so they are drawn
+80 ms in the past from real data, between two states the server actually
+produced. The cost — you shoot at where they were — is paid back by lag
+compensation rewinding them to exactly there (GLAD-5QGO11). The two are halves
+of one design.
+
+**The interpolation clock is its own clock and it is slewed.** Rendering at
+`newestSnapshotTick - delay` directly is the classic mistake: the newest tick
+advances in whatever lumps the network delivers, so mathematically correct
+interpolation between correct states visibly stutters because the *clock* is
+stuttering. `interpolate.ts` therefore advances a render tick by wall-clock and
+*tracks* the target by running a few percent fast or slow — the same shape as
+`clockSync.ts`'s slew, and bounded below zero so the clock can never reverse.
+`interpolate.test.ts` measures the second derivative of the drawn track against
+the same trajectory drawn from perfect knowledge, and against the naive
+implementation as a control.
+
+**The buffer covers jitter and reordering. It does not cover loss.** The
+transport is a WebSocket, which is TCP, and TCP does not drop data — it
+retransmits it, which stalls everything behind the missing frame for about a
+round trip and then delivers the lot in a burst. What covers that is
+extrapolation, capped at 250 ms, and then the honest admission that the
+opponent's position is a guess. `laggedTransport.ts` models it that way:
+`retransmitMs` is what a lost frame costs, and setting it to zero gives a
+*datagram*, which is a deliberate violation of the transport contract kept for
+the same reason `reorderChance` is.
+
+### What is measured, and where
+
+`packages/client/src/net/netcode.test.ts` plays a minute at 60 frames a second
+over LAN, 40, 80 and 180 ms links, all four with jitter and retransmitted loss,
+against a real `Room` in virtual time. It asserts no hard snaps, no desync, and
+corrections over a unit on under 5% of ticks — and then that the client's
+predicted hash matches a bare `tick()` loop on **every one of 7500 ticks**,
+while its world is being overwritten and rebuilt sixty times a second.
+
+That last assertion is the project's physics-engine containment mechanism. Lint
+catches the imports somebody anticipated; a hash that has to match on every tick
+of a minute catches the category — an engine collision routine, a camera read
+back into the simulation, a stray `Math.random`, a field the wire codec forgot.
+
+### What is deliberately not here
+
+**The clock-sync slew is not wired into the frame loop yet**, and that is a
+decision rather than an omission. A `Room` today advances its world by exactly
+the batch it was handed, so the server's tick counter is a count of the client's
+own commands rather than a clock. Steering the client's tick rate against it
+would close a loop through itself: run 12.5% fast, the server ticks 12.5% faster,
+the estimate follows, and the correction never converges. The consumer of
+`ClientClockSync.errorTicks` therefore arrives with the fixed-rate scheduler that
+makes the server's tick a clock (GLAD-FHKBN8). What *is* consumed today is the
+part with no feedback in it — the round trip, for the readout — and the
+interpolation clock, which tracks the snapshot stream and not the server's.
+
+For the same reason the harness seats **one** peer: two peers in one room would
+each advance the world by their own commands, so it would run at twice the rate
+with each player moving on half the ticks. Entity interpolation is therefore
+measured against a real simulated trajectory on a jittery delivery schedule
+(`interpolate.test.ts`) rather than through a second socket.
+
+---
+
 ## The bot's navigation data
 
 `packages/bot/src/nav/`, authored in `maps/*.nav.ts`, baked by `pnpm nav:bake`

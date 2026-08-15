@@ -16,6 +16,7 @@
  * socket silently is indistinguishable from the server being down, and the
  * player reloads twice and gives up.
  */
+import { isWireState, type WireState } from './netstate.ts'
 import { sanitizeUserCmd, type UserCmd } from './usercmd.ts'
 
 /**
@@ -34,8 +35,13 @@ import { sanitizeUserCmd, type UserCmd } from './usercmd.ts'
  * nothing, so the server measures no round trip, reports `-1` forever, and the
  * client never learns which tick it is predicting into — a session that
  * connects, plays, and feels wrong. Being told to reload is better.
+ *
+ * Version 5 adds {@link ServerSnapshot} (GLAD-6RT64L): the authoritative world,
+ * whole, so a client can replay its unacknowledged commands on top of it. A
+ * version-4 client is handed a frame it cannot parse and treats it as a host
+ * speaking a language it does not know, which is exactly what has happened.
  */
-export const PROTOCOL_VERSION = 4
+export const PROTOCOL_VERSION = 5
 
 /**
  * The most commands one frame may carry. The client's accumulator clamps a
@@ -183,10 +189,49 @@ export type ServerPing = {
   readonly queued: number
 }
 
+/**
+ * The authoritative world, whole, at the tick the host has reached.
+ *
+ * Reconciliation's raw material (GLAD-6RT64L): the client adopts this state,
+ * replays every command it sent after {@link ServerSnapshot.ack}, and lands
+ * back where it already thought it was — or does not, which is a correction.
+ *
+ * ## Why the whole state and not a delta
+ *
+ * A snapshot is *state*, not an event, and that is what makes it survivable: a
+ * client that misses one and receives the next has lost nothing but a frame of
+ * interpolation. A delta against a frame the client may not hold gives that
+ * property up, and buys bandwidth this game does not need — a duel is two
+ * players and a handful of rockets, which is a couple of hundred numbers.
+ * Delta encoding belongs to the ticket that measures the bandwidth first.
+ *
+ * ## Why `ack` is a *client* tick and `state[0]` is a server one
+ *
+ * They are the same numbering by design — that is what clock sync is for — but
+ * they are not the same question. `state[0]` is how far the world has been
+ * advanced; `ack` is how much of *this peer's* input is in it. The two are
+ * equal only while a host advances the world by exactly the batch it was handed,
+ * which is what it does today; the moment a scheduler drains a jitter buffer at
+ * a fixed rate (GLAD-FHKBN8) they come apart, and a client that had inferred one
+ * from the other would replay the wrong commands.
+ */
+export type ServerSnapshot = {
+  readonly t: 'snap'
+  /**
+   * The tick label of the last command from *this* peer that the world has
+   * executed. Everything the client sent after it is still unacknowledged and
+   * gets replayed on top.
+   */
+  readonly ack: number
+  /** The canonical state, flat. `netstate.ts` owns the field order. */
+  readonly state: WireState
+}
+
 export type ServerMessage =
   | ServerWelcome
   | ServerHash
   | ServerPing
+  | ServerSnapshot
   | ServerVersionMismatch
   | ServerMapMismatch
   | ServerFault
@@ -325,6 +370,17 @@ export function parseServerMessage(raw: string): ServerMessage | null {
     // folded one into its estimate would place the server in its own future.
     if (id < 0 || tick < 0 || queued < 0 || rttMs < UNKNOWN_RTT) return null
     return { t: 'ping', id, tick, rttMs, queued }
+  }
+
+  if (record['t'] === 'snap') {
+    const ack = asFiniteInteger(record['ack'])
+    const state = record['state']
+    // The state is checked in full — every number finite, the entity count
+    // matching the length — rather than trusted and repaired later. A `NaN` that
+    // got past here would be adopted into the client's world, and the
+    // simulation has no way to reject one: a tick is a total function.
+    if (ack === null || ack < 0 || !isWireState(state)) return null
+    return { t: 'snap', ack, state }
   }
 
   if (record['t'] === 'version_mismatch') {

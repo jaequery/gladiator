@@ -11,6 +11,9 @@ import {
   parseClientMessage,
   parseServerMessage,
 } from './protocol.ts'
+import { applyWireState } from './netstate.ts'
+import { snapshotFrame } from './snapshot.ts'
+import { EntityKind, createGameState, hashState, spawnEntity } from './state.ts'
 import { NULL_CMD, type UserCmd } from './usercmd.ts'
 import { Weapon } from './weapon.ts'
 
@@ -188,6 +191,44 @@ describe('parseServerMessage', () => {
     ]) {
       const raw = JSON.stringify({ t: 'ping', id: 1, tick: 5, rttMs: 20, queued: 1, ...patch })
       expect(parseServerMessage(raw), `accepted ${JSON.stringify(patch)}`).toBe(null)
+    }
+  })
+
+  it('parses a snapshot, and survives the JSON round trip bit for bit', () => {
+    const world = createGameState(0x5eed)
+    spawnEntity(world, {
+      kind: EntityKind.Player,
+      slot: 0,
+      // Deliberately not round numbers: the claim being made about JSON is that
+      // a double survives it exactly, and a wire full of integers would not test
+      // it. `Number::toString` is specified as the shortest round-tripping
+      // representation, which is why this holds.
+      origin: [-383.6256, 12.5, 0.125],
+      velocity: [320 / 3, -0.1, 0],
+      health: 100,
+    })
+    const frame = JSON.stringify(snapshotFrame(world, 41))
+    const parsed = parseServerMessage(frame)
+    if (parsed?.t !== 'snap') throw new Error('a snapshot did not parse as one')
+
+    expect(parsed.ack).toBe(41)
+    const rebuilt = createGameState(0)
+    expect(applyWireState(rebuilt, parsed.state)).toBe(true)
+    expect(hashState(rebuilt)).toBe(hashState(world))
+  })
+
+  it('refuses a snapshot whose state is not one', () => {
+    const good = snapshotFrame(createGameState(1), 0)
+    for (const patch of [
+      { ack: -1 },
+      { ack: 1.5 },
+      { state: 'nope' },
+      { state: [] },
+      { state: [...good.state, 0] },
+      { state: good.state.map(() => Number.NaN) },
+    ]) {
+      const raw = JSON.stringify({ ...good, ...patch })
+      expect(parseServerMessage(raw), `accepted ${JSON.stringify(patch).slice(0, 40)}`).toBe(null)
     }
   })
 

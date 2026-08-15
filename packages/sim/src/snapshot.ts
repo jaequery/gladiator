@@ -1,49 +1,40 @@
 /**
- * `Snapshot` — the slice of the world the server sends a client each tick.
+ * `Snapshot` — the slice of the world the server sends a client, as a frame.
  *
  * A snapshot is *state*, not an event: it says what is true at a tick, and a
  * client that misses one and receives the next has lost nothing but a frame of
  * interpolation. That property is what lets snapshots travel over an
  * unreliable channel later — and it is exactly the property the rocket-spawn
  * message does *not* have. See the reliability contract in `transport.ts`.
+ *
+ * ## It is the whole state, and that is the point
+ *
+ * The first version of this file sent the entity list and a hash. That is
+ * enough to *draw* the world and not enough to *rebuild* it: `hashState` also
+ * walks the tick, the PRNG stream position, the next entity id and the match,
+ * so a client that adopted only the entities would replay its commands on top
+ * of a world that was almost the server's and disagree about the hash forever.
+ * The comparison that would have caught a real desync would have been noise
+ * from the first tick. `netstate.ts` owns the encoding and argues that at
+ * length; this is the frame around it.
  */
 
-import { cloneEntity } from './state.ts'
-import type { EntityState, GameState } from './state.ts'
-import { hashState } from './state.ts'
-
-export type Snapshot = {
-  /** The sub-step this is the state at. */
-  readonly tick: number
-  /**
-   * The last `UserCmd.seq` the server had consumed from *this* client when it
-   * built the snapshot. Reconciliation replays everything after it
-   * (GLAD-6RT64L).
-   */
-  readonly ackSeq: number
-  /**
-   * `hashState()` at `tick`.
-   *
-   * The desync canary: a client that predicted the same tick compares its own
-   * hash and knows immediately, rather than discovering it a few seconds later
-   * as a rocket that hit on one machine and missed on the other.
-   */
-  readonly hash: number
-  readonly entities: readonly EntityState[]
-}
+import { encodeState } from './netstate.ts'
+import type { ServerSnapshot } from './protocol.ts'
+import type { GameState } from './state.ts'
 
 /**
- * Take a snapshot of a state.
+ * The frame for a state, acknowledging a peer's commands up to `ackTick`.
  *
- * Entities are *copied*. `tick()` mutates the world in place, so a snapshot
- * holding references would silently become a snapshot of the present the
- * moment the next sub-step ran.
+ * `ackTick` is the tick label of the last command *that peer* sent which this
+ * world has executed — not the world's own tick. The two are the same number
+ * while a host advances by exactly the batch it was handed, and come apart the
+ * moment a scheduler drains a jitter buffer at a fixed rate (GLAD-FHKBN8).
+ *
+ * The state is *copied* into a flat array here. `tick()` mutates the world in
+ * place, so a frame holding references would silently become a frame about the
+ * present the moment the next sub-step ran.
  */
-export function snapshotOf(state: GameState, ackSeq: number): Snapshot {
-  return {
-    tick: state.tick,
-    ackSeq,
-    hash: hashState(state),
-    entities: state.entities.map(cloneEntity),
-  }
+export function snapshotFrame(state: GameState, ackTick: number): ServerSnapshot {
+  return { t: 'snap', ack: ackTick, state: encodeState(state) }
 }

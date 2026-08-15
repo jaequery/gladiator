@@ -41,6 +41,29 @@ interpolated between the previous tick and the current one by the accumulator's
 remainder; the *view angle* is not interpolated, because it is sampled from the
 mouse once per frame and interpolating it would add a frame of latency to aim.
 
+### The one thing added to the eye, and why it is not a filter
+
+`render/renderOffset.ts` (GLAD-6RT64L) adds a vector to the interpolated
+position: the difference a server correction moved the player, decayed linearly
+to zero over 100 ms. It is the reason `inertia = 0` above does not simply mean
+"corrections arrive as a jolt".
+
+It is not the low-pass filter that paragraph rejects, and the difference is
+worth stating precisely. `inertia` is a filter on the camera's *own* previous
+output — per-frame state, read back, frame-rate dependent, and lagging every
+correction including the ones that have already landed. This is a pure function
+of corrections that have *already happened*: it is pushed by
+`net/reconcile.ts`, it decays on wall-clock at a rate that makes the total
+journey the same at 60 Hz and 240 Hz, and it is never read by anything that
+computes a simulation value. The simulation has taken the authoritative
+position in full by the time this vector exists — which is the rule
+`net/reconcile.ts` states, and the reason a half-corrected world never gets to
+be the world the next replay starts from.
+
+Past one splash radius it is cleared rather than pushed: there is no honest way
+to smooth a teleport, and carrying two hundred units of offset would draw the
+player somewhere they demonstrably are not.
+
 ### Babylon's Euler angles are Quake's angles
 
 `camera.rotation = (pitch, yaw, 0)`, in radians, unchanged from the simulation.
@@ -378,11 +401,14 @@ it, and a bobbing viewmodel is the most moving thing on screen.
 
 `?dummy=1` is the other half of that trade — a scripted opponent
 (`dummyOpponent.ts`) who runs a circle, jumps, fires, switches weapons and
-dies, so every animation state can be watched in a real browser before
-GLAD-FHKBN8 and GLAD-6RT64L deliver real snapshots. It produces `EntityState`
-and goes through the same interpolation path a real snapshot pair will, and it
-never touches `GameState` — so the client and the server go on agreeing about
-the world exactly as they did before.
+dies, so every animation state can be watched in a real browser. Snapshots do
+now arrive (GLAD-6RT64L) and `net/interpolate.ts` draws whatever is in them, so
+the stand-in is only reached when the buffer holds no other player — which is a
+page with nobody on the other end of it, and will stay reachable until a room
+can seat two peers (GLAD-FHKBN8). It produces `EntityState` and goes through the
+same interpolation path a real snapshot pair does, and it never touches
+`GameState` — so the client and the server go on agreeing about the world
+exactly as they did before.
 
 ---
 

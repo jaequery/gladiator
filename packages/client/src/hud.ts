@@ -28,6 +28,17 @@ export type HudModel = {
   readonly clientHash: number
   readonly locked: boolean
   readonly net: NetSnapshot
+  /**
+   * Reconciliations that actually moved the player, and commands still
+   * unacknowledged. GLAD-6RT64L.
+   *
+   * On the agreement row rather than one of their own, and only when they are
+   * non-zero — the same rule `dropped` follows. A correction is not a fault:
+   * the interesting reading is "this session was corrected N times", beside the
+   * hashes that say whether it was corrected *correctly*.
+   */
+  readonly corrected: number
+  readonly pending: number
 }
 
 export type Hud = {
@@ -145,7 +156,9 @@ export function createHud(root: HTMLElement): Hud {
         setText(
           agreementValue,
           `${net.agree ? 'MATCH' : 'MISMATCH'} · ${net.compared} compared, ${net.mismatched} mismatched` +
-            (net.dropped > 0 ? `, ${net.dropped} dropped` : ''),
+            (net.dropped > 0 ? `, ${net.dropped} dropped` : '') +
+            (model.corrected > 0 ? `, ${model.corrected} corrected` : '') +
+            (model.pending > 0 ? `, ${model.pending} unacked` : ''),
         )
         setState(agreementValue, net.agree && net.mismatched === 0 ? 'match' : 'mismatch')
       }

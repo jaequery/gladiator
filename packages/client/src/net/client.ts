@@ -30,17 +30,24 @@
  * not time anything itself, because the number decides how far lag compensation
  * rewinds and a client that reported it could ask to be rewound further.
  *
+ * ## It carries snapshots and does not read them
+ *
+ * The authoritative world arrives here as a {@link ServerSnapshot} and is
+ * handed straight to {@link NetOptions.onSnapshot}. This module knows about
+ * frames, clocks and sockets, and deliberately nothing about the world:
+ * `net/prediction.ts` is what adopts one, `net/reconcile.ts` is what replays on
+ * top of it, and `net/interpolate.ts` is what draws the half of it this client
+ * does not predict.
+ *
  * Reconnection, room codes and the rest of the connection lifecycle are
- * GLAD-DVDV6P; prediction and reconciliation are GLAD-6RT64L — and it is
- * prediction that will consume {@link NetClient.clock}, by slewing the frame
- * accumulator toward `targetTick`. What is here is the smallest thing that can
- * tell the truth about agreement, plus the clock that agreement will need.
+ * GLAD-DVDV6P.
  */
 import {
   PROTOCOL_VERSION,
   TransportState,
   UNKNOWN_RTT,
   type ServerMessage,
+  type ServerSnapshot,
   type Transport,
   type UserCmd,
   type WireCmd,
@@ -150,6 +157,14 @@ export type NetSnapshot = {
   readonly queuedAtServer: number
   /** Pings answered. Zero for a long time means clock sync is not working. */
   readonly pings: number
+  /**
+   * Authoritative states received.
+   *
+   * Beside {@link NetSnapshot.compared}, this is what says reconciliation has
+   * anything to work with: a session with pings and hashes but no snapshots is
+   * a client predicting into a world nobody is correcting.
+   */
+  readonly snapshots: number
 }
 
 export type NetClient = {
@@ -196,6 +211,15 @@ export type NetOptions = {
   readonly mapHashOverride?: string
   /** What the HUD says when {@link NetOptions.transport} is `null`. */
   readonly unconfiguredMessage?: string
+  /**
+   * Called with every authoritative state, the moment it lands.
+   *
+   * A callback rather than a queue the frame loop drains, because there is
+   * nothing sensible to do with a snapshot other than adopt it, and a queue
+   * would only add a frame of delay and a place for one to be forgotten.
+   * `net/prediction.ts` is what registers here.
+   */
+  readonly onSnapshot?: (snapshot: ServerSnapshot) => void
 }
 
 /**
@@ -236,6 +260,7 @@ export function createNetClient(options: NetOptions): NetClient {
   let outboxStartTick = 0
   const clock = createClockSync()
   let pings = 0
+  let snapshots = 0
 
   const transport = options.transport
   let status: NetStatus = transport === null ? 'unconfigured' : 'idle'
@@ -304,6 +329,15 @@ export function createNetClient(options: NetOptions): NetClient {
       transport?.send(JSON.stringify({ t: 'pong', id: parsed.id }))
       clock.observe(parsed, now())
       pings += 1
+      return
+    }
+
+    if (parsed.t === 'snap') {
+      // Handed straight on. Reconciliation is somebody else's job — this module
+      // knows about frames and clocks and deliberately nothing about the world
+      // (`net/prediction.ts`).
+      snapshots += 1
+      options.onSnapshot?.(parsed)
       return
     }
 
@@ -408,6 +442,7 @@ export function createNetClient(options: NetOptions): NetClient {
       leadTicks: clock.leadTicks,
       queuedAtServer: clock.queued,
       pings,
+      snapshots,
     }),
 
     close() {

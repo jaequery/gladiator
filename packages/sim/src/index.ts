@@ -255,6 +255,17 @@ export {
 export type { PmoveBody } from './pmove/index.ts'
 
 export {
+  WIRE_ENTITY_FIELDS,
+  WIRE_HEADER_FIELDS,
+  applyWireState,
+  decodeState,
+  encodeState,
+  isWireState,
+  wireStateLength,
+} from './netstate.ts'
+export type { WireState } from './netstate.ts'
+
+export {
   MAX_CMDS_PER_BATCH,
   PROTOCOL_VERSION,
   UNKNOWN_RTT,
@@ -275,6 +286,7 @@ export type {
   ServerMapMismatch,
   ServerMessage,
   ServerPing,
+  ServerSnapshot,
   ServerVersionMismatch,
   ServerWelcome,
   WireCmd,
@@ -324,8 +336,7 @@ export {
 } from './slidemove.ts'
 export type { ClipPlanes, MoveBody } from './slidemove.ts'
 
-export { snapshotOf } from './snapshot.ts'
-export type { Snapshot } from './snapshot.ts'
+export { snapshotFrame } from './snapshot.ts'
 
 export {
   EntityFlag,

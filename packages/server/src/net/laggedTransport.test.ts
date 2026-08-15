@@ -98,6 +98,68 @@ describe('the impairments happen at all', () => {
     expect(delivered.length).toBeLessThan(180)
   })
 
+  it('retransmits instead of losing, when asked to model TCP', () => {
+    // Same seed, same profile, one field different: the frames the loss draw
+    // picked arrive late instead of never. Nothing is lost, and nothing is
+    // reordered — which is the whole of what a WebSocket promises.
+    const lossy = { lossChance: 0.25, seed: 12345 }
+    const dropped = pushThrough(lossy, 200)
+    const stalled = pushThrough({ ...lossy, retransmitMs: 120 }, 200)
+
+    const inOrder = Array.from({ length: 200 }, (_, i) => `frame-${i}`)
+    expect(stalled).toEqual(inOrder)
+    expect(dropped.length).toBeLessThan(200)
+    // And the ones it saved are exactly the ones the other run lost.
+    expect(dropped.every((frame) => stalled.includes(frame))).toBe(true)
+  })
+
+  it('stalls and then bursts, which is what head-of-line blocking looks like', () => {
+    // The block is the difference between a TCP stall and a UDP gap, and it is
+    // what an interpolation buffer sized for jitter does not cover. A model
+    // that let the frames behind a lost one through would deliver them evenly
+    // and make loss look like something the buffer already handles.
+    const inner = sink()
+    const link = laggedTransport(inner.transport, {
+      ...NO_LAG,
+      latencyMs: 10,
+      lossChance: 0.2,
+      retransmitMs: 150,
+      seed: 20260814,
+    })
+
+    // One frame a millisecond, and a note of the millisecond each one landed on.
+    const arrivals: number[] = []
+    for (let ms = 0; ms < 200; ms += 1) {
+      link.send(`frame-${ms}`)
+      const before = inner.sent.length
+      link.pump(ms)
+      for (let i = before; i < inner.sent.length; i += 1) arrivals.push(ms)
+    }
+    link.flush()
+
+    expect(link.stats.stalled).toBeGreaterThan(20)
+    expect(link.stats.dropped).toBe(0)
+    // In order, all of them: a retransmitting link loses nothing and reorders
+    // nothing, which is exactly the contract `sim/src/transport.ts` states.
+    expect(inner.sent.map(String)).toEqual(Array.from({ length: 200 }, (_, i) => `frame-${i}`))
+
+    // The signature. On a link with only latency and jitter, one frame goes in
+    // per millisecond and one comes out; a stall holds a run of them and then
+    // releases the lot on the millisecond the refetch lands.
+    const burst = new Map<number, number>()
+    for (const ms of arrivals) burst.set(ms, (burst.get(ms) ?? 0) + 1)
+    expect(Math.max(...burst.values())).toBeGreaterThan(1)
+
+    // And there really were gaps to burst out of: a stretch where the link
+    // delivered nothing at all for longer than its latency.
+    const sorted = [...new Set(arrivals)].sort((a, b) => a - b)
+    const longestGap = sorted.reduce(
+      (worst, ms, index) => (index === 0 ? worst : Math.max(worst, ms - (sorted[index - 1] as number))),
+      0,
+    )
+    expect(longestGap).toBeGreaterThan(10)
+  })
+
   it('duplicates frames', () => {
     const delivered = pushThrough({ duplicateChance: 0.2, seed: 999 }, 100)
     expect(delivered.length).toBeGreaterThan(100)
@@ -277,10 +339,14 @@ describe('the latency matrix', () => {
   })
 
   it('breaks the world when frames actually go missing', { timeout: 60_000 }, async () => {
-    // The other half of the claim: with loss on, the world is *not* the same,
-    // and the harness is not quietly repairing anything behind the test's back.
-    // Coping with this is reconciliation (GLAD-6RT64L); what this ticket owes
-    // is a link that can produce it on demand, from a seed.
+    // The other half of the claim: with a *gap* — loss on a link that does not
+    // retransmit, which is a datagram and not what this game runs on — the
+    // world is not the same, and the harness is not quietly repairing anything
+    // behind the test's back. Reconciliation does not rescue this either: the
+    // commands the host never received renumber every tick after them, which is
+    // exactly the desync `session.ts` refuses to hide. What TCP actually does
+    // is `retransmitMs`, and that case is measured in
+    // `client/src/net/netcode.test.ts`.
     const expected = referenceHashes(TICKS)
     // Seed 67 rather than any seed: the first frame through the link is the
     // hello, and a run that loses *that* proves nothing about commands — it is
