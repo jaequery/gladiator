@@ -44,11 +44,13 @@ with a winner, so the host is what decides (`server/src/room.ts`).
 absorbs 66% of every hit, rounded up, until it runs out — which is why a duel
 takes two rockets rather than one. §7.1.
 
-**Self-damage** — taking splash from your own rocket. Three modes, because the
+**Self-damage** — taking splash from your own rocket. Four modes, because the
 choice changes the skill ceiling and not just the numbers: `full` (Quake's
-halving), **`armor_only`** (the default: the armour pays and the health
-remainder is discarded), and `none`. The launch is 500 qu/s in all three, because
-knockback is derived before any of them apply. §7.2.
+halving), `armor_only` (the armour pays and the health remainder is discarded),
+`none`, and **`health_only`** (the default since GLAD-7Z7MMC: the armour is
+never consulted, so your own rocket cannot cost you any, and the halved figure
+comes off the health). The launch is 500 qu/s in all four, because knockback is
+derived before any of them apply. §7.2.
 
 **Rocket jump** — firing a rocket at your feet and riding the splash impulse.
 The reason self-damage exists. Worth 500 qu/s standing and 770 with a jump on
@@ -806,7 +808,8 @@ travelling, and their velocity says nothing about where they will be.
 points: 25 at full health, shrinking until it is a refusal. Two-sided on purpose
 — a bot that refused every rocket which could touch it plays visibly timid at
 close range. Bounded against `SelfDamage.Full` with no armour, the harshest mode,
-because the `WorldModel` does not carry which mode is in force.
+because the `WorldModel` does not carry which mode is in force — which under the
+default `health_only` makes the bound exact rather than conservative.
 
 **Settled** — a rail's precondition: the crosshair is on them *and* it has
 stopped moving. 1500 ms of refire makes each rail a resource, and a bot that

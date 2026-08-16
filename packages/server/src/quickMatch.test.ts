@@ -19,8 +19,9 @@
  *
  * The same reason `duel.test.ts` gives: the spawns are far apart and mutually
  * blind, so nobody can reach anybody in two seconds. One player rocket-jumps
- * into the floor and spends armour, the other stands still, and the round is
- * decided on the clock with a named winner.
+ * into the floor and spends armour — `armor_only`, pinned in {@link
+ * QUICK_RULES} so they survive the round they are losing — the other stands
+ * still, and the round is decided on the clock with a named winner.
  */
 import {
   BUTTON_ATTACK,
@@ -30,6 +31,7 @@ import {
   NULL_CMD,
   PROTOCOL_VERSION,
   QueueState,
+  SelfDamage,
   TICK_RATE,
   Weapon,
   encodeCmd,
@@ -54,6 +56,11 @@ const QUICK_RULES = {
   ...DEFAULT_MATCH_RULES,
   roundTimeLimitTicks: 2 * TICK_RATE,
   intermissionTicks: Math.round(0.5 * TICK_RATE),
+  // Pinned for the same reason `duel.test.ts` pins it: this round has to be
+  // decided *on the clock*, which needs a player still standing when the timer
+  // runs out. The default `health_only` charges a rocket jump to the health,
+  // where two of them is the whole bar (`sim/src/match/selfDamage.ts`).
+  selfDamage: SelfDamage.ArmorOnly,
 }
 
 /** Milliseconds a client frame is worth. 60 Hz, as a browser gives you. */
@@ -69,7 +76,7 @@ const HELLO = JSON.stringify({
 /** Standing still, looking where you were looking. */
 const IDLE: UserCmd = { ...NULL_CMD, weapon: Weapon.RocketLauncher }
 
-/** Firing a rocket at your own feet: armour spent, health untouched. */
+/** Firing a rocket at your own feet: armour spent, health untouched — see {@link QUICK_RULES}. */
 const ROCKET_AT_FEET: UserCmd = {
   ...NULL_CMD,
   pitch: MAX_PITCH_UNITS,

@@ -117,11 +117,13 @@ describe('golden replay', () => {
     expect(state.nextEntityId - firstId).toBe(3)
     // In the air for a decent slice of the ten seconds, not a single tick.
     expect(seen).toBeGreaterThan(100)
-    // And both players paid for their own rocket jump — 33 armour each, under
-    // the default `armor_only` rule — and lived through it.
+    // And both players paid for their own rocket jump out of their *health*,
+    // under the default `health_only` rule, with the armour untouched. The
+    // rocket goes off a couple of units off the box rather than exactly at the
+    // feet, so it is 98 points of splash and the halving makes that 49.
     const players = state.entities.filter((e) => e.kind === EntityKind.Player)
-    expect(players.map((e) => e.health)).toEqual([100, 100])
-    expect(players.map((e) => e.armor)).toEqual([67, 67])
+    expect(players.map((e) => e.health)).toEqual([51, 51])
+    expect(players.map((e) => e.armor)).toEqual([100, 100])
   })
 
   it('leaves both players somewhere other than where they started', () => {

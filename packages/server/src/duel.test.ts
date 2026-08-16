@@ -24,10 +24,11 @@
  * chosen to be far apart and mutually blind — that is the spawn system doing
  * its job (`sim/src/match/spawn.ts`). So the round is decided the other way the
  * rules allow: on the clock, by damage taken. One player rocket-jumps into the
- * floor and spends armour doing it (`armor_only` is the default self-damage
- * mode), the other stands still, and the one who spent nothing wins. That is a
- * *decided* round with a named winner rather than a draw, which is what makes
- * the score assertion mean something.
+ * floor and spends armour doing it (`armor_only`, pinned in {@link QUICK_RULES}
+ * so that the player survives the round they are losing), the other stands
+ * still, and the one who spent nothing wins. That is a *decided* round with a
+ * named winner rather than a draw, which is what makes the score assertion mean
+ * something.
  */
 import {
   BUTTON_ATTACK,
@@ -36,6 +37,7 @@ import {
   MatchPhase,
   NULL_CMD,
   PROTOCOL_VERSION,
+  SelfDamage,
   TICK_RATE,
   Weapon,
   applyWireState,
@@ -74,6 +76,14 @@ const QUICK_RULES = {
   ...DEFAULT_MATCH_RULES,
   roundTimeLimitTicks: 2 * TICK_RATE,
   intermissionTicks: Math.round(0.5 * TICK_RATE),
+  // Pinned rather than left on the default, because the round this file wants
+  // is one decided *on the clock*: a player who rocket-jumps for two seconds
+  // and is still standing when the timer runs out. The default `health_only`
+  // charges a jump to the health, where two of them is the whole bar, so under
+  // it the round would be decided by a self-kill instead — a different path,
+  // and one already covered by `sim/src/match/round.test.ts`. `armor_only`
+  // makes surviving the round structural instead of a matter of a point or two.
+  selfDamage: SelfDamage.ArmorOnly,
 }
 
 /** Milliseconds a client frame is worth. 60 Hz, as a browser gives you. */
@@ -197,10 +207,11 @@ const IDLE: UserCmd = { ...NULL_CMD, weapon: Weapon.RocketLauncher }
  *
  * Pitch is in angle units and {@link MAX_PITCH_UNITS} is as far down as a view
  * may look. Both weapons are fully automatic, so the button is simply held and
- * the refire interval is the only thing between shots. In `armor_only` the
- * splash costs armour and never health, so a player can do this all round and
- * lose it on damage taken without ever being in danger of dying — which is
- * exactly the decided outcome this file wants.
+ * the refire interval is the only thing between shots. In `armor_only` — which
+ * {@link QUICK_RULES} pins for this reason — the splash costs armour and never
+ * health, so a player can do this all round and lose it on damage taken without
+ * ever being in danger of dying, which is exactly the decided outcome this file
+ * wants.
  */
 const ROCKET_AT_FEET: UserCmd = {
   ...NULL_CMD,
@@ -288,10 +299,13 @@ describe('two headless clients, one room code', () => {
       expect(room.state.match.lastRoundWinner).toBe(1)
       expect(room.state.match.wins).toEqual([0, 1])
 
-      // The host really did spend armour on the floor, which is why they lost.
+      // The host really did spend armour on the floor, which is why they lost —
+      // and none of their health, which is why they were still alive to lose it
+      // on the clock. Both are `armor_only`, pinned in {@link QUICK_RULES}.
       const hostBody = room.state.entities.find((entity) => entity.slot === 0)
       const guestBody = room.state.entities.find((entity) => entity.slot === 1)
       expect(hostBody?.armor ?? 100).toBeLessThan(guestBody?.armor ?? 0)
+      expect(hostBody?.health).toBe(guestBody?.health)
 
       // And out the other side into round two, with both players stood up
       // again — which is the half of "a full round" that a round ending does

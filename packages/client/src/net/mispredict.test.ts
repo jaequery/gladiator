@@ -129,7 +129,9 @@ describe('the counter, through a real predictor', () => {
       expect(predictor.mispredicts.stats.predictedSplashes).toBe(1)
       const hurt = vitalsOf(client, 0)
       expect(hurt).not.toBeNull()
-      expect(hurt?.armor).toBeLessThan(100)
+      // Health, not armour: under the default self-damage mode your own splash
+      // never reaches the armour (`sim/match/selfDamage.ts`).
+      expect(hurt?.health).toBeLessThan(100)
 
       // The host's world at the same tick, with the player *not* hurt: the
       // rocket never happened as far as it is concerned. That is exactly the

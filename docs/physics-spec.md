@@ -771,8 +771,8 @@ damage the player *sees*.
 
 **The knockback is computed before anything is subtracted.** Rocket jumping
 lives in that gap: the push comes off the whole 100, and only then is it decided
-what the 100 costs you — halved because it is your own, then split between
-armour and health by whichever of the three self-damage modes is in force. All
+what the 100 costs you — halved because it is your own, then charged to armour
+or health or neither by whichever of the four self-damage modes is in force. All
 of that is §7.2, and none of it changes the 500 qu/s.
 
 The push itself:
@@ -1280,7 +1280,7 @@ below are source-verified; which of them Rocket Arena switched on is not.
 | `RESPAWN_DELAY_TICKS` | 375 = `3 · TICK_RATE` | three seconds between rounds |
 | `ARMOR_PROTECTION` | 0.66 | the fraction of a hit armour absorbs |
 | `SELF_DAMAGE_SCALE` | 0.5 | Quake's halving of your own splash |
-| `DEFAULT_SELF_DAMAGE` | `armor_only` | see §7.2 |
+| `DEFAULT_SELF_DAMAGE` | `health_only` | see §7.2 |
 
 **100 health flat**, not Quake 3's 125 decaying to 100. That decay exists to
 make the opening of a *deathmatch* about spending the health you were given
@@ -1291,12 +1291,13 @@ absorbs 66% of every hit, so a 100-point rocket costs 66 armour and 34 health;
 the second one finds 34 armour, takes all of it, and puts the remaining 66
 through a 66-health player. Two rockets, or two rails, or one of each.
 
-### §7.2 Self-damage: three modes, one default
+### §7.2 Self-damage: four modes, one default
 
-Rocket Arena's own history has three answers and the choice changes the skill
-ceiling rather than the numbers, so all three are implemented and the mode is a
-field of `MatchRules` — hashed with the rest of the state, so two peers running
-different rules disagree at tick zero rather than at the first rocket jump.
+Rocket Arena's own history has three answers, GLAD-7Z7MMC added a fourth, and
+the choice changes the skill ceiling rather than the numbers — so all four are
+implemented and the mode is a field of `MatchRules`, hashed with the rest of the
+state, so two peers running different rules disagree at tick zero rather than at
+the first rocket jump.
 
 Every mode runs the same pipeline, and the *order* is Quake's:
 
@@ -1304,7 +1305,7 @@ Every mode runs the same pipeline, and the *order* is Quake's:
 knockback  <- 5 * min(damage, 200)          from the FULL figure, always
 take       <- damage * 0.5                  if self-inflicted
 take       <- max(take, 1)                  Quake's `if (damage < 1) damage = 1`
-save       <- min(ceil(take * 0.66), armor) Quake's `CheckArmor`
+save       <- min(ceil(take * 0.66), armor) Quake's `CheckArmor`, skipped by health_only
 armor      -= save
 health     -= take - save                   unless the mode says otherwise
 ```
@@ -1312,33 +1313,44 @@ health     -= take - save                   unless the mode says otherwise
 | mode | a full-power rocket jump costs | notes |
 | ---- | ------------------------------ | ----- |
 | `full` | 33 armour, 17 health | Quake 3's rule, unmodified |
-| **`armor_only`** (default) | 33 armour, 0 health | the health remainder is discarded |
+| `armor_only` | 33 armour, 0 health | the health remainder is discarded |
 | `none` | nothing | Rocket Arena 3's rule |
+| **`health_only`** (default) | 0 armour, 50 health | the armour is never consulted |
 
-**Knockback is identical in all three, at 500 qu/s**, because it is derived
+**Knockback is identical in all four, at 500 qu/s**, because it is derived
 before any of this — §3.3. Switching mode changes the price of a rocket jump
 without changing the jump, which is the property that makes the choice a
 *rules* decision rather than a movement one.
 
-`ceil` and `0.66` are both load-bearing. `ceil(50 · 0.66)` is 33; `ceil(50 ·
-2/3)` is 34, and one point of armour per jump is, three jumps in, the difference
-between standing on 1 armour and standing on none.
+`ceil` and `0.66` are both load-bearing in the three modes that consult the
+armour. `ceil(50 · 0.66)` is 33; `ceil(50 · 2/3)` is 34, and one point of armour
+per jump is, three jumps in, the difference between standing on 1 armour and
+standing on none.
 
-**Why `armor_only` is the default.** It keeps rocket-jumping a *tempo* decision.
-A jump is free in health and costs a third of your armour, so three jumps leave
-you on 100 health and 1 armour — one rocket from dead instead of two. A beginner
-who mistimes a jump into a wall is never killed by their own mistake, and an
-expert is still spending something real to move fast. `none` deletes the trade;
-`full` keeps it and punishes the beginner.
+**Why `health_only` is the default.** Because armour should only ever be spent
+on what the *other* player did to you. Under `armor_only` and `full` a rocket
+you fired yourself eats into the bar that decides how many of theirs you
+survive, so a jump taken for position is silently also a concession in the next
+exchange, paid at a moment nobody is looking at the armour bar. `health_only`
+moves the whole bill onto health: the armour is not consulted at all for your
+own splash, and the halved figure comes straight off the health.
 
-Note what falls out at the bottom of the armour bar: with nothing left to absorb
-it, a jump in `armor_only` is free again. That is the same trade read from the
-other end, not a hole — a player who spent their armour on mobility dies to one
-rocket.
+It is the most expensive of the four in the moment — one full-power jump is
+survivable and the second one kills — and that is the trade. Mobility is no
+longer nearly free with an armour bar to hide it in; it is priced in the single
+most visible number in the game. `none` deletes the trade entirely,
+`armor_only` charges for it in the wrong currency, and `full` charges in both.
+
+The two `*_only` modes are mirror images, and neither is a hole. `armor_only`
+becomes free at the bottom of the armour bar — the same trade read from the
+other end, since a player who spent their armour on mobility dies to one rocket.
+`health_only` never becomes free, because health is the one bar you cannot spend
+to nothing and keep playing.
 
 Measured (`match/round.test.ts`): from 100/100 in `full`, the armour and health
-after each full-power self-splash are `67/83`, `34/66`, `1/49`, `0/0`. **Exactly
-three survivable rocket jumps; the fourth kills.**
+after each full-power self-splash are `67/83`, `34/66`, `1/49`, `0/0` — exactly
+three survivable rocket jumps, and the fourth kills. In `health_only` the same
+sequence is `100/50`, `100/0`: **one survivable rocket jump; the second kills.**
 
 ### §7.3 The state machine
 

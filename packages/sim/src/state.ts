@@ -88,9 +88,11 @@ export type EntityState = {
    *
    * A second pool rather than more health, because the two are spent at
    * different rates and the difference is the game: a player on 100/100 dies to
-   * two rockets, and a player who has rocket-jumped their armour away dies to
-   * one. There is nothing on the map that restores it — armour is a round's
-   * worth of budget, and `match/selfDamage.ts` is where it is spent.
+   * two rockets, and a player down to bare health dies to one. There is nothing
+   * on the map that restores it — armour is a round's worth of budget, and
+   * `match/selfDamage.ts` is where it is spent. Under the default rule it is
+   * spent on the *other* player's rockets and on nothing else: your own splash
+   * does not touch it.
    */
   armor: number
   /**

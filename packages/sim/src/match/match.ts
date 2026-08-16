@@ -138,7 +138,7 @@ export type MatchRules = {
   readonly roundsToWin: number
   /** The hard round cap; see {@link maxRoundsFor}. */
   readonly maxRounds: number
-  /** Which of the three self-damage rules is in force. `selfDamage.ts`. */
+  /** Which of the four self-damage rules is in force. `selfDamage.ts`. */
   readonly selfDamage: SelfDamageMode
   /** How long a round may run before it is decided on damage, in ticks. */
   readonly roundTimeLimitTicks: number

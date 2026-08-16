@@ -115,8 +115,9 @@ describe('the self-splash counter', () => {
       expect(counters.selfSplashes).toBe(1)
       expect(counters.lastSelfSplash?.slot).toBe(0)
       expect(counters.lastSelfSplash?.points).toBe(WEAPONS[0].splashDamage)
-      // The armour-only default: half of 100 is 50, of which armour takes 33.
-      expect(seen).toEqual([33])
+      // The health-only default: half of 100 is 50, and all 50 of it is health
+      // because your own splash never reaches the armour (`match/selfDamage.ts`).
+      expect(seen).toEqual([50])
 
       // Somebody else's rocket landing on the same body is not a self-splash,
       // and the whole point of the counter is that it is a *predicate* about

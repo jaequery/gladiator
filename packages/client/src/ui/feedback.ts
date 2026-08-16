@@ -36,7 +36,7 @@
  * the one thing a hit always leaves behind: knockback. Damage pushes you five
  * units of speed per point, along the shot for a rail and away from the blast
  * for splash (`sim/damage.ts`), and that push is *derived before* any
- * self-damage rule applies — so it is there in all three modes. Negate the
+ * self-damage rule applies — so it is there in all four modes. Negate the
  * change in velocity and you are pointing at whatever hit you.
  *
  * It is stored as a **world** angle and re-projected against the current yaw

@@ -1,10 +1,11 @@
 /**
  * The round and match rules, driven headlessly.
  *
- * Four of this ticket's five acceptance checks are in here — a whole match run
- * to a winner, and the three self-damage modes measured against a real rocket
- * — and the fifth ("no pickup entity exists anywhere") is at the bottom, as an
- * assertion about the shape of the simulation rather than about its behaviour.
+ * Four of the round-rules ticket's five acceptance checks are in here — a whole
+ * match run to a winner, and the self-damage modes measured against a real
+ * rocket — and the fifth ("no pickup entity exists anywhere") is at the bottom,
+ * as an assertion about the shape of the simulation rather than about its
+ * behaviour. GLAD-7Z7MMC added the fourth mode and moved the default to it.
  */
 
 import { describe, expect, it } from 'vitest'
@@ -680,7 +681,7 @@ describe('how a round ends', () => {
 })
 
 /* --------------------------------------------------------------------------
- * The three self-damage modes
+ * The four self-damage modes
  * ----------------------------------------------------------------------- */
 
 /** A sealed box with a floor at z = 0, for firing a rocket into. */
@@ -766,10 +767,6 @@ describe('self-damage: full', () => {
 })
 
 describe('self-damage: armor_only', () => {
-  it('is the default a match runs under', () => {
-    expect(createGameState(1).match.rules.selfDamage).toBe(SelfDamage.ArmorOnly)
-  })
-
   it('costs 33 armour and 0 health, and still launches at 500', () => {
     const { state, player } = standing(SelfDamage.ArmorOnly)
     rocketJump(state)
@@ -824,15 +821,100 @@ describe('self-damage: none', () => {
   })
 })
 
+describe('self-damage: health_only', () => {
+  it('is the default a match runs under', () => {
+    expect(createGameState(1).match.rules.selfDamage).toBe(SelfDamage.HealthOnly)
+  })
+
+  it('never touches the armour, and still launches at 500', () => {
+    const { state, player } = standing(SelfDamage.HealthOnly)
+    rocketJump(state)
+
+    // GLAD-7Z7MMC's acceptance check: the armour before and after your own
+    // rocket is the same number. 100 halved is 50, and all 50 of it is health.
+    expect(player.armor).toBe(SPAWN_ARMOR)
+    expect(player.health).toBe(SPAWN_HEALTH - 50)
+    expect(player.velocity[2]).toBeCloseTo(500, 1)
+  })
+
+  it('leaves the armour alone however many times you do it, and however small', () => {
+    const { state, player } = standing(SelfDamage.HealthOnly)
+
+    // Two full-power jumps is the whole health bar, so this is the weak splash
+    // a rocket 90 units away delivers: 25 points, halved to 12.5. The armour is
+    // untouched at every size of hit, not only at the one the jump happens to
+    // deal.
+    for (let i = 0; i < 6; i += 1) {
+      applyDamage(state, player, player.id, [0, 0, 1], 25, SelfDamage.HealthOnly, 'splash')
+      expect(player.armor).toBe(SPAWN_ARMOR)
+    }
+
+    expect(player.health).toBe(SPAWN_HEALTH - 6 * 12.5)
+  })
+
+  it('does not protect you from anybody else', () => {
+    const { state, player } = standing(SelfDamage.HealthOnly)
+    const enemy = spawnEntity(state, { kind: EntityKind.Player, slot: 1, health: 100 })
+
+    applyDamage(state, player, enemy.id, [1, 0, 0], 100)
+
+    // The regression this mode has to not break: an *enemy* rocket still splits
+    // 66 off the armour and 34 off the health, so two of them kill.
+    expect(player.armor).toBe(34)
+    expect(player.health).toBe(66)
+  })
+
+  it('kills you on the second full-power jump rather than the fourth', () => {
+    const { state, player } = standing(SelfDamage.HealthOnly)
+
+    selfSplash(state, player)
+    expect([player.armor, player.health]).toEqual([SPAWN_ARMOR, 50])
+
+    selfSplash(state, player)
+    expect(player.armor).toBe(SPAWN_ARMOR)
+    expect(player.health).toBeLessThanOrEqual(0)
+  })
+})
+
 describe('every mode', () => {
   it('launches a rocket jump identically, because knockback is computed first', () => {
-    const launches = [SelfDamage.Full, SelfDamage.ArmorOnly, SelfDamage.None].map((mode) => {
+    const launches = [
+      SelfDamage.Full,
+      SelfDamage.ArmorOnly,
+      SelfDamage.None,
+      SelfDamage.HealthOnly,
+    ].map((mode) => {
       const { state, player } = standing(mode)
       selfSplash(state, player)
       return player.velocity[2]
     })
 
-    expect(launches).toEqual([500, 500, 500])
+    expect(launches).toEqual([500, 500, 500, 500])
+  })
+
+  it('charges an enemy rocket the same 66/34 whichever one is in force', () => {
+    // The one property that has to hold across all four: a self-damage mode is
+    // a rule about *your own* rocket and nothing else. Without this, a mode
+    // that returns before `armorAbsorbed` could quietly take the armour out of
+    // the enemy path too.
+    const split = [
+      SelfDamage.Full,
+      SelfDamage.ArmorOnly,
+      SelfDamage.None,
+      SelfDamage.HealthOnly,
+    ].map((mode) => {
+      const { state, player } = standing(mode)
+      const enemy = spawnEntity(state, { kind: EntityKind.Player, slot: 1, health: 100 })
+      applyDamage(state, player, enemy.id, [1, 0, 0], 100, mode)
+      return [player.armor, player.health]
+    })
+
+    expect(split).toEqual([
+      [34, 66],
+      [34, 66],
+      [34, 66],
+      [34, 66],
+    ])
   })
 })
 

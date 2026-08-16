@@ -92,7 +92,7 @@ describe('applyDamage', () => {
     // Stated in `full`, because that is the mode this rule *is*: the halving
     // happens after the push has been derived from the whole 100. What the
     // remainder then costs is `match/selfDamage.ts`'s, and the match default
-    // (`armor_only`) is exercised in `match/round.test.ts`.
+    // (`health_only`) is exercised in `match/round.test.ts`.
     const { state, player } = worldWithPlayer()
 
     applyDamage(state, player, player.id, [0, 0, 1], 100, SelfDamage.Full)
