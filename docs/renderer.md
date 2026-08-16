@@ -355,11 +355,48 @@ and which weapon just went off.
 
 ### Silhouette over fidelity, and no asset licence
 
-The model is boxes: a wide chest, a small head, limbs that swing visibly, and
-two weapons whose outlines cannot be confused. Polygon count buys nothing here
-that a clearer outline does not buy more of — and placeholder geometry that
-this repository authored has no licence attached to it, which a downloaded rig
-very often turns out to.
+The body is boxes: a wide chest, a small head, limbs that swing visibly.
+Polygon count buys nothing here that a clearer outline does not buy more of —
+and placeholder geometry that this repository authored has no licence attached
+to it, which a downloaded rig very often turns out to.
+
+### The weapons are one description, built twice
+
+`render/weaponModel.ts` (GLAD-HSB5TK). A weapon is drawn in your own hands and
+in your opponent's, and before that module those were two literal box lists a
+few hundred lines apart in two files. So the shape is now data — a list of
+boxes and octagonal tubes with positions, sizes and one of three finishes — and
+`viewmodel.ts` and `playerModel.ts` both build it. Because the list is a plain
+value with no Babylon in it, `weaponModel.test.ts` can assert the *silhouette*
+without a GPU: the bore is the widest thing on the launcher and it is at the
+front, the body is a tube longer than it is wide, the sight is above it and the
+grip below and behind, and the launcher is at least twice the rail's width so
+the two cannot be confused at arena distance.
+
+The rocket launcher is Quake's rocket launcher: an octagonal tube for a body, a
+flared bore at the muzzle with a rocket sitting in it, a sight rail along the
+top with a blade at the front, side plates leaving an open-frame midsection, a
+squared-off breech, and a raked pistol grip. Eight sides and not a smooth
+cylinder, because the flat facets catching the light at different angles are
+what make it read as machined rather than inflated. The railgun is the boxes it
+always was — long, thin, and carrying a scope.
+
+Each weapon has two lists rather than one scaled: held 25 units from the eye it
+is read in detail, and across the arena it is a few dozen pixels where detail is
+noise. The two differences that look arbitrary are not. The **near end of the
+viewmodel** is drawn at more than twice the scale of its own muzzle, so its tail
+tapers *in* where the world model's flares *out* — a rear flare would put the
+widest face on the weapon over the middle of the screen and bury the end that
+matters. And the **dark parts are placed for contrast**: a viewmodel is lit
+almost entirely by its own emissive, which is flat, and a flat-lit object of one
+colour is a silhouette with nothing inside it.
+
+**A weapon is held, and the hand needed telling.** The arm swings about its
+shoulder, so at the aiming angle the arm's own local `-z` points at the sky — and
+a weapon parented straight to it therefore pointed at the sky too, which is what
+the world model did until GLAD-HSB5TK. `GRASP` is the quarter turn back, and it
+is what makes the hand a frame in which `-z` is down the barrel like everywhere
+else. Recoil moves the hand along the arm's axis for the same reason.
 
 The pipeline that replaces those boxes is [`docs/assets.md`](./assets.md):
 `pnpm assets:build` compresses a glTF and its textures into
@@ -396,9 +433,9 @@ viewmodel writes `position` and `rotation` on a *child* and never reads the
 parent's.
 
 It draws in rendering group 1 with the depth buffer cleared in front of it, so
-a gun held 24 units from the eye cannot poke through a wall 20 units away. The
-viewmodel is not in the world; it is a diagram of what your hands are doing,
-drawn over the top of the world.
+a gun whose muzzle is nearly sixty units from the eye cannot poke through a wall
+thirty away. The viewmodel is not in the world; it is a diagram of what your
+hands are doing, drawn over the top of the world.
 
 ### Nothing here is in the reference screenshot
 

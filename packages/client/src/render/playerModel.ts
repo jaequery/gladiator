@@ -12,11 +12,15 @@
  *
  * At arena distance an opponent is a few dozen pixels, and what has to survive
  * that is: which way are they moving, and which weapon is in their hands. So
- * the model is eleven boxes with strongly different proportions — a wide chest,
- * a small head, limbs that swing visibly, and two weapons whose outlines cannot
- * be confused (the launcher is short and fat with a flared muzzle; the rail is
- * long and thin with a scope). Polygon count buys nothing here that a clearer
- * outline does not buy more of.
+ * the body is nine boxes with strongly different proportions — a wide chest, a
+ * small head, limbs that swing visibly — and the two weapons in its hand have
+ * outlines that cannot be confused: the launcher is a fat octagonal tube with a
+ * flared bore and a sight along the top, the rail is a thin rod with a scope.
+ * Polygon count buys nothing here that a clearer outline does not buy more of.
+ *
+ * What the weapons are made of is `weaponModel.ts`, and it is shared with the
+ * first-person viewmodel, so the launcher pointed at you is the launcher you
+ * are holding.
  *
  * It is also placeholder art with no licence attached to it, which is the
  * second reason it is boxes: the ticket says not to block on final art, and a
@@ -65,6 +69,13 @@ import {
   type PlayerNetState,
   advanceAnim,
 } from './animState.ts'
+import {
+  RAILGUN_WORLD,
+  ROCKET_LAUNCHER_WORLD,
+  buildWeapon,
+  finishMaterials,
+  weaponFinishes,
+} from './weaponModel.ts'
 
 /* --------------------------------------------------------------------------
  * Proportions
@@ -118,6 +129,22 @@ const ARM_SWING = 0.42
 
 /** The angle at which an arm points straight ahead. See the header. */
 const AIM = Math.PI / 2
+
+/**
+ * How the hand is turned relative to the shoulder that carries it.
+ *
+ * The arm swings about its shoulder, so its own local axes are a quarter turn
+ * away from the body's: at {@link AIM} the arm's length lies along the world's
+ * forward, which puts the arm's local `-z` along the world's *up*. A weapon
+ * hung straight off the shoulder therefore points at the sky, and this quarter
+ * turn back is what makes the hand a frame in which `-z` is down the barrel —
+ * the same convention as the rest of this file, the viewmodel and the camera.
+ *
+ * With it, `weaponRecoil` moves the hand back along `-y`, which is the arm's
+ * own axis, so a shot drives the weapon towards the shoulder rather than in
+ * whatever direction the body happens to be facing.
+ */
+const GRASP = -Math.PI / 2
 
 /** How far the hips drop at the bottom of a landing, in Quake units. */
 const LAND_DIP = 9
@@ -325,7 +352,12 @@ export function createPlayerRig(scene: Scene, options: PlayerRigOptions): Player
   const { name, tint } = options
 
   const skin = rigMaterial(scene, `${name}:skin`, tint, 0.28)
-  const metal = rigMaterial(scene, `${name}:metal`, [0.42, 0.44, 0.5], 0.16)
+  // The weapon's three finishes, lit the way this rig lights everything: just
+  // enough emissive to stay legible in an unlit corner, and no more.
+  const weapons = weaponFinishes(
+    (materialName, colour) => rigMaterial(scene, materialName, colour, 0.16),
+    name,
+  )
 
   const root = new TransformNode(name, scene)
   const body = new TransformNode(`${name}:body`, scene)
@@ -410,16 +442,21 @@ export function createPlayerRig(scene: Scene, options: PlayerRigOptions): Player
   const hand = new TransformNode(`${name}:hand`, scene)
   hand.parent = shoulderRight
   hand.position.set(HAND[0], HAND[1], HAND[2])
+  // And it holds the weapon the way a hand does, which is the one rotation in
+  // this rig that is not an animated joint.
+  hand.rotation.set(GRASP, 0, 0)
 
   const launcher = new TransformNode(`${name}:rocket`, scene)
   launcher.parent = hand
-  box(scene, `${name}:rocket.body`, [8, 8, 24], [0, 0, -10], launcher, metal)
-  box(scene, `${name}:rocket.muzzle`, [12, 12, 5], [0, 0, -23], launcher, metal)
+  buildWeapon(scene, ROCKET_LAUNCHER_WORLD, launcher, weapons, {
+    namePrefix: `${name}:rocket`,
+  })
 
   const railgun = new TransformNode(`${name}:rail`, scene)
   railgun.parent = hand
-  box(scene, `${name}:rail.body`, [4.5, 4.5, 34], [0, 0, -14], railgun, metal)
-  box(scene, `${name}:rail.scope`, [3, 7, 12], [0, 5, -6], railgun, metal)
+  buildWeapon(scene, RAILGUN_WORLD, railgun, weapons, {
+    namePrefix: `${name}:rail`,
+  })
 
   let weapon: Weapon = Weapon.None
   let visible = true
@@ -470,8 +507,9 @@ export function createPlayerRig(scene: Scene, options: PlayerRigOptions): Player
       neck.rotation.set(pose.headPitch, 0, 0)
       shoulderLeft.rotation.set(pose.leftArm, 0, 0)
       shoulderRight.rotation.set(pose.rightArm, 0, 0)
-      // Along the barrel: the model faces -z, so recoil is +z.
-      hand.position.set(HAND[0], HAND[1], HAND[2] + pose.weaponRecoil)
+      // Back along the arm, which is where the barrel points: the hand sits at
+      // `-y` from the shoulder, so recoil is towards `+y`. See `GRASP`.
+      hand.position.set(HAND[0], HAND[1] + pose.weaponRecoil, HAND[2])
     },
 
     dispose() {
@@ -480,7 +518,7 @@ export function createPlayerRig(scene: Scene, options: PlayerRigOptions): Player
       // mesh on the way down.
       root.dispose(false, false)
       skin.dispose()
-      metal.dispose()
+      for (const material of finishMaterials(weapons)) material.dispose()
     },
   }
 }

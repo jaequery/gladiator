@@ -172,6 +172,57 @@ describe('the opponent rig', () => {
     }
   })
 
+  it('points the weapon where the player is facing, not at the sky', () => {
+    const { scene, rig } = rigged()
+    draw(rig, playerNetState(entity({ weapon: Weapon.RocketLauncher })))
+    rig.root.computeWorldMatrix(true)
+
+    const at = (name: string) => {
+      const mesh = scene.getMeshByName(name)
+      mesh?.computeWorldMatrix(true)
+      return mesh?.getAbsolutePosition()
+    }
+    const breech = at('player7:rocket.breech')
+    const bore = at('player7:rocket.bore')
+    expect(breech).toBeDefined()
+    expect(bore).toBeDefined()
+
+    // The rig faces `-z` at yaw zero, so a weapon held out in front has its
+    // muzzle further along `-z` than its breech, by most of its length.
+    // Getting this wrong is not subtle and it is not loud either: the arm
+    // swings about its shoulder, so a weapon hung straight off it points
+    // *upwards*, and an opponent holds their launcher like a flagpole. See
+    // `GRASP`.
+    expect((bore?.z ?? 0) - (breech?.z ?? 0)).toBeLessThan(-20)
+    // And it stays at about the height of the hand holding it.
+    expect(Math.abs((bore?.y ?? 0) - (breech?.y ?? 0))).toBeLessThan(2)
+    expect(bore?.y).toBeGreaterThan(HIP_HEIGHT)
+    expect(bore?.y).toBeLessThan(PLAYER_HEIGHT)
+  })
+
+  it('drives the weapon back along its own barrel when it fires', () => {
+    const { scene, rig } = rigged()
+    const shot = playerNetState(entity({ weapon: Weapon.RocketLauncher, lastFireTick: 100 }))
+
+    const handAt = (tick: number) => {
+      rig.update(shot, advanceAnim(INITIAL_ANIM, shot, tick), tick, 0)
+      return scene.getTransformNodeByName('player7:hand')?.position.clone()
+    }
+
+    const fired = handAt(100)
+    const settled = handAt(140)
+    expect(fired).toBeDefined()
+
+    // The hand hangs off the shoulder along `-y`, so the barrel lies along the
+    // arm and recoil is towards `+y` — back into the shoulder. Written on `z`
+    // instead, which is what it used to be, the same number drives the weapon
+    // *sideways* out of the hand, and every assertion about the pose value it
+    // came from still passes.
+    expect(fired?.y).toBeGreaterThan((settled?.y ?? 0) + 4)
+    expect(fired?.x).toBeCloseTo(settled?.x ?? 0, 6)
+    expect(fired?.z).toBeCloseTo(settled?.z ?? 0, 6)
+  })
+
   it('never writes back into the state it was given', () => {
     const { rig } = rigged()
     const source = entity({ origin: [16, 8, 4], velocity: [300, 0, 0] })

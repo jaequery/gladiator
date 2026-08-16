@@ -94,9 +94,12 @@ describe('the viewmodel', () => {
     const gun = barrel?.getAbsolutePosition()
 
     // Held at arm's length, wherever the eye went. A broken parent chain leaves
-    // it at the origin, half an arena away, which is what this catches.
+    // it at the origin, half an arena away, which is what this catches — so the
+    // bound is "nearer than anything in the arena" rather than a measurement of
+    // the pose. The launcher's barrel runs from about 25 units in front of the
+    // eye to about 56 (`weaponModel.ts`), and its middle is in there.
     expect(gun).toBeDefined()
-    expect(gun?.subtract(eye).length()).toBeLessThan(40)
+    expect(gun?.subtract(eye).length()).toBeLessThan(64)
   })
 
   it('draws in its own group, over the world', () => {
