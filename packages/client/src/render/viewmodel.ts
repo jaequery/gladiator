@@ -27,10 +27,10 @@
  * ## Its own depth range
  *
  * The viewmodel draws in rendering group 1 with the depth buffer cleared in
- * front of it, so a gun held 26 units from the eye cannot poke through a wall
- * 20 units away. That is what every shooter does and it is not a hack: the
- * viewmodel is not in the world — it is a diagram of what your hands are doing,
- * drawn over the top of the world.
+ * front of it, so a gun whose muzzle is nearly sixty units from the eye cannot
+ * poke through a wall thirty away. That is what every shooter does and it is
+ * not a hack: the viewmodel is not in the world — it is a diagram of what your
+ * hands are doing, drawn over the top of the world.
  *
  * ## And it is still driven by netstate
  *
@@ -43,13 +43,20 @@
 import type { TargetCamera } from '@babylonjs/core/Cameras/targetCamera'
 import { Color3 } from '@babylonjs/core/Maths/math.color'
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial'
-import { CreateBox } from '@babylonjs/core/Meshes/Builders/boxBuilder'
+import type { Mesh } from '@babylonjs/core/Meshes/mesh'
 import { TransformNode } from '@babylonjs/core/Meshes/transformNode'
 import type { Scene } from '@babylonjs/core/scene'
 import { TICK_DT, type Vec3, Weapon } from '@gladiator/sim'
 
 import { type AnimFrame, FIRE_TICKS, type PlayerNetState } from './animState.ts'
 import { STRIDE_DISTANCE } from './playerModel.ts'
+import {
+  RAILGUN_VIEW,
+  ROCKET_LAUNCHER_VIEW,
+  buildWeapon,
+  finishMaterials,
+  weaponFinishes,
+} from './weaponModel.ts'
 
 /**
  * The rendering group the viewmodel draws in, with its own cleared depth.
@@ -160,32 +167,15 @@ function viewmodelMaterial(scene: Scene, name: string, tint: Vec3): StandardMate
   return material
 }
 
-function part(
-  scene: Scene,
-  name: string,
-  size: Vec3,
-  at: Vec3,
-  parent: TransformNode,
-  material: StandardMaterial,
-): void {
-  const mesh = CreateBox(name, { width: size[0], height: size[1], depth: size[2] }, scene)
-  mesh.position.set(at[0], at[1], at[2])
-  mesh.parent = parent
-  mesh.material = material
-  mesh.isPickable = false
-  mesh.renderingGroupId = VIEWMODEL_RENDERING_GROUP
-  // The world's frustum culling has no idea what to make of a mesh 26 units
-  // from the eye that is always in shot; skipping the test is both cheaper and
-  // correct.
-  mesh.alwaysSelectAsActiveMesh = true
-}
-
 /**
  * Build the viewmodel and hang it off the camera.
  *
  * Both weapons are built once and one is enabled at a time, so a weapon switch
  * mid-fight is a boolean rather than a mesh construction — the same reason the
  * opponent's rig carries both (`playerModel.ts`).
+ *
+ * What each weapon is *made of* is `weaponModel.ts`, so the launcher you are
+ * holding and the launcher pointed at you are one description built twice.
  */
 export function createViewmodel(scene: Scene, camera: TargetCamera): Viewmodel {
   // Draw group 1 after the world with a fresh depth buffer — depth yes, stencil
@@ -194,23 +184,35 @@ export function createViewmodel(scene: Scene, camera: TargetCamera): Viewmodel {
   // it, whatever it is standing in.
   scene.setRenderingAutoClearDepthStencil(VIEWMODEL_RENDERING_GROUP, true, true, false)
 
-  const metal = viewmodelMaterial(scene, 'viewmodel:metal', [0.5, 0.52, 0.58])
-  const accent = viewmodelMaterial(scene, 'viewmodel:accent', [0.75, 0.4, 0.16])
+  const finishes = weaponFinishes(
+    (name, colour) => viewmodelMaterial(scene, name, colour),
+    'viewmodel',
+  )
 
   const root = new TransformNode('viewmodel', scene)
   root.parent = camera
 
+  const onMesh = (mesh: Mesh): void => {
+    mesh.renderingGroupId = VIEWMODEL_RENDERING_GROUP
+    // The world's frustum culling has no idea what to make of a mesh a few
+    // dozen units from the eye that is always in shot; skipping the test is
+    // both cheaper and correct.
+    mesh.alwaysSelectAsActiveMesh = true
+  }
+
   const launcher = new TransformNode('viewmodel:rocket', scene)
   launcher.parent = root
-  part(scene, 'viewmodel:rocket.body', [5, 5, 18], [0, 0, -7], launcher, metal)
-  part(scene, 'viewmodel:rocket.muzzle', [7.5, 7.5, 3.5], [0, 0, -17], launcher, accent)
-  part(scene, 'viewmodel:rocket.grip', [2.6, 5, 3], [0, -3.6, 1], launcher, metal)
+  buildWeapon(scene, ROCKET_LAUNCHER_VIEW, launcher, finishes, {
+    namePrefix: 'viewmodel:rocket',
+    onMesh,
+  })
 
   const railgun = new TransformNode('viewmodel:rail', scene)
   railgun.parent = root
-  part(scene, 'viewmodel:rail.body', [3, 3, 26], [0, 0, -11], railgun, metal)
-  part(scene, 'viewmodel:rail.coil', [4.4, 4.4, 4], [0, 0, -18], railgun, accent)
-  part(scene, 'viewmodel:rail.grip', [2.4, 5, 3], [0, -3.4, 1], railgun, metal)
+  buildWeapon(scene, RAILGUN_VIEW, railgun, finishes, {
+    namePrefix: 'viewmodel:rail',
+    onMesh,
+  })
 
   let weapon: Weapon = Weapon.None
   let visible = true
@@ -243,8 +245,7 @@ export function createViewmodel(scene: Scene, camera: TargetCamera): Viewmodel {
 
     dispose() {
       root.dispose(false, false)
-      metal.dispose()
-      accent.dispose()
+      for (const material of finishMaterials(finishes)) material.dispose()
     },
   }
 }

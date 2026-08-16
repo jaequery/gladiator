@@ -221,6 +221,13 @@ see happening. `packages/client/src/render/animState.ts`; `docs/renderer.md`
 **Viewmodel** — the weapon in your own hands, drawn as a child of the camera in
 its own depth range. `docs/renderer.md` §11.
 
+**Weapon part list** — what a weapon is *made of*, as data: boxes and octagonal
+tubes with a position, a size and one of three finishes, in a frame where `-z`
+is down the barrel. One list per weapon per scale — the detailed one you hold
+and the fatter one an opponent does — and the viewmodel and the player rig both
+build from it, so there is one launcher and not two.
+`packages/client/src/render/weaponModel.ts`; `docs/renderer.md` §11.
+
 ---
 
 ## The audio
