@@ -139,6 +139,39 @@ that has it and reading the backend off the HUD. That is a deliberate trade:
 gating on a headless WebGPU implementation would be gating on the emulator's
 bugs.
 
+**What that trade cost once, so the next one is cheaper.** GLAD-ZCEQMN shipped a
+WebGPU path that could not start at all — every automated check runs on WebGL,
+including the unit tests, because `NullEngine` is a `ThinEngine` — and the
+symptom was a blank page for exactly the players whose browsers were best
+supported. So the standing question for anything in this section is: *is the bit
+that broke actually about the GPU?* When it is not, it is checkable here.
+
+### An engine extension is an import, and WebGPU's are not the same imports
+
+Babylon 9 splits every engine extension in two — a pure module, and a
+side-effecting one that patches the method on to an engine prototype — and the
+two backends are wired up differently:
+
+- **WebGL registers itself by accident.** `new DynamicTexture(...)` calls the
+  registration for `ThinEngine.prototype.createDynamicTexture` from inside its
+  own constructor. `Engine` is a `ThinEngine`, so using the class is enough.
+- **WebGPU does not.** `WebGPUEngine` descends from `AbstractEngine`, and
+  `Engines/webgpuEngine` auto-imports nine extensions; the other five —
+  `computeShader`, `debugging`, `dynamicTexture`, `multiRender`, `videoTexture`
+  — have to be asked for by name or the method never exists on the prototype.
+
+So **using a Babylon class that needs an engine extension means importing that
+extension's WebGPU module in `loadWebGPU`**, next to the engine, where it stays
+behind the same `await import()` and off a WebGL-only browser's wire. Nothing
+warns you: it types fine, it lints fine, it passes every test, and it throws
+`engine.<method> is not a function` on the machines that took the fast path.
+
+`engine.test.ts` asserts the prototype comes up carrying `createDynamicTexture`
+and `updateDynamicTexture`. Registration is a module side effect decided at
+import time and has nothing to say to an adapter, which is why that assertion
+runs in CI with no GPU under it — and it is the shape to copy when the client
+starts using the sixth extension.
+
 ---
 
 ## §4 Pixel ratio is the quality dial

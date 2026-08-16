@@ -499,9 +499,16 @@ async function boot(): Promise<void> {
   } catch (cause) {
     // A blank page with a console error is the worst possible outcome of a
     // deploy. Say what happened, on the page.
-    hud.fail(
-      `could not start the renderer: ${String(cause)}. Neither WebGPU nor WebGL2 is available here.`,
-    )
+    //
+    // What it says is what happened, and deliberately not why. This used to end
+    // "Neither WebGPU nor WebGL2 is available here" — a guess at one cause,
+    // printed as a finding, for a failure with many. In GLAD-ZCEQMN it was
+    // false in the most expensive way available: WebGPU *was* there, which is
+    // precisely why the renderer had fallen over, and the sentence sent the
+    // diagnosis looking for a missing context for a while. Babylon's own
+    // "WebGL not supported" already arrives in `cause` when that is genuinely
+    // the problem.
+    hud.fail(`could not start the renderer: ${String(cause)}`)
     return
   }
 

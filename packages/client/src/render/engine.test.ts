@@ -7,6 +7,7 @@ import {
   clampPixelRatio,
   hardwareScalingFor,
   ladderRung,
+  loadWebGPU,
   nextPixelRatio,
 } from './engine.ts'
 import { FRAME_BUDGET_MS, summarise } from './frameStats.ts'
@@ -104,5 +105,38 @@ describe('nextPixelRatio', () => {
     expect(stalling.p99Ms).toBeGreaterThan(budget)
     expect(nextPixelRatio(1, stalling.medianMs, budget, 2)).toBe(1)
     expect(nextPixelRatio(1, stalling.p99Ms, budget, 2)).toBe(0.85)
+  })
+})
+
+describe('loadWebGPU', () => {
+  /**
+   * GLAD-ZCEQMN. This is the one part of the WebGPU path a machine with no GPU
+   * can check, and it is the part that broke: whether the engine prototype came
+   * up carrying the methods the renderer is about to call. Registering an
+   * extension is a module side effect, so it is decided at import time and has
+   * nothing to say to an adapter.
+   *
+   * It is worth the file it takes up because every other check runs on WebGL —
+   * the reference screenshot and the e2e pin `forceWebGL`, and these tests run
+   * on `NullEngine`, which is a `ThinEngine` and self-registers. That is a whole
+   * backend whose startup nothing was asserting anything about.
+   *
+   * `createDynamicTexture` is the one the client needs today; `docs/renderer.md`
+   * §3 has the rule for the next one, because the failure mode of getting this
+   * wrong is a blank page rather than a missing texture.
+   */
+  it('brings the dynamic-texture extension up with the engine', async () => {
+    const WebGPUEngine = await loadWebGPU()
+    // Reached off the prototype rather than an instance on purpose: there is no
+    // adapter here to make one with, and the defect was never in the instance.
+    const proto = WebGPUEngine.prototype as unknown as Record<string, unknown>
+
+    // `render/materials.ts` builds three detail textures before the first frame
+    // — so an engine missing this one does not degrade, it fails to start.
+    expect(typeof proto.createDynamicTexture).toBe('function')
+    // Its other half, and `DynamicTexture.update()` is what calls it: the same
+    // import registers both, and a fix that only satisfied the assertion above
+    // would still fall over on the first `finishDetail`.
+    expect(typeof proto.updateDynamicTexture).toBe('function')
   })
 })

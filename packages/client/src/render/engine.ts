@@ -12,12 +12,14 @@
  * So: try WebGPU, take WebGL2 if anything at all goes wrong, and say which one
  * came up on the HUD. Nothing else in the renderer knows the difference.
  *
- * ## Why the WebGPU import is dynamic
+ * ## Why the WebGPU imports are dynamic
  *
  * `@babylonjs/core/Engines/webgpuEngine` drags in the WGSL shader processor,
  * the bind-group cache and the render-bundle machinery. A browser that will
- * never use them should not download them, so the module is behind an
- * `await import()` and Vite emits it as its own chunk.
+ * never use them should not download them, so everything WebGPU is reached
+ * through {@link loadWebGPU} — behind an `await import()`, and emitted by Vite
+ * as its own chunk. That is also the one place an engine extension WebGPU does
+ * not register for itself gets asked for; see {@link loadWebGPU}.
  *
  * ## Pixel ratio is the quality dial
  *
@@ -154,13 +156,47 @@ export type EngineOptions = {
 }
 
 /**
+ * The WebGPU engine, and the extension it does not bring with it.
+ *
+ * Babylon 9 splits every engine extension in two: a pure module, and a
+ * side-effecting one that patches the method on to an engine prototype.
+ * `Engines/webgpuEngine` imports nine of those for you and
+ * `engine.dynamicTexture` is not one of them — so it has to be asked for by
+ * name, here, or `WebGPUEngine.prototype.createDynamicTexture` never exists.
+ *
+ * Nothing else in the client imports it, and until GLAD-ZCEQMN nothing had to:
+ * `new DynamicTexture(...)` registers the **ThinEngine** half from inside its
+ * own constructor, and `Engine` is a `ThinEngine`, so the WebGL path has always
+ * worked without a line like this. `WebGPUEngine` descends from
+ * `AbstractEngine` instead and never saw that registration. Since
+ * `render/materials.ts` builds three detail textures before the first frame,
+ * the entire WebGPU path was a blank page and a `TypeError:
+ * engine.createDynamicTexture is not a function` — on exactly the machines
+ * whose browser was *best* supported.
+ *
+ * Both imports are dynamic and reachable only from here, so a browser that will
+ * never run WebGPU still downloads none of it.
+ *
+ * Exported because it is the half of the WebGPU path that can be checked
+ * without a GPU: `engine.test.ts` asserts the prototype came up carrying the
+ * methods. `docs/renderer.md` §3.
+ */
+export async function loadWebGPU() {
+  const [{ WebGPUEngine }] = await Promise.all([
+    import('@babylonjs/core/Engines/webgpuEngine'),
+    import('@babylonjs/core/Engines/WebGPU/Extensions/engine.dynamicTexture'),
+  ])
+  return WebGPUEngine
+}
+
+/**
  * Try WebGPU. Returns `null` for every kind of "no" there is — unsupported,
  * adapter refused, `initAsync` threw — because the caller's response to all of
  * them is the same and a player must not be shown the difference.
  */
 async function tryWebGPU(canvas: HTMLCanvasElement): Promise<AbstractEngine | null> {
   try {
-    const { WebGPUEngine } = await import('@babylonjs/core/Engines/webgpuEngine')
+    const WebGPUEngine = await loadWebGPU()
     if (!(await WebGPUEngine.IsSupportedAsync)) return null
     // `preserveDrawingBuffer` is deliberately not forwarded: it is a WebGL
     // concept, and the one thing that reads the canvas back — the reference
