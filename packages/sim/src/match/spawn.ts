@@ -88,8 +88,9 @@ export const SPAWN_HEALTH = 100
  *
  * It is what makes a duel take two rockets rather than one: armour absorbs 66%
  * of every hit until it runs out (`selfDamage.ts`), so 100/100 is 100 health
- * behind 66 points of absorption. Rocket-jumping spends it, which is the trade
- * the default self-damage mode is built around.
+ * behind 66 points of absorption. Under the default self-damage mode it is
+ * spent only on what the opponent lands — a rocket jump is charged to the
+ * health instead, which is the trade that mode is built around.
  */
 export const SPAWN_ARMOR = 100
 

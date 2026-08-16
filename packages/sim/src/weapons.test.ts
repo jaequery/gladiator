@@ -235,17 +235,17 @@ describe('the rocket jump', () => {
     expect(ROCKET_JUMP_LAUNCH).toBe(500)
   })
 
-  it('costs a third of your armour and none of your health', () => {
+  it('costs half your health and none of your armour', () => {
     const { state, player } = standing()
     tick(state, [cmd({ pitch: DOWN, buttons: BUTTON_ATTACK })], WORLD)
 
-    // 100 points of splash, halved because it is your own, and then absorbed by
-    // the armour — the default `armor_only` mode discards what is left rather
-    // than taking it out of your health (`match/selfDamage.ts`). The full 100
-    // went into the knockback before any of that, which is why the push below
-    // is unchanged and is the same in all three modes.
-    expect(player.armor).toBe(67)
-    expect(player.health).toBe(100)
+    // 100 points of splash, halved because it is your own, and then charged
+    // entirely to the health — the default `health_only` mode never consults
+    // the armour for your own rocket (`match/selfDamage.ts`). The full 100 went
+    // into the knockback before any of that, which is why the push below is
+    // unchanged and is the same in all four modes.
+    expect(player.armor).toBe(100)
+    expect(player.health).toBe(50)
     // Not exactly 500: the pitch clamp is 89 degrees rather than 90, so the
     // rocket drifts 0.8 units sideways over its first 45 and the push tilts by
     // a hair. Quake clamps the pitch for the same reason and pays the same

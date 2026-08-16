@@ -15,11 +15,12 @@
  * cheap to have the determinism gate watch it.
  *
  * They stand up at 100 health and 100 armour, the way a round starts them, and
- * each pays for one rocket jump out of the armour — so the trace covers the
- * armour path and the default `armor_only` self-damage rule as well as the
+ * each pays for one rocket jump out of the health — so the trace covers the
+ * damage path and the default `health_only` self-damage rule as well as the
  * splash that drives them (`match/selfDamage.ts`). Both survive the ten seconds
  * on purpose, because a fixture whose players are dead halfway through stops
- * exercising anything.
+ * exercising anything, and one jump apiece is the most that leaves them
+ * standing under that rule.
  *
  * The match itself stays in warmup. This is a fixture about a *sub-step*, and
  * running rounds through it would mean re-baking the trace every time the round
@@ -114,25 +115,25 @@ export const GOLDEN_REPLAY: Replay = {
  * 62.5 ticks, rounded to the nearest tick. See `sampleTicks`.
  */
 export const GOLDEN_TRACE: readonly TraceSample[] = [
-  { tick: 0, timeMs: 0, hash: 'a305dfda' },
-  { tick: 63, timeMs: 504, hash: '582617d3' },
-  { tick: 125, timeMs: 1000, hash: '5bcf39aa' },
-  { tick: 188, timeMs: 1504, hash: '745177d8' },
-  { tick: 250, timeMs: 2000, hash: '6787ceb2' },
-  { tick: 313, timeMs: 2504, hash: 'a8c6c2f3' },
-  { tick: 375, timeMs: 3000, hash: '79f87d50' },
-  { tick: 438, timeMs: 3504, hash: '0abf4ae8' },
-  { tick: 500, timeMs: 4000, hash: '8fe46090' },
-  { tick: 563, timeMs: 4504, hash: '498b9048' },
-  { tick: 625, timeMs: 5000, hash: 'cce1925b' },
-  { tick: 688, timeMs: 5504, hash: '958ca529' },
-  { tick: 750, timeMs: 6000, hash: '00d20e21' },
-  { tick: 813, timeMs: 6504, hash: 'a1a100cf' },
-  { tick: 875, timeMs: 7000, hash: '3d9facce' },
-  { tick: 938, timeMs: 7504, hash: 'd233cba7' },
-  { tick: 1000, timeMs: 8000, hash: '2270d897' },
-  { tick: 1063, timeMs: 8504, hash: '29a7d2ed' },
-  { tick: 1125, timeMs: 9000, hash: '4e458c69' },
-  { tick: 1188, timeMs: 9504, hash: '511346d9' },
-  { tick: 1250, timeMs: 10000, hash: 'f3a5ab1d' },
+  { tick: 0, timeMs: 0, hash: '33276984' },
+  { tick: 63, timeMs: 504, hash: '57419449' },
+  { tick: 125, timeMs: 1000, hash: 'ee08c754' },
+  { tick: 188, timeMs: 1504, hash: 'a3ab167a' },
+  { tick: 250, timeMs: 2000, hash: '3ef70d8c' },
+  { tick: 313, timeMs: 2504, hash: '7ce75941' },
+  { tick: 375, timeMs: 3000, hash: 'c42840d2' },
+  { tick: 438, timeMs: 3504, hash: '6682fe69' },
+  { tick: 500, timeMs: 4000, hash: '87bfa1de' },
+  { tick: 563, timeMs: 4504, hash: '60f2e182' },
+  { tick: 625, timeMs: 5000, hash: '61d6febd' },
+  { tick: 688, timeMs: 5504, hash: '788ba16f' },
+  { tick: 750, timeMs: 6000, hash: '0ea2b9df' },
+  { tick: 813, timeMs: 6504, hash: '7f74ec25' },
+  { tick: 875, timeMs: 7000, hash: 'e89b7a74' },
+  { tick: 938, timeMs: 7504, hash: '2e423ef1' },
+  { tick: 1000, timeMs: 8000, hash: '69c5a211' },
+  { tick: 1063, timeMs: 8504, hash: '24a7aae7' },
+  { tick: 1125, timeMs: 9000, hash: 'add7d07f' },
+  { tick: 1188, timeMs: 9504, hash: '809863b7' },
+  { tick: 1250, timeMs: 10000, hash: '774ba543' },
 ]

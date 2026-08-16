@@ -473,9 +473,10 @@ arrived.
 Three things in there look like details and are rules:
 
 - **Armour absorbs 66% of every hit, rounded up** (Quake's `CheckArmor`), which
-  is what makes a duel take two rockets. **Knockback is derived before any of
-  that**, so all three self-damage modes launch a rocket jump at the same
-  500 qu/s and differ only in the bill. §7.2.
+  is what makes a duel take two rockets — except your own splash, which under
+  the default `health_only` mode never reaches the armour at all. **Knockback is
+  derived before any of that**, so all four self-damage modes launch a rocket
+  jump at the same 500 qu/s and differ only in the bill. §7.2.
 - **A round ends the instant a player dies, including when both do** — a mutual
   kill is a draw, and picking a winner by entity order would hand it to whoever
   spawned first. A draw still costs a round, which is what makes the round cap
@@ -1728,8 +1729,10 @@ and the same aim with a pillar 40 units in front of the muzzle.
 The bound is taken against `SelfDamage.Full` with no armour, the harshest mode,
 because the `WorldModel` does not carry which mode the match is running and is
 not going to: that would be a field added for the bot's convenience rather than
-because a channel would have told a player. Under the default `armor_only` the
-bot is conservative by exactly what its armour would have absorbed.
+because a channel would have told a player. Under `armor_only` the bot is
+conservative by exactly what its armour would have absorbed; under the default
+`health_only` the bound is exact, because that mode charges half the splash to
+the health and never touches the armour.
 
 The rocket-jump exemption is a **parameter** rather than a flag on a state, so
 both answers are visible at the call site. Nothing asks for one in v1 — the nav

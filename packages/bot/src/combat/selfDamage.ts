@@ -19,9 +19,12 @@
  * would be adding a field for the bot's convenience rather than because a
  * channel would have told a player about it. The bound is therefore taken
  * against `SelfDamage.Full` with no armour left — half the splash off the health
- * — which is the worst any mode can do. Under the default `armor_only` the bot
- * is being conservative by exactly the amount its armour would have absorbed,
- * and that is the direction to be wrong in.
+ * — which is the worst any mode can do. Under `armor_only` the bot is being
+ * conservative by exactly the amount its armour would have absorbed, and that is
+ * the direction to be wrong in. Under the default `health_only` (GLAD-7Z7MMC)
+ * the bound is not conservative at all but *exact*: that mode charges half the
+ * splash to the health and never touches the armour, which is the same
+ * arithmetic this bound already assumed.
  *
  * ## The prediction is where the rocket will actually burst
  *
@@ -48,11 +51,11 @@ import { predictImpact } from './rocketAim.ts'
 /**
  * The splash the bot will accept from its own rocket at full health, in points.
  *
- * Twenty-five. Under `armor_only` that is 17 armour and no health — an eighth of
- * the bar, for a shot that can take a third of the opponent's. Under `full` with
- * no armour it is 12 health. Both are prices worth paying, which is the point:
- * this number is what stops the bot from being the sort of opponent you can
- * safely walk straight at.
+ * Twenty-five. Under the default `health_only` that is 12 health, and the same
+ * under `full` with no armour; under `armor_only` it is 17 armour and no health,
+ * an eighth of the bar. All are prices worth paying for a shot that can take a
+ * third of the opponent's, which is the point: this number is what stops the bot
+ * from being the sort of opponent you can safely walk straight at.
  */
 export const SELF_SPLASH_ALLOWANCE = SHIPPED_SKILL.selfSplashAllowance
 
@@ -70,8 +73,9 @@ export const SELF_SPLASH_RESERVE = 10
  *
  * The allowance, capped by what it can survive under the harshest self-damage
  * mode. `armor` is deliberately not a parameter: assuming there is none is the
- * conservative reading and it keeps this a function of the one number that
- * decides whether a shot can kill you.
+ * conservative reading — and under the default mode the exact one, since it
+ * never spends armour on your own rocket — and it keeps this a function of the
+ * one number that decides whether a shot can kill you.
  */
 export function acceptableSelfSplash(health: number, skill: BotSkill = SHIPPED_SKILL): number {
   // Under `SelfDamage.Full` with no armour, splash costs half its points in

@@ -1,5 +1,5 @@
 /**
- * What a hit costs, and the three answers to "what does your own rocket cost
+ * What a hit costs, and the four answers to "what does your own rocket cost
  * *you*". `docs/physics-spec.md` §7.2.
  *
  * Two rules meet in this file, and they are separable on purpose.
@@ -10,35 +10,45 @@
  * 66 armour and 34 health, so it takes exactly two of them to kill you. That is
  * the arithmetic the whole duel is played inside.
  *
- * **Self-damage has three modes**, because Rocket Arena's own history has three
- * and the choice changes the skill ceiling rather than the numbers:
+ * **Self-damage has four modes** — Rocket Arena's own history supplies three,
+ * and GLAD-7Z7MMC asked for the fourth — because the choice changes the skill
+ * ceiling rather than the numbers:
  *
  * | mode | what a full-power rocket jump costs |
  * | ---- | ----------------------------------- |
  * | {@link SelfDamage.Full} | 33 armour and 17 health |
- * | {@link SelfDamage.ArmorOnly} (default) | 33 armour, no health |
+ * | {@link SelfDamage.ArmorOnly} | 33 armour, no health |
  * | {@link SelfDamage.None} | nothing |
+ * | {@link SelfDamage.HealthOnly} (default) | 50 health, no armour |
  *
- * **Knockback is identical in all three.** It is not decided here at all:
+ * **Knockback is identical in all four.** It is not decided here at all:
  * `damage.ts` derives the push from the *full* figure before this function is
  * consulted, which is Quake's own ordering and the reason a rocket jump is
  * worth what it costs. A rocket at your feet is 500 qu/s in every mode, and
  * switching mode changes the price of a jump without changing the jump.
  *
- * ## Why `armor_only` is the default
+ * ## Why `health_only` is the default
  *
- * It keeps rocket-jumping a *tempo* decision. A full-power jump is free in
- * health and costs a third of your armour, so three jumps leave you on 100
- * health and 1 armour — one rocket from dead instead of two. You are never
- * killed by your own mistake, and you are still spending something real to move
- * fast, which is exactly the trade the format is about. Rocket Arena 3 went to
- * `none` and lost the trade; `full` keeps it but punishes a beginner who
- * mistimes a jump into a wall.
+ * Because your armour should only ever be spent on what the *other* player did
+ * to you. `armor_only` and `full` both let a rocket you fired yourself eat into
+ * the bar that decides how many of their rockets you survive, so a jump taken
+ * for position is silently also a concession in the next exchange, paid at a
+ * moment nobody was looking at the armour bar. `health_only` moves the whole
+ * bill onto health: the armour is not consulted at all for your own splash, and
+ * the halved figure comes straight off the health.
  *
- * Note what falls out at the bottom of the armour bar: with nothing left to
- * absorb it, a jump in `armor_only` is free again. That is not a hole, it is
- * the same trade read from the other end — a player who has spent their armour
- * on mobility dies to one rocket.
+ * It is the most expensive of the four in the moment — a full-power jump is 50
+ * health, so one is survivable and the second one kills — and that is the
+ * trade. Mobility is no longer nearly free with an armour bar to hide it in; it
+ * is the single most visible number in the game, and the price is paid where a
+ * player can see it. Rocket Arena 3's `none` deletes the trade entirely,
+ * `armor_only` charges for it in the wrong currency, and `full` charges in
+ * both.
+ *
+ * Note that the two `*_only` modes are mirror images and neither is a hole:
+ * `armor_only` becomes free at the bottom of the armour bar, and `health_only`
+ * never does — health is the one bar you cannot spend to nothing and keep
+ * playing.
  */
 
 /**
@@ -55,16 +65,30 @@ export const SelfDamage = {
   ArmorOnly: 1,
   /** Rocket Arena 3's rule: no self-damage at all. The push is unchanged. */
   None: 2,
+  /**
+   * Halved, and the armour is never consulted — the whole of it off the health.
+   * The mirror of {@link SelfDamage.ArmorOnly}, and the default.
+   *
+   * Listed last and numbered 3 because these values are on the wire and in the
+   * state hash: the byte a mode encodes to is fixed forever, so a new one takes
+   * the next free number rather than the place it reads best in.
+   */
+  HealthOnly: 3,
 } as const
 
 export type SelfDamageMode = (typeof SelfDamage)[keyof typeof SelfDamage]
 
 /** The mode a match runs under unless it says otherwise. See the header. */
-export const DEFAULT_SELF_DAMAGE: SelfDamageMode = SelfDamage.ArmorOnly
+export const DEFAULT_SELF_DAMAGE: SelfDamageMode = SelfDamage.HealthOnly
 
-/** Whether `value` is one of the three. The door for anything off the wire. */
+/** Whether `value` is one of the four. The door for anything off the wire. */
 export function isSelfDamageMode(value: number): value is SelfDamageMode {
-  return value === SelfDamage.Full || value === SelfDamage.ArmorOnly || value === SelfDamage.None
+  return (
+    value === SelfDamage.Full ||
+    value === SelfDamage.ArmorOnly ||
+    value === SelfDamage.None ||
+    value === SelfDamage.HealthOnly
+  )
 }
 
 /**
@@ -72,9 +96,10 @@ export function isSelfDamageMode(value: number): value is SelfDamageMode {
  *
  * Quake 3's `if ( targ == attacker ) damage *= 0.5`, and it applies before the
  * armour is consulted, which is why a full-power rocket jump takes 33 off your
- * armour and not 66. It is applied to the *health* figure only, after the
- * knockback has already been derived from the full 100 (`damage.ts`) — rocket
- * jumping lives in the gap between those two statements.
+ * armour and not 66 in the modes that consult it at all. It is applied to the
+ * *health* figure only, after the knockback has already been derived from the
+ * full 100 (`damage.ts`) — rocket jumping lives in the gap between those two
+ * statements.
  *
  * {@link SelfDamage.None} skips it entirely rather than scaling it to zero,
  * because zero damage and "no damage rule at all" want to read differently at
@@ -129,7 +154,7 @@ export function armorAbsorbed(take: number, armor: number): number {
 /**
  * Split `points` of incoming damage between a target's armour and its health.
  *
- * The one place all three modes are stated, as a pure function of numbers, so
+ * The one place all four modes are stated, as a pure function of numbers, so
  * that the rules can be read and tested without a world around them.
  * `damage.ts` applies the result and does the knockback, which happens *before*
  * this is called and is deliberately not a function of the mode.
@@ -149,6 +174,13 @@ export function resolveDamage(
 
   let take = selfInflicted ? points * SELF_DAMAGE_SCALE : points
   if (take < MIN_DAMAGE) take = MIN_DAMAGE
+
+  // The whole of `health_only`, and the reason it returns before `armorAbsorbed`
+  // rather than zeroing its result afterwards: under this mode the armour is not
+  // *consulted*, so there is no share for it to have absorbed and no state in
+  // which a hit both spared the armour and was made smaller by it. What the
+  // halving left goes through to the health. See the header.
+  if (selfInflicted && mode === SelfDamage.HealthOnly) return { armor: 0, health: take }
 
   const saved = armorAbsorbed(take, armor)
   take -= saved

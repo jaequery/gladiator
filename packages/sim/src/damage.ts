@@ -17,7 +17,7 @@
  *    the player *sees*.
  * 3. **The knockback is computed before anything is subtracted.** Rocket
  *    jumping exists in the gap: the push comes off the full 100, and only then
- *    is it decided what that 100 costs you. Which is why all three self-damage
+ *    is it decided what that 100 costs you. Which is why all four self-damage
  *    modes (`match/selfDamage.ts`) launch you at the same 500 qu/s and differ
  *    only in the bill.
  *
@@ -243,7 +243,7 @@ let damageObserver: ((event: DamageEvent) => void) | null = null
  * self-damage. `mode` is which self-damage rule is in force and defaults to the
  * match's own, so a caller inside a tick never has to thread it — the state
  * already knows (`match/match.ts`). It is still a parameter, because the tests
- * for the three modes want to state which one they mean.
+ * for the four modes want to state which one they mean.
  *
  * Returns the points the target actually absorbed — armour plus health — which
  * is zero for a hit that spawn protection or a self-damage mode threw away, and
