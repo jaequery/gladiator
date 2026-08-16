@@ -42,7 +42,7 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const CLIENT_DIST = join(ROOT, 'packages', 'client', 'dist')
 const SERVER_BUNDLE = join(ROOT, 'packages', 'server', 'dist', 'index.js')
 const REFERENCE_DIR = join(ROOT, 'packages', 'client', 'reference')
-const REFERENCE_NAME = 'testbed.png'
+const REFERENCE_NAME = 'arena1.png'
 const REFERENCE_FILE = join(REFERENCE_DIR, REFERENCE_NAME)
 
 const SERVER_PORT = 8798

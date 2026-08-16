@@ -242,6 +242,11 @@ export function applyMessage(
           // the moment a client needs it is the moment it has no socket to ask
           // over.
           token: session.token,
+          // Which player this peer is. The seat was decided by `lifecycle.ts`
+          // before this frame was built, and this is the only place it is ever
+          // told to the client — a snapshot carries both bodies and nothing in
+          // it says which one is theirs (`sim/src/protocol.ts`).
+          slot: session.slot,
         },
       ],
     }

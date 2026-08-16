@@ -226,6 +226,7 @@ function welcomeFrame(over: Record<string, unknown> = {}) {
     mapHash: MAP_HASH,
     room: ROOM,
     token: TOKEN,
+    slot: 0,
     ...over,
   }
 }

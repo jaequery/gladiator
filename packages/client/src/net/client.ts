@@ -196,6 +196,15 @@ export type NetSnapshot = {
    * what canonical means.
    */
   readonly room: string | null
+  /**
+   * Which player this client is, once the host has said, and `null` before.
+   *
+   * The field the whole second seat hangs off. `main.ts` watches it and rebuilds
+   * prediction, interpolation and the HUD around it the frame it changes; until
+   * it arrives the client is steering slot 0 on the assumption that it opened
+   * the room, which is true for single-player and for whoever created the match.
+   */
+  readonly slot: number | null
   /** The map hash this client actually sent — which `mapHashOverride` changes. */
   readonly mapHash: string
   /** The map the server is authoritative over, once it has said. */
@@ -547,6 +556,7 @@ export const NO_SESSION: NetSnapshot = {
   message: 'no match yet — pick one from the menu',
   serverBuild: null,
   room: null,
+  slot: null,
   mapHash: '',
   serverMapHash: null,
   serverTick: null,
@@ -625,6 +635,8 @@ export function createNetClient(options: NetOptions): NetClient {
   // object that gets printed.
   let room: string | null = null
   let token: string | null = null
+  /** The seat the host put us in, or `null` before it has said. */
+  let slot: number | null = null
   let lifecycle: ServerLifecycle | null = null
   let lifecycleAtMs = 0
 
@@ -715,6 +727,12 @@ export function createNetClient(options: NetOptions): NetClient {
       // client that dropped its token on the way back in would have exactly one
       // reconnect in it.
       token = parsed.token
+      // Which body this tab is steering. Read on the frame loop's next pass and
+      // acted on there (`main.ts`), because everything that depends on it —
+      // prediction, interpolation, the HUD — is built out of it rather than
+      // parameterised by it, and rebuilding all three from inside a socket
+      // handler would do it in the middle of a frame that is already half drawn.
+      slot = parsed.slot
       status = 'live'
       retry.succeed()
       redialAtMs = null
@@ -988,6 +1006,7 @@ export function createNetClient(options: NetOptions): NetClient {
       message: describe(),
       serverBuild,
       room,
+      slot,
       mapHash,
       serverMapHash,
       serverTick,

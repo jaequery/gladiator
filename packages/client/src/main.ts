@@ -64,6 +64,7 @@ import type { RawInput } from './input/pointerLock.ts'
 import { advance, alphaOf } from './loop.ts'
 import { shouldSnap, slewMs } from './net/clockSync.ts'
 import { CLIENT_MAP, CLIENT_MAP_HASH } from './map.ts'
+import { CLIENT_NAV } from './nav.ts'
 import {
   NO_SESSION,
   type NetClient,
@@ -77,6 +78,7 @@ import {
   type RedialContext,
 } from './net/client.ts'
 import { createEntityBuffer, createInterpolationClock } from './net/interpolate.ts'
+import { createBotPeer } from './net/botPeer.ts'
 import { type ListenServer, createListenServer } from './net/listenServer.ts'
 import { createPredictor } from './net/prediction.ts'
 import { CorrectionBand, decayMsFor } from './net/reconcile.ts'
@@ -302,24 +304,37 @@ function shotMode(search: string): boolean {
  * One player predicted, because prediction needs input this tab knows the
  * future of. A room seats two and the other one is drawn from real data, 80 ms
  * in the past (`net/interpolate.ts`).
+ *
+ * **Mutable, and the host is what decides it.** Zero is the opening assumption
+ * and it is right for single-player and for whoever opened the room; a player
+ * who *joined* one is seated in slot 1, learns so from the welcome
+ * (`ServerWelcome.slot`, protocol 10) and adopts it here. Before that field
+ * existed this was a constant, and the second seat was quietly unplayable: the
+ * guest predicted the host's body from its own input, drew its own body as the
+ * opponent, and disagreed with the server about every tick it hashed.
+ *
+ * Nothing is simulated before the welcome lands — `mustHoldStill` holds the
+ * world through `connecting` — so the value is settled before the first tick,
+ * and {@link adoptSlot} exists for the one case where it is not: a resume into
+ * the other seat.
  */
-const LOCAL_SLOT = 0
+let localSlot = 0
 
 /** `[0, 0, 0]` if the player has somehow gone missing, rather than throwing in a frame. */
 const NOWHERE: Vec3 = [0, 0, 0]
 
 function originOf(state: GameState): Vec3 {
-  const player = findPlayer(state, LOCAL_SLOT)
+  const player = findPlayer(state, localSlot)
   return player === null ? NOWHERE : [player.origin[0], player.origin[1], player.origin[2]]
 }
 
 function velocityOf(state: GameState): Vec3 {
-  const player = findPlayer(state, LOCAL_SLOT)
+  const player = findPlayer(state, localSlot)
   return player === null ? NOWHERE : [player.velocity[0], player.velocity[1], player.velocity[2]]
 }
 
 function onGroundIn(state: GameState): boolean {
-  const player = findPlayer(state, LOCAL_SLOT)
+  const player = findPlayer(state, localSlot)
   return player !== null && (player.flags & EntityFlag.OnGround) !== 0
 }
 
@@ -594,7 +609,7 @@ async function boot(): Promise<void> {
   // starts from. The 80 ms is bought back by lag compensation on the host, and
   // `rocketPredict.ts` below is the one thing this tab is allowed to predict
   // *about* it (GLAD-5QGO11).
-  const opponentHistory = createEntityBuffer({ localSlot: LOCAL_SLOT })
+  let opponentHistory = createEntityBuffer({ localSlot })
   const opponentClock = createInterpolationClock()
 
   /**
@@ -612,7 +627,7 @@ async function boot(): Promise<void> {
     opponentOrigins.length = 0
     for (const entity of state.entities) {
       if (entity.kind !== EntityKind.Player) continue
-      if (entity.slot === LOCAL_SLOT) continue
+      if (entity.slot === localSlot) continue
       opponentOrigins.push([entity.origin[0], entity.origin[1], entity.origin[2]])
     }
     for (const entity of drawn) {
@@ -624,20 +639,60 @@ async function boot(): Promise<void> {
   // Which of our own rockets we are willing to be thrown by before the host has
   // confirmed it. `net/rocketPredict.ts` argues the predicate; the client's
   // whole share of `TickHooks` is this one answer.
-  const selfSplash = createRocketPredictor({
-    slot: LOCAL_SLOT,
+  let selfSplash = createRocketPredictor({
+    slot: localSlot,
     opponents: () => opponentOrigins,
     log: (line) => {
       console.warn(line)
     },
   })
 
-  const predictor = createPredictor({
+  let predictor = createPredictor({
     state,
     world: CLIENT_MAP.world,
-    slot: LOCAL_SLOT,
+    slot: localSlot,
     hooks: { selfSplash },
   })
+
+  /**
+   * Take the seat the host put us in.
+   *
+   * Three objects are built *around* a slot rather than parameterised by one —
+   * prediction advances that body from local input, the entity buffer decides
+   * who is drawn 80 ms in the past instead, and the self-splash predicate
+   * decides whose rockets are ours — so adopting a new slot means building them
+   * again. That is cheap and it happens at most once a session: the welcome
+   * arrives while `mustHoldStill` is still holding the world, so nothing has
+   * been predicted yet and there is no history to lose.
+   *
+   * Returns whether anything changed, because the caller has one more thing to
+   * do when it did.
+   */
+  const adoptSlot = (seat: number): boolean => {
+    if (seat === localSlot) return false
+    localSlot = seat
+    opponentHistory = createEntityBuffer({ localSlot })
+    selfSplash = createRocketPredictor({
+      slot: localSlot,
+      opponents: () => opponentOrigins,
+      log: (line) => {
+        console.warn(line)
+      },
+    })
+    predictor = createPredictor({
+      state,
+      world: CLIENT_MAP.world,
+      slot: localSlot,
+      hooks: { selfSplash },
+    })
+    // The spawn's authored facing, for the body we have just found out is ours.
+    // Same instruction as at boot, and for the same reason: without it the first
+    // command this player sends spins them off their spawn's yaw.
+    const body = findPlayer(state, localSlot)
+    if (body !== null) input.angles.yawDegrees = body.angles[1] / ANGLE_UNITS_PER_DEGREE
+    return true
+  }
+
   const renderOffset = createRenderOffset()
   /** Set by a hard snap; the frame loop throws the queued ticks away and clears it. */
   let snapped = false
@@ -741,16 +796,23 @@ async function boot(): Promise<void> {
    *
    * The same code path a duel on Fly takes — same handshake, same map hash
    * check, same framing, same hash echo — over a loopback instead of a socket.
-   * It is what the bot will be dueled through (GLAD-TSED8V) and how anybody
-   * plays with no server up. `net/listenServer.ts`; `?local=1` boots straight
-   * into it, and "play the bot" is the same call.
+   * The bot is dueled through it: it takes the room's second seat as a peer in
+   * its own right (`net/botPeer.ts`), so "play the bot" and "play a stranger"
+   * differ in who is holding the other end and in nothing else.
+   * `net/listenServer.ts`; `?local=1` boots straight into it.
    */
   const startBotMatch = (): void => {
     if (session !== null || shot) return
     // `record: dev` is `?dev=1`: the host in this tab keeps the command stream
     // so that `window.__gladiator.demo()` has something to hand back. Off
     // otherwise — a recorder nobody asked for is a cost every player pays.
-    const listen = createListenServer({ map: CLIENT_MAP, build: BUILD, record: dev })
+    const listen = createListenServer({
+      map: CLIENT_MAP,
+      build: BUILD,
+      record: dev,
+      opponent: (room) =>
+        createBotPeer({ room, map: CLIENT_MAP, nav: CLIENT_NAV, build: BUILD }),
+    })
     session = {
       listen,
       // No redial: a closed loopback means the tab is going away, and there is
@@ -979,7 +1041,7 @@ async function boot(): Promise<void> {
   // an instruction the state carries and the peer with a mouse on it has to
   // obey: without this line the first command a player sends spins them back
   // to due north on the frame after they spawn. Policy is `match/spawn.ts`.
-  const spawned = findPlayer(state, LOCAL_SLOT)
+  const spawned = findPlayer(state, localSlot)
   if (spawned !== null) input.angles.yawDegrees = spawned.angles[1] / ANGLE_UNITS_PER_DEGREE
 
   // Where the eye was one tick ago lives in the predictor, which keeps one
@@ -1105,7 +1167,7 @@ async function boot(): Promise<void> {
       render: renderSnapshot(),
       audio: audio?.snapshot() ?? NO_AUDIO,
       net: session?.net.snapshot() ?? NO_SESSION,
-      hud: hudModel(state, LOCAL_SLOT),
+      hud: hudModel(state, localSlot),
       hudFrames: matchHud.frames,
     }),
     audio: {
@@ -1199,7 +1261,13 @@ async function boot(): Promise<void> {
     // the natural place for this (`net/client.ts`). A page with no session yet
     // has no backoff to run out, which is the same reason it has no world.
     net?.poll()
-    const status = net?.snapshot().status ?? NO_SESSION.status
+    const netState = net?.snapshot() ?? NO_SESSION
+    const status = netState.status
+
+    // Which body is ours. Read every frame and acted on when it changes, which
+    // in practice is the one frame after the welcome lands — and always before
+    // the branch below, so no tick is ever simulated against the wrong slot.
+    if (netState.slot !== null) adoptSlot(netState.slot)
 
     if (net === null || mustHoldStill(status)) {
       // Hold the world still until we know whether there is a server to agree
@@ -1266,7 +1334,7 @@ async function boot(): Promise<void> {
     // The viewmodel needs the local player's weapon and last shot, and nothing
     // about its position: it hangs off the camera, which is interpolated
     // already. So this is the newest netstate rather than an interpolated one.
-    const self = netStateOf(state, LOCAL_SLOT)
+    const self = netStateOf(state, localSlot)
 
     // Everyone else, from real data, on the interpolation clock — never
     // predicted, because this client has no knowledge of their future input.
@@ -1363,8 +1431,8 @@ async function boot(): Promise<void> {
     // nothing happened.
     demoTicks += elapsedMs / TICK_INTERVAL_MS
     const readout = hudDemo
-      ? demoModel(Math.floor(demoTicks), LOCAL_SLOT, cmd.yaw)
-      : hudModel(state, LOCAL_SLOT)
+      ? demoModel(Math.floor(demoTicks), localSlot, cmd.yaw)
+      : hudModel(state, localSlot)
     matchHud.update(readout, feedback.observe(readout))
     // Off the screen entirely when the session is unrecoverable — the panel is
     // already saying "reload", and a round score in front of it is furniture —
@@ -1413,6 +1481,10 @@ async function boot(): Promise<void> {
         deferred: selfSplash.stats.suppressed,
         mispredicted: predictor.mispredicts.stats.selfSplash,
       },
+      // Whether the hash echo is still a verdict. It stops being one the moment
+      // there is a body this client is deliberately not predicting — see
+      // `hud.ts`, `HudModel.duelling`.
+      duelling: findPlayer(state, localSlot === 0 ? 1 : 0) !== null,
     })
 
     // The quick-match panel, on the same beat: a wait is quoted in whole

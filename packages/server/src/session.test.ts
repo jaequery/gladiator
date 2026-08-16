@@ -73,6 +73,9 @@ describe('session handshake', () => {
         // the server, which is why it comes off the session and not off the
         // identity beside it (`lifecycle.ts`).
         token: TOKEN,
+        // And which of the two players it seats — off the session for the same
+        // reason the token is.
+        slot: 0,
       },
     ])
     expect(step.close).toBeUndefined()

@@ -1,6 +1,20 @@
 /**
  * The server loads a baked map and collides against it, in plain Node.
  *
+ * Two maps appear below and the split is deliberate. {@link SERVER_MAP} is
+ * whatever the machine actually ships — `arena1` — and the assertions made
+ * against it are the ones that must hold for *any* map a duel is played on: it
+ * loaded headless, its hash was recomputed rather than read, the validator
+ * still accepts it, and its spawns are somewhere a player fits. {@link
+ * REFERENCE} is `maps/testbed.ts`, which exists to be the fixture the pipeline
+ * is proved against, and the assertions against it name specific coordinates —
+ * a wall at x = 512, a 1:1 ramp, a pane of `nonSolid` glass — because that is
+ * how you test a *tracer* rather than a level.
+ *
+ * Pointing the coordinate tests at whichever map happens to ship would mean
+ * rewriting the collision suite every time somebody moves a brush, and the
+ * suite would be measuring the level designer rather than the code.
+ *
  * This is the acceptance criterion written as a test. Everything here runs in
  * `environment: 'node'` with no canvas, no WebGL context, no `window`, no
  * `document` and no asset loader — because the authoritative simulation has to
@@ -20,6 +34,7 @@ import {
   PLAYER_MINS,
   boxPenetration,
   createTrace,
+  loadMap,
   mapGeometry,
   mapHashOf,
   traceBox,
@@ -28,12 +43,16 @@ import {
 } from '@gladiator/sim'
 import { describe, expect, it } from 'vitest'
 
+import baked from '../../../maps/baked/testbed.json' with { type: 'json' }
 import { SERVER_MAP, SERVER_MAP_HASH } from './map.ts'
+
+/** The fixture the tracer is proved against. Never played on. */
+const REFERENCE = loadMap(baked)
 
 describe('the server map', () => {
   it('loads from the committed artifact without a browser anywhere in sight', () => {
     expect('document' in globalThis).toBe(false)
-    expect(SERVER_MAP.source.name).toBe('testbed')
+    expect(SERVER_MAP.source.name).toBe('arena1')
     expect(SERVER_MAP.world.brushes.length).toBeGreaterThan(0)
   })
 
@@ -47,11 +66,11 @@ describe('the server map', () => {
   })
 })
 
-describe('collision against the loaded map', () => {
+describe('collision against the reference map', () => {
   it('stops a player who walks into a wall', () => {
     const trace = createTrace()
     // Along an empty lane at y = -300, straight at the +x wall at x = 512.
-    traceBox(trace, SERVER_MAP.world, [0, -300, 0], [1024, -300, 0], PLAYER_MINS, PLAYER_MAXS)
+    traceBox(trace, REFERENCE.world, [0, -300, 0], [1024, -300, 0], PLAYER_MINS, PLAYER_MAXS)
     expect(trace.fraction).toBeLessThan(1)
     // Stopped by the wall's inward face, one player half-width short of it.
     expect(trace.endpos[0]).toBeGreaterThan(512 - 16)
@@ -61,7 +80,7 @@ describe('collision against the loaded map', () => {
 
   it('drops a player onto the floor rather than through it', () => {
     const trace = createTrace()
-    traceBox(trace, SERVER_MAP.world, [256, -256, 400], [256, -256, -400], PLAYER_MINS, PLAYER_MAXS)
+    traceBox(trace, REFERENCE.world, [256, -256, 400], [256, -256, -400], PLAYER_MINS, PLAYER_MAXS)
     expect(trace.fraction).toBeLessThan(1)
     expect(trace.endpos[2]).toBeGreaterThanOrEqual(0)
     expect(trace.endpos[2]).toBeLessThan(1)
@@ -72,7 +91,7 @@ describe('collision against the loaded map', () => {
     const trace = createTrace()
     // The 1:1 ramp runs from x = 0 to x = 128; the surface height is `x`.
     // A box centred on x = 32 rests on its leading edge at x = 47.
-    traceBox(trace, SERVER_MAP.world, [32, -128, 300], [32, -128, 0], PLAYER_MINS, PLAYER_MAXS)
+    traceBox(trace, REFERENCE.world, [32, -128, 300], [32, -128, 0], PLAYER_MINS, PLAYER_MAXS)
     expect(trace.endpos[2]).toBeGreaterThan(46.8)
     expect(trace.endpos[2]).toBeLessThan(47.3)
     expect(trace.planeNormal[2]).toBeCloseTo(Math.sqrt(0.5), 6)
@@ -80,10 +99,10 @@ describe('collision against the loaded map', () => {
 
   it('shoots straight through the nonSolid glass and stops at the clip brush', () => {
     const trace = createTrace()
-    traceRay(trace, SERVER_MAP.world, [264, -256, 64], [264, 256, 64])
+    traceRay(trace, REFERENCE.world, [264, -256, 64], [264, 256, 64])
     expect(trace.fraction).toBe(1)
 
-    traceRay(trace, SERVER_MAP.world, [-264, -256, 64], [-264, 256, 64])
+    traceRay(trace, REFERENCE.world, [-264, -256, 64], [-264, 256, 64])
     expect(trace.fraction).toBeLessThan(1)
   })
 
@@ -98,7 +117,7 @@ describe('collision against the loaded map', () => {
       [0, 0, -4096],
     ] as const) {
       // From beside the central pillar, so the ray starts in open space.
-      traceRay(trace, SERVER_MAP.world, [200, 200, 64], end)
+      traceRay(trace, REFERENCE.world, [200, 200, 64], end)
       expect(trace.fraction, `escaped towards ${end.join(', ')}`).toBeLessThan(1)
     }
   })
@@ -136,7 +155,7 @@ describe('render geometry, built headless', () => {
     // prove the derivation needs nothing a browser has — which is what makes it
     // testable at all, and what makes the bot able to reason about the same
     // geometry the player sees.
-    const geometry = mapGeometry(SERVER_MAP.source)
+    const geometry = mapGeometry(REFERENCE.source)
     expect(geometry.positions.length % 3).toBe(0)
     expect(geometry.indices.length % 3).toBe(0)
     expect(geometry.groups.map((g) => g.surface)).toEqual(['floor', 'wall', 'metal', 'glass'])

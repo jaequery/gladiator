@@ -1,5 +1,11 @@
 /**
- * The map this page loaded.
+ * The map this page loaded: `arena1` — **Crucible**, the duel arena.
+ *
+ * It must be the same map `packages/server/src/map.ts` loads, and the hash
+ * exchanged in the handshake is what proves it rather than the fact that both
+ * files name the same import. `maps/testbed.ts` still exists and is still what
+ * the map pipeline is proved against — it is a fixture, not a level, and
+ * nothing plays on it.
  *
  * Bundled by Vite from the same committed artifact the server bundles with
  * esbuild — the *same file*, resolved twice, by two builds that are deployed to
@@ -17,7 +23,7 @@
  */
 import { loadMap, type LoadedMap } from '@gladiator/sim'
 
-import baked from '../../../maps/baked/testbed.json' with { type: 'json' }
+import baked from '../../../maps/baked/arena1.json' with { type: 'json' }
 
 /** The loaded map: source, verified hash, and a collision world. */
 export const CLIENT_MAP: LoadedMap = loadMap(baked)

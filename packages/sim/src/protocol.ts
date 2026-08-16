@@ -16,6 +16,7 @@
  * socket silently is indistinguishable from the server being down, and the
  * player reloads twice and gives up.
  */
+import { DUEL_SLOTS } from './match/spawn.ts'
 import { isWireState, type WireState } from './netstate.ts'
 import { sanitizeUserCmd, type UserCmd } from './usercmd.ts'
 
@@ -83,8 +84,18 @@ import { sanitizeUserCmd, type UserCmd } from './usercmd.ts'
  * undone once a client has it. Whoever lands next should expect to do this
  * again: renumber at the merge rather than guess further ahead, because the
  * guess is the part that keeps being wrong.
+ *
+ * Version 10 tells a client **which player it is**. {@link ServerWelcome} grew
+ * a `slot`, and it is the field whose absence made the second seat unplayable:
+ * the client had no way to learn its own body, assumed slot 0 because in
+ * single-player it always is, and so a guest joining by room code predicted the
+ * *host's* body from its own input, drew its own body as the opponent, and
+ * disagreed with the server about every tick it ever hashed. A version-9 client
+ * is not handed a shape it cannot parse — it simply keeps guessing, which is
+ * exactly why the number has to move: the failure is silent, and a silent
+ * failure is the kind a version check exists to turn into a loud one.
  */
-export const PROTOCOL_VERSION = 9
+export const PROTOCOL_VERSION = 10
 
 /**
  * The most commands one frame may carry. The client's accumulator clamps a
@@ -219,6 +230,26 @@ export type ServerWelcome = {
    * summary of the threat model is `docs/deploy.md`.
    */
   readonly token: string
+  /**
+   * Which of the two players this client *is*.
+   *
+   * The one thing a client cannot work out for itself. A snapshot is the whole
+   * world with both bodies in it and nothing in it says which one is holding
+   * the mouse, so without this field a client has to guess — and the only guess
+   * available is "slot 0", which is right for a listen server, right for the
+   * player who opened the room, and wrong for everybody who joins one.
+   *
+   * Everything on the client that has to know hangs off it: which body
+   * prediction advances from local input, which body is drawn interpolated 80 ms
+   * in the past instead of predicted, which vitals the HUD prints, and which
+   * rockets are "mine" for the self-splash predicate. Get it wrong and the
+   * client does not fail — it plays a different game very confidently.
+   *
+   * The room's, not the client's: the seat is assigned by `lifecycle.ts` and a
+   * client that could choose its own would be a client that could take the seat
+   * somebody else is already sitting in.
+   */
+  readonly slot: number
 }
 
 /**
@@ -270,6 +301,31 @@ export type ServerLifecycle = {
 
 export type ServerHash = {
   readonly t: 'hash'
+  /**
+   * The tick this hash is *of*, in the **server's** tick space.
+   *
+   * ## Known limitation: only the first peer can use this
+   *
+   * A client indexes its own hash history by the ticks *it* predicted, and its
+   * count only equals the server's for a peer that was in the room when the
+   * world started — which the frame loop arranges deliberately, by holding the
+   * world still until the socket is up (`client/src/main.ts`). A peer who joins
+   * a match already in progress numbers its first command 1 against a world
+   * that is thousands of sub-steps old, looks its history up at the server's
+   * number, and compares against a hash it never took. Every comparison then
+   * fails and the HUD tells that player their simulation has desynchronised.
+   *
+   * It is a defect in the **instrument**, not in the simulation: nothing acts on
+   * the result — `client/src/hud.ts` is its only reader — so the joining
+   * player's game is correct and only the readout lies. Relabelling this in the
+   * peer's own space is not the fix either, and was tried: the server's
+   * missing-command fallback advances the world without advancing that peer's
+   * label, so the frame then carries a stale label beside a fresh hash and the
+   * *first* peer starts failing instead. The real fix is for the client to
+   * learn the offset between the two spaces — it has both numbers already, in
+   * every snapshot's `ack` and `state[0]` — and it is deliberately left undone
+   * rather than half-done.
+   */
   readonly tick: number
   readonly hash: number
 }
@@ -613,9 +669,14 @@ export function parseServerMessage(raw: string): ServerMessage | null {
     // stored one would send it back and be refused as a stranger, which is a
     // failure worth having at the door rather than a minute later.
     const token = asString(record['token'], 64)
+    // The seat. Refused unless it is a slot that exists, because the field's
+    // whole job is to stop a client guessing — and a client that accepted a
+    // nonsense slot would be back to steering a body that is not there.
+    const slot = asFiniteInteger(record['slot'])
     if (protocol === null || build === null || session === null || mapHash === null) return null
     if (room === null || token === null || token === '') return null
-    return { t: 'welcome', protocol, build, session, mapHash, room, token }
+    if (slot === null || slot < 0 || slot >= DUEL_SLOTS.length) return null
+    return { t: 'welcome', protocol, build, session, mapHash, room, token, slot }
   }
 
   if (record['t'] === 'life') {

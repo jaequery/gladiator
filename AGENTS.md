@@ -178,7 +178,7 @@ Two more rules that are not lintable and matter as much:
 - **The camera is written from simulation state every frame and never read
   back.** `inertia = 0`, no input attached, `position` and `rotation` assigned
   rather than `setTarget`ed. `docs/renderer.md` §1.
-- **`packages/client/reference/testbed.png` is a gate.** A renderer change that
+- **`packages/client/reference/arena1.png` is a gate.** A renderer change that
   legitimately changes the picture ships its new reference in the same commit
   (`pnpm run e2e -- --update-reference`). A re-shoot in a commit that was not
   supposed to change the picture is the question the gate exists to ask.
@@ -388,7 +388,7 @@ it differs, because the client deploys to Vercel and the server to Fly and
 never at the same instant. `PROTOCOL_VERSION` covers the message shapes; the
 map hash covers the world they describe.
 
-**The client and the server simulate the map they draw.** Both load `testbed`,
+**The client and the server simulate the map they draw.** Both load `arena1`,
 verify its hash, exchange it, and tick `LoadedMap.world` — the collision world
 built from the same brush list `map/geometry.ts` cuts the render mesh out of. So
 what you can walk on is what you can see, across the network, by construction.
@@ -402,12 +402,22 @@ below rather than taking `spawns[0]`.
 default world and the golden replay's world are still the hand-written brush
 world there. Nothing that ships ticks it.
 
-The arena to play on is `maps/arena1.ts` — "Crucible", GLAD-B8DI4J. It bakes, it
+The arena played on is `maps/arena1.ts` — "Crucible", GLAD-B8DI4J. It bakes, it
 is asserted against the movement in `maps/arena1.test.ts`, and the two
-`import baked from '.../testbed.json'` lines in `packages/client/src/map.ts` and
-`packages/server/src/map.ts` are what point the game at it. They still say
-`testbed`, because which map a room plays on is a choice with an owner
-(room-to-map assignment) and a reference screenshot behind it.
+`import baked from '.../arena1.json'` lines in `packages/client/src/map.ts` and
+`packages/server/src/map.ts` are what point the game at it. Those two lines are
+the whole of the choice, which is why the map is a *value* and not a parameter:
+one machine serves one arena, and a client that loaded a different one is
+refused at the handshake rather than allowed to play a world nobody is
+authoritative over.
+
+`maps/testbed.ts` stays and is still baked, but nothing plays on it. It is the
+fixture the map pipeline and the tracer are proved against — a wall at a known
+x, a 1:1 ramp, a pane of `nonSolid` glass — and `packages/server/src/map.test.ts`
+deliberately splits its assertions along that line: what must be true of
+*whichever* map ships is asserted against `SERVER_MAP`, and what is a fact about
+specific geometry is asserted against the fixture. Point the coordinate tests at
+the shipped map and the suite starts measuring the level designer.
 
 ### The spawn system
 
@@ -859,6 +869,34 @@ interface, `websocketTransport.ts` is the browser adapter, and
 `listenServer.ts` is a `Room` in this tab behind a loopback pair. `?local=1`
 boots one. There is no offline branch in the frame loop, because there is
 nothing for one to be a branch *of*.
+
+### The bot sits in the second seat, as a peer
+
+`packages/client/src/net/botPeer.ts`. It opens a loopback of its own, `join`s
+the room the listen server just built, sends a `hello`, and from then on sends
+`cmds` frames like any other client. There is **no bot branch inside `Room`**,
+no third kind of seat, and nothing the host can use to tell it from a browser on
+the other end of a socket — which is the property that keeps single-player on
+the multiplayer code path rather than beside it. A local callback invoked per
+sub-step would have been shorter and would have skipped the input queue, the
+frame guard and the admission rules; the second way input reaches the simulation
+is always the one that drifts.
+
+Three consequences worth knowing before changing it:
+
+- **Its tick labels are its own, counted from one.** A command's label is "the
+  peer's, not the world's" (`room.ts`, `join`), so the bot peer never reads
+  `room.tick`. It emits exactly as many commands per beat as the host is about
+  to run, which keeps its queue off both ends — starved, where the fallback
+  would hold the bot's feet down, and past `MAX_BUFFERED_COMMANDS`.
+- **It reads the host's `GameState` directly, and that is not a cheat.** The
+  perception layer is the fairness boundary (see below), not the pipe the state
+  arrived through; `tools/bot-arena.ts` hands it the same true state, and that
+  is the harness its difficulty was tuned against.
+- **It pays a frame of latency, deliberately.** A loopback delivers on a
+  microtask, so a command decided during a beat is executed by the next one.
+  That makes the bot fractionally slower rather than faster, and a human peer
+  pays it too.
 
 ### Clock sync, and who holds the stopwatch
 
