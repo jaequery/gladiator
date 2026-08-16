@@ -831,6 +831,66 @@ try {
     `${creditsMatch.rendered}/${creditsMatch.expected} rendered, ${creditsMatch.linked} linked, ${creditsMatch.licensed} licensed`,
   )
 
+  // --- and the way *out* of it ---------------------------------------------
+  // GLAD-G42FEB, which was this screen with no exit. `#credits` is opaque and
+  // `inset: 0`, so while it is up it is the whole page: a player who cannot
+  // leave it is looking at a black screen with nothing on it but their cursor,
+  // and the only thing left to try is a reload.
+  //
+  // Driven from the *menu* rather than from `?credits=1`, because that is the
+  // difference that made it fail. Clicking `Credits` leaves the focus on a
+  // button inside `#menu`, and the menu stopped every key there before the
+  // window listener that closes this screen could see it.
+  await tab.goto(`${STATIC_ORIGIN}/`, { waitUntil: 'load' })
+  await waitFor('the main menu', async () =>
+    tab.evaluate(() => window.__gladiator?.snapshot().menu === 'main'),
+  )
+  const openCredits = async () => {
+    await tab.locator('[data-hud="menu-credits"]').click()
+    return await waitFor('the credits to open from the menu', async () =>
+      tab.evaluate(() => document.getElementById('credits')?.hidden === false),
+    )
+  }
+  const closed = async (how) =>
+    waitFor(`${how} to close the credits`, async () =>
+      tab.evaluate(() => document.getElementById('credits')?.hidden === true),
+    )
+
+  const opened = await openCredits()
+  // Both halves of "there is always a way out": a control a mouse can reach,
+  // and a body that says something. The body is fetched, and until it lands
+  // there is nothing to draw — which on a slow link is the same black sheet.
+  const wayOut = await tab.evaluate(() => ({
+    close: document.querySelector('[data-hud="credits-close"]') !== null,
+    body: (document.querySelector('#credits .credits-body')?.textContent ?? '').trim().length,
+  }))
+  check(
+    'the credits screen always carries a close control and a body with words in it',
+    opened && wayOut.close && wayOut.body > 0,
+    `close ${wayOut.close}, body ${wayOut.body} characters`,
+  )
+
+  await tab.keyboard.press('Escape')
+  check('escape closes the credits opened from the menu', await closed('escape'))
+
+  await openCredits()
+  await tab.locator('[data-hud="credits-close"]').click()
+  check('the credits close with the same mouse that opened them', await closed('the close button'))
+
+  // The same swallowed escape is how a player steps back out of a menu screen,
+  // so it is checked on the one that puts the focus in a text box.
+  await tab.locator('[data-hud="menu-join-open"]').click()
+  await waitFor('the join box', async () =>
+    tab.evaluate(() => window.__gladiator?.snapshot().menu === 'join'),
+  )
+  await tab.keyboard.press('Escape')
+  check(
+    'escape steps back out of a menu screen that has focused an input',
+    await waitFor('escape to step back to the main menu', async () =>
+      tab.evaluate(() => window.__gladiator?.snapshot().menu === 'main'),
+    ),
+  )
+
   // --- the menu, and the room-code flow ------------------------------------
   // GLAD-NPCTU8, and the acceptance list this ticket is judged on. Everything
   // here is the *deployed* flow rather than a unit of it: a stranger opens the

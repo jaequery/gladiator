@@ -774,6 +774,23 @@
         display: none;
       }
 
+      /* The way out of a panel that covers the whole page, drawn above
+         everything the panel has to fetch. `src/credits.ts` argues why it is
+         not allowed to be a keyboard shortcut alone (GLAD-G42FEB). */
+      .credits-bar {
+        display: flex;
+        margin: 0 auto 16px;
+        max-width: 720px;
+        justify-content: flex-end;
+      }
+
+      .credits-close-button {
+        width: auto;
+        margin: 0;
+        padding: 6px 18px;
+        text-align: center;
+      }
+
       .credits-title {
         margin: 0 auto 4px;
         max-width: 720px;

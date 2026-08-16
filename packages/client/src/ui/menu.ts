@@ -94,6 +94,33 @@ export type Menu = {
   dispose(): void
 }
 
+/**
+ * Whether a key pressed inside the menu stops here.
+ *
+ * Everything does, and for the reason {@link createMenu} states: a key that
+ * went into a menu control is not a key in the game, so a `C` in a room code
+ * must not open the credits and a space on a focused button must not also be a
+ * jump. Both of those listen on the window, so the menu stops the event before
+ * it gets there.
+ *
+ * **Escape is the exception, and it is not a nicety.** Escape is how a player
+ * leaves whatever is in front of them, and the only code that knows what
+ * "leaving" means — close the credits, step back a screen, resume the match —
+ * is `main.ts`, on the window. Swallowing it left the menu eating the one key
+ * that gets you out of a full-screen panel, and clicking `Credits` from the
+ * menu leaves the focus on that button: the credits then covered the page at
+ * 94% opacity, with no close control and a keyboard shortcut that could never
+ * arrive. That is a page with no way off it, which is what GLAD-G42FEB was
+ * reported as — a black screen with nothing on it but the cursor.
+ *
+ * Nothing is at risk in letting it through. Escape is not a movement key
+ * (`input/controller.ts` binds WASD and space), and it does not type into a
+ * room code.
+ */
+export function menuSwallowsKey(code: string): boolean {
+  return code !== 'Escape'
+}
+
 /** What the settings screen says about the raw-input verdict. */
 export function rawInputLabel(state: RawInput): string {
   if (state === 'granted') return 'raw — the operating system’s mouse acceleration is off'
@@ -225,8 +252,11 @@ export function createMenu(parent: HTMLElement, hooks: MenuHooks): Menu {
   // a `C` in a room code opens the credits (`main.ts` listens on the window)
   // and a space on a focused button is both a press and a jump. Stopped at the
   // menu's own root rather than filtered further down, because the rule is
-  // about *where* the key went and not about which key it was.
-  const swallow = (event: KeyboardEvent) => event.stopPropagation()
+  // about *where* the key went and not about which key it was — with the one
+  // exception {@link menuSwallowsKey} argues.
+  const swallow = (event: KeyboardEvent) => {
+    if (menuSwallowsKey(event.code)) event.stopPropagation()
+  }
   root.addEventListener('keydown', swallow)
   root.addEventListener('keyup', swallow)
 

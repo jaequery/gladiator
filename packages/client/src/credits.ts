@@ -9,9 +9,24 @@
  * Fetched on first open, not at boot. Nobody opens the credits during a duel,
  * and a request at boot is a request in front of the first frame.
  *
- * The menu this eventually lives behind is GLAD-NPCTU8's. Until there is one,
- * `C` opens it and `Escape` closes it, and `?credits=1` opens it on load so the
- * screen can be looked at without playing a round first.
+ * `C` opens it, `Escape` and the Close button close it, and `?credits=1` opens
+ * it on load so the screen can be looked at without playing a round first.
+ *
+ * ## Two rules, because this panel covers the whole page
+ *
+ * `#credits` is opaque and `inset: 0`, so while it is up it *is* the page.
+ * Everything below follows from that, and both halves were GLAD-G42FEB — a
+ * black screen with nothing on it but the cursor:
+ *
+ *   1. **The way out is always drawn.** It sits outside the part a re-render
+ *      clears, so it survives a fetch that fails and a fetch that never lands.
+ *      A keyboard shortcut alone is not a way out: the menu used to swallow
+ *      Escape before the window ever saw it (`ui/menu.ts`), and the player who
+ *      opened this from the menu had nothing left but a reload.
+ *   2. **The body is never empty.** Opening starts a fetch, and until it
+ *      answers there is nothing to draw — which on a slow link is a full-screen
+ *      sheet of near-black with no content and no explanation. It says what it
+ *      is waiting for instead.
  */
 
 /** One line of the credits, exactly as the generated file carries it. */
@@ -89,6 +104,26 @@ export type CreditsScreen = {
   readonly isOpen: boolean
 }
 
+/**
+ * The one line the body carries while it has nothing else.
+ *
+ * Named rather than written inline because it is rule 2 in this file's header
+ * made concrete: it is what stands between opening this panel and a full-screen
+ * sheet of near-black with nothing on it. `scripts/e2e.mjs` asserts the body is
+ * never empty; this is what it finds there before the fetch lands.
+ */
+export const CREDITS_LOADING = 'Loading the credits…'
+
+/** A single line in the body, for the states that have nothing to list. */
+function renderNote(body: HTMLElement, text: string): void {
+  body.innerHTML = ''
+  const note = document.createElement('p')
+  note.className = 'credits-preamble'
+  note.dataset['credits'] = 'note'
+  note.textContent = text
+  body.append(note)
+}
+
 function render(root: HTMLElement, sections: ReturnType<typeof creditsSections>): void {
   root.innerHTML = ''
 
@@ -143,7 +178,8 @@ function render(root: HTMLElement, sections: ReturnType<typeof creditsSections>)
 
   const close = document.createElement('p')
   close.className = 'credits-close'
-  close.textContent = 'Escape to close'
+  // Both routes, because the point of rule 1 is that there is more than one.
+  close.textContent = 'Escape, or the Close button, to leave'
   root.append(close)
 }
 
@@ -165,6 +201,25 @@ export function createCreditsScreen(
   const root = document.createElement('div')
   root.id = 'credits'
   root.hidden = true
+
+  // Rule 1: outside `body`, so no re-render can take it away, and drawn before
+  // anything that has to be fetched. A player must be able to leave this panel
+  // with the mouse they opened it with.
+  const bar = document.createElement('div')
+  bar.className = 'credits-bar'
+  const closeButton = document.createElement('button')
+  closeButton.type = 'button'
+  closeButton.className = 'menu-button credits-close-button'
+  closeButton.dataset['hud'] = 'credits-close'
+  closeButton.textContent = 'Close'
+  closeButton.addEventListener('click', () => {
+    screen.close()
+  })
+  bar.append(closeButton)
+
+  const body = document.createElement('div')
+  body.className = 'credits-body'
+  root.append(bar, body)
   parent.append(root)
 
   let loaded = false
@@ -173,13 +228,17 @@ export function createCreditsScreen(
   const fill = () => {
     if (loaded) return
     loaded = true
+    // Rule 2. The fetch is a network round trip and this panel is opaque, so
+    // the gap between opening and answering is a black page unless it says
+    // what it is doing.
+    renderNote(body, CREDITS_LOADING)
     load().then(
       (raw) => {
-        render(root, creditsSections(parseCredits(raw)))
+        render(body, creditsSections(parseCredits(raw)))
       },
       (cause: unknown) => {
         loaded = false
-        root.textContent = `Could not load the credits: ${String(cause)}`
+        renderNote(body, `Could not load the credits: ${String(cause)}`)
       },
     )
   }
