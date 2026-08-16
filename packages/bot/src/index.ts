@@ -306,6 +306,7 @@ export {
 export type { CombatState } from './combat/fire.ts'
 
 export { RAIL_SETTLE_RATE, RAIL_SETTLE_UNITS, railSettled } from './combat/railDiscipline.ts'
+export { ROCKET_DAMAGE_FLOOR, rocketWorthFiring } from './combat/rocketDiscipline.ts'
 
 export {
   IMPACT_PROBE,

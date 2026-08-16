@@ -1,5 +1,5 @@
 {
-  "skill": 0.6,
+  "skill": 0.635,
   "anchors": {
     "novice": 0.45,
     "expert": 0.8
@@ -40,6 +40,10 @@
     "leadStraightness": {
       "novice": 0.75,
       "expert": 0.02
+    },
+    "rocketDamageFloor": {
+      "novice": 25,
+      "expert": 88
     }
   },
   "fixed": {

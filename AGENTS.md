@@ -1720,6 +1720,37 @@ landing on the wall you just backed into does more damage than one landing where
 you were. Perpendicular first, then the other side, then two diagonals that lean
 away; nothing runs back down the rocket's axis.
 
+**A rocket is a resource too, and that was missed the first time.**
+`combat/rocketDiscipline.ts`, GLAD-KN4QRJ. The rail's argument above — 1500 ms
+of refire makes a shot worth thinking about — applies to the rocket for a reason
+the rail's own file states and nobody followed up: **both weapons share one
+timer**, so a rocket that was never going to hurt anybody buys 800 ms during
+which the better shot arriving 200 ms later cannot be taken. The floor is on the
+expected damage `combat/damage.ts` already computes and `rocketAim.ts` already
+uses to pick between the two aim points — and, until this ticket, discarded
+immediately afterwards.
+
+It is deliberately **not** the angular firing tolerance, and measuring is what
+settled that: tightening `rocketToleranceMaxDegrees` from four degrees to one and
+a half suppressed 3.5% of rockets and moved no hit rate at all. A tolerance asks
+whether the crosshair arrived at the aim point; on this map it nearly always has.
+The wasted rocket is the one aimed *perfectly* at a point worth nothing, because
+range and evasion blew the miss radius out to two splash radii before the wrist
+did anything wrong — and an angular gate is structurally blind to that.
+
+Two things about where it lives are load-bearing. It is at the **trigger**, not
+in `planRocket`: a plan of `none` also sends `aimCombat` to `holdAim`, so a bot
+that declined a shot would stop tracking the target it declined to shoot. And it
+runs **before** the self-damage guard, because what a shot is worth is arithmetic
+already sitting on the plan while what it costs the bot is four traces.
+
+**A held rocket is not a lost one**, which is the thing to know before tuning it.
+Holding fire does not spend the refire timer, so a suppressed shot is mostly
+re-taken a decision or two later once the geometry improves. Measured, a floor of
+50 points refuses 39% of rockets at the instant they are planned and reduces the
+number actually fired by 12%. That is why the row it moves most is the hit rate
+and the row it moves least is time-to-kill.
+
 **A dodge arrives at the movement layer as a goal**, not as a stick position —
 `BotDecision.evade` becomes a point `DODGE_PROBE` units away, so routing, the
 ledge guard and the arrival test all apply to it unchanged. The only thing it
@@ -1751,7 +1782,15 @@ rocket mid-flight is not a measurement of the circle jump.
 whether the numbers in them are right: `tools/bot-bands.ts` and
 `tools/bot-sweep.ts`. GLAD-6BIYFQ, which was time-boxed on purpose — hitting a
 target distribution has no upper bound on iterations, so the box is the
-deliverable.
+deliverable. It expired with three rows a point under their floors; GLAD-KN4QRJ
+closed them, and **all ten rows are inside their bands** on the committed sample.
+
+What closed them was a knob rather than more search, which is the part worth
+remembering. Coordinate descent moves one parameter at a time, and the move that
+was needed was two at once — a rocket the bot declines to fire raises the hit
+rates and lengthens the round together, but it also stretches the ladder, so the
+floor and the skill dial had to move in the same step. A search that can only
+walk one axis cannot see a diagonal.
 
 `pnpm bot:bands` plays the sample and prints the table; `pnpm bot:sweep` searches
 for a better one and `--write`s it. Both are the same code as
@@ -1796,6 +1835,15 @@ far more on **when the other player started moving** and on **whether the shoote
 shot where they were going** than on a fraction of a degree of aim. So
 `dodgeHorizonSeconds` and `leadStraightness` are on the axis too, and they are
 what make the rungs mean something.
+
+`rocketDamageFloor` joined them in GLAD-KN4QRJ, and it is on the axis for a
+sharper reason than the other two: it had to be. As a fixed number it *stretched*
+the ladder rather than leaving it alone — an expectation is already a function of
+how good the bot is, so one threshold in absolute points refuses most of a
+novice's rockets and almost none of an expert's, and raising it moved the two
+ladder rows out of opposite ends of their bands at once. On the axis, with the
+novice held to a lower floor than the expert, each refuses a comparable share of
+its own shots. `combat/rocketDiscipline.ts` has the measurements.
 
 A weaker bot still sees, hears and remembers exactly what the shipped one does.
 

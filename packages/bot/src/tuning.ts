@@ -62,7 +62,7 @@
  * rather than a number in a file — and so that a difficulty selector, if it is
  * ever wanted, is a constant rather than a project.
  *
- * The nine on the axis were chosen because each is a thing a *person* is better
+ * The ten on the axis were chosen because each is a thing a *person* is better
  * or worse at, and none of them is knowledge.
  *
  * The last two are the ones that were added after the first measurement, and
@@ -83,6 +83,7 @@
  * | `railSettleUnits`, `railSettleRate` | loose | tight | how disciplined it is about spending a rail |
  * | `dodgeHorizonSeconds` | late | early | how long before a rocket arrives it starts moving |
  * | `leadStraightness` | never leads | leads readily | how confidently it shoots where somebody is going |
+ * | `rocketDamageFloor` | shoots anyway | holds out | how good a rocket has to look before it is worth 800 ms |
  *
  * A weaker bot does not see less, hear less or forget faster. It sees exactly
  * what the shipped one sees and is worse with its hands, which is the only kind
@@ -130,6 +131,7 @@ export type TuningAxis = {
   readonly railSettleRate: SkillBand
   readonly dodgeHorizonSeconds: SkillBand
   readonly leadStraightness: SkillBand
+  readonly rocketDamageFloor: SkillBand
 }
 
 /**
@@ -216,6 +218,8 @@ export type BotSkill = TuningFixed & {
   readonly dodgeHorizonSeconds: number
   /** How straight a target's path has to be before it is led at all, in `[0, 1]`. */
   readonly leadStraightness: number
+  /** The expected damage a rocket has to promise before it is worth firing, in points. */
+  readonly rocketDamageFloor: number
 }
 
 /** `skill` clamped into the band it is defined over. */
@@ -263,6 +267,7 @@ const LIMITS: Record<string, readonly [number, number]> = {
   railSettleRate: [1, 16384],
   dodgeHorizonSeconds: [0.05, 4],
   leadStraightness: [0, 1],
+  rocketDamageFloor: [0, 99],
 }
 
 /**
@@ -307,6 +312,7 @@ export function deriveSkill(skill: number, source: TuningSource = TUNING): BotSk
     railSettleRate: at(axis.railSettleRate, 'railSettleRate', t),
     dodgeHorizonSeconds: at(axis.dodgeHorizonSeconds, 'dodgeHorizonSeconds', t),
     leadStraightness: at(axis.leadStraightness, 'leadStraightness', t),
+    rocketDamageFloor: at(axis.rocketDamageFloor, 'rocketDamageFloor', t),
   }
 }
 

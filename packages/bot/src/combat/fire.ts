@@ -88,6 +88,7 @@ import type { BotSkill } from '../tuning.ts'
 import { SPLASH_RADIUS } from './damage.ts'
 import { nearestThreat, planDodge } from './dodge.ts'
 import { railSettled } from './railDiscipline.ts'
+import { rocketWorthFiring } from './rocketDiscipline.ts'
 import {
   clearPath,
   createPath,
@@ -440,10 +441,15 @@ function aimAt(combat: CombatState, model: WorldModel, target: MutVec3 | null): 
 /**
  * Whether the trigger is down this sub-step.
  *
- * Seven gates, cheapest first, because six of them are false for most of a
- * match. The two that carry the design are the last two: a rail waits for the
- * aim to settle (`combat/railDiscipline.ts`) and a rocket is refused if it would
- * hurt the bot more than it is willing to be hurt (`combat/selfDamage.ts`).
+ * Eight gates, cheapest first, because seven of them are false for most of a
+ * match. The three that carry the design are the last three: a rail waits for
+ * the aim to settle (`combat/railDiscipline.ts`), a rocket is refused if it
+ * promises less damage than it costs in refire
+ * (`combat/rocketDiscipline.ts`), and it is refused again if it would hurt the
+ * bot more than it is willing to be hurt (`combat/selfDamage.ts`).
+ *
+ * The last two are deliberately in that order: what a shot is worth is
+ * arithmetic already on the plan, and what it costs the bot is four traces.
  */
 export function triggerCombat(
   combat: CombatState,
@@ -475,6 +481,12 @@ export function triggerCombat(
   }
 
   if (combat.aim.error > rocketTolerance(combat.range, combat.skill)) return false
+  // The crosshair has arrived; whether it arrived anywhere worth arriving is a
+  // different question, and the one an angular tolerance cannot ask
+  // (`combat/rocketDiscipline.ts`). Held here rather than in `planRocket`,
+  // because a plan of `none` also stops `aimCombat` tracking the target — the
+  // bot should decline the shot, not look away.
+  if (!rocketWorthFiring(combat.plan, combat.skill)) return false
   return selfSplashAllowed(combat, model, world)
 }
 

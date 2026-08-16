@@ -798,6 +798,16 @@ stopped moving. 1500 ms of refire makes each rail a resource, and a bot that
 only takes settled rails reads as disciplined where one that only takes snap
 rails reads as lucky. `combat/railDiscipline.ts`.
 
+**Rocket damage floor** — a rocket's precondition, and the rail's argument
+applied to the other weapon (GLAD-KN4QRJ): the expected damage the plan already
+chose between two aim points under has to clear a threshold in points before the
+shot is worth taking. Both weapons share one refire timer, so a rocket that was
+never going to hurt anybody buys 800 ms of silence. Deliberately *not* the
+angular firing tolerance, which asks whether the crosshair arrived rather than
+whether it arrived anywhere worth arriving — measured, tightening that from four
+degrees to one and a half suppressed 3.5% of rockets and moved no hit rate.
+`combat/rocketDiscipline.ts`.
+
 **Threat** — a rocket in the `WorldModel`. The bot's own are known without being
 looked at; anybody else's pass the same cone, range and line-of-sight tests a
 body does, which is what makes "never dodges a rocket fired from behind" a
@@ -834,7 +844,7 @@ tuned to, in one file, because a parameter search needs something it can write.
 
 **Skill** — one dial in `[0, 1]`. `deriveSkill` resolves it into a `BotSkill`
 that rides on the bot, so two bots in one process may be at two different ones.
-Nine values move with it; the rest are the same at every difficulty because
+Ten values move with it; the rest are the same at every difficulty because
 being better at the game does not mean holding a different number for them.
 
 **Skill band** — one tuned value at the two **rungs** — 0.45 and 0.80 — rather
@@ -849,7 +859,8 @@ is what makes `skill` wired to something real rather than a number in a file.
 One difficulty ships; the ladder is one constant away.
 
 **Band table** — ten measurements with a floor *and* a ceiling, from
-GLAD-6BIYFQ. `tools/bot-bands.ts` measures them from the world, `pnpm bot:bands`
+GLAD-6BIYFQ, and all ten are inside since GLAD-KN4QRJ closed the last three.
+`tools/bot-bands.ts` measures them from the world, `pnpm bot:bands`
 runs the full five-hundred-match sample, and `tools/bot-bands.test.ts` runs a
 smaller one of the same code. A bot that never misses a rail fails as hard as
 one that never lands one.

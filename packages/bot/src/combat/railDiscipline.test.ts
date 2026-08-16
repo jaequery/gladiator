@@ -21,6 +21,7 @@ import type { WorldModel } from '../perception/worldModel.ts'
 import { createCombat, triggerCombat } from './fire.ts'
 import type { CombatState } from './fire.ts'
 import { RAIL_SETTLE_RATE, RAIL_SETTLE_UNITS, railSettled } from './railDiscipline.ts'
+import { ROCKET_DAMAGE_FLOOR } from './rocketDiscipline.ts'
 
 /** An aim with the given error and rate, and nothing else that matters. */
 function aimWith(error: number, rate: number) {
@@ -73,6 +74,9 @@ function armed(error: number, rate: number): CombatState {
   combat.hasPoint = true
   combat.range = 1200
   combat.plan.mode = 'direct'
+  // A shot that clears the rocket damage floor, so that the only thing these
+  // cases are testing is the aim (`combat/rocketDiscipline.ts` has its own).
+  combat.plan.directExpected = ROCKET_DAMAGE_FLOOR
   combat.aim.live = true
   combat.aim.error = error
   combat.aim.rate = rate

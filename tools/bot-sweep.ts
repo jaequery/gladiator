@@ -70,11 +70,18 @@ export type Knob = {
  * The knobs, in the order they are visited.
  *
  * Ordered by how much they move the table, loosely, so that a sweep cut short by
- * the time box has spent it on the parameters that matter. The tremor is first
+ * the time box has spent it on the parameters that matter. The tremor is high up
  * because it is the only thing that moves the railgun rows at all, and the
  * railgun rows were the two furthest out when this was written.
+ *
+ * The rocket damage floor is first since GLAD-KN4QRJ, because it is the only
+ * knob here that moves the two rocket rows and the time-to-kill row *in the same
+ * direction* — everything else trades one against the other, which is what left
+ * those three outside their bands when the tuning ticket's box expired.
  */
 export const KNOBS: readonly Knob[] = [
+  { path: 'axis.rocketDamageFloor.expert', step: 6, min: 0, max: 95 },
+  { path: 'axis.rocketDamageFloor.novice', step: 8, min: 0, max: 95 },
   { path: 'fixed.engageRange', step: 50, min: 150, max: 1200 },
   { path: 'fixed.railMinRange', step: 80, min: 300, max: 2000 },
   { path: 'axis.tremorUnits.expert', step: 60, min: 0, max: 4000 },
