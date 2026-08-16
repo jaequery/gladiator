@@ -137,6 +137,7 @@ describe('parseServerMessage', () => {
           mapHash: '0000beef',
           room: 'H7K2Q9',
           token: 'deadbeefdeadbeefdeadbeefdeadbeef',
+          slot: 0,
         }),
       ),
     ).toEqual({
@@ -147,6 +148,7 @@ describe('parseServerMessage', () => {
       mapHash: '0000beef',
       room: 'H7K2Q9',
       token: 'deadbeefdeadbeefdeadbeefdeadbeef',
+      slot: 0,
     })
     expect(
       parseServerMessage(
@@ -241,6 +243,7 @@ describe('parseServerMessage', () => {
       mapHash: '0000beef',
       room: 'H7K2Q9',
       token: 'deadbeefdeadbeefdeadbeefdeadbeef',
+      slot: 0,
     }
     expect(parseServerMessage(JSON.stringify({ ...welcome, token: '' }))).toBe(null)
     const without: Record<string, unknown> = { ...welcome }

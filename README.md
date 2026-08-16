@@ -5,12 +5,18 @@ A browser-native recreation of the 1996 Quake mod *Rocket Arena*. Round-based
 rocket launcher and railgun — both with unlimited ammo. Play a friend over a
 room code, or a bot that plays by the same rules you do.
 
-This repository is currently a **walking skeleton**: a box on a plane that you
-can run and jump around with the pointer locked, simulated at a fixed 125 Hz by
-`packages/sim`, with the *same* code running on the server and echoing back a
-state hash the client compares against its own and prints on screen. No weapons,
-no rounds, no map — just the whole platform path, end to end, so that everything
-built on it is built on something that has been deployed once.
+The game is played on **Crucible** (`maps/arena1.ts`): a small sealed arena with
+two spawns that cannot see each other, a tower in the middle that breaks the
+sightline, two long lanes for the rail and a walkway around the mound that is
+splash-damage country. Movement is Quake's, ported constant by constant and
+simulated at a fixed 125 Hz by `packages/sim` — the *same* code on the server
+and in the tab, which is what makes strafe-jumping and rocket-jumping mean the
+same thing on both.
+
+Single-player is not a separate mode. The bot takes the second seat of a real
+room over a loopback and speaks the same protocol a stranger's browser does
+(`packages/client/src/net/botPeer.ts`), so there is exactly one implementation
+of the rules and the bot plays by them.
 
 ## Quickstart
 
@@ -29,8 +35,8 @@ pnpm --filter @gladiator/client dev    # the browser client, on :5173
 Open the client and you land on a menu: play the bot, create a match, or join
 one with a code. Creating a match gets a room code from the host and a link to
 send — whoever opens that link lands in the same room with nothing to type. Then
-`W`/`A`/`S`/`D` and space, escape to give the mouse back, and the HUD prints
-both state hashes and whether they agree.
+`W`/`A`/`S`/`D` and space, `1` and `2` for the rocket launcher and the railgun,
+and escape to give the mouse back.
 
 Four URLs skip the menu, for when you know what you want: `?local=1` is
 single-player against the host in your own tab, `?host=1` opens a room and goes
@@ -50,11 +56,22 @@ pnpm run e2e         # the whole acceptance list, in headless Chromium
 
 `pnpm run e2e` builds the real bundles, runs the real server, and drives a real
 browser through it: the page loads with no console errors, clicking locks the
-pointer, the box runs and jumps, the hashes agree over a minute of movement, and
-`?protocol=999` and `?map=deadbeef` each put a readable mismatch message on
+pointer, the player runs and jumps, the hashes agree over a minute of movement,
+and `?protocol=999` and `?map=deadbeef` each put a readable mismatch message on
 screen. It needs a browser download
 (`pnpm exec playwright install --with-deps chromium`), so it is its own CI job
 rather than part of `pnpm run ci`.
+
+```sh
+pnpm run acceptance  # the game's acceptance criteria, in a real browser
+```
+
+Where `e2e` proves the *platform*, `acceptance` proves the **game**: the arena
+renders, exactly two weapons are reachable and neither runs out over a sustained
+burst, single-player seats a bot that moves and hunts, and two independent
+browser contexts join one room by code and see each other move in real time. It
+writes `artifacts/acceptance-arena.png` so the arena can be looked at rather
+than only asserted about.
 
 ```sh
 pnpm run map:bake            # compile maps/*.ts to maps/baked/*.json
@@ -101,13 +118,15 @@ packages/sim      the deterministic simulation — zero dependencies, no clock
 packages/bot      single-player opposition; emits UserCmds like a human does
 packages/client   Babylon renderer, prediction, input
 packages/server   authoritative tick loop, rooms, WebSocket transport
-maps/             hand-authored maps and nav graphs, and the baked JSON they compile to
+maps/             arena1 (the arena people play on), testbed (the pipeline's
+                  fixture), their nav graphs, and the baked JSON they compile to
 tools/            bake-map.ts    — compiles, validates and hashes maps/*.ts
                   nav-bake.ts    — validates and precomputes maps/*.nav.ts
                   synth-audio.ts — synthesises the sound set, bit-reproducibly
 scripts/          guardrails.mjs        — proves the boundaries reject violations
                   no-physics-plugin.mjs — fails if a physics engine is installed
                   e2e.mjs               — the browser smoke test
+                  acceptance.mjs        — the game's acceptance criteria, in a browser
                   audio-check.mjs       — the audio checks, in a real browser
                   raw-input.mjs         — measures raw mouse input, per browser
 docs/             physics-spec.md, renderer.md, audio.md, deploy.md,

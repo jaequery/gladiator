@@ -307,7 +307,7 @@ describe('map mismatch', () => {
     const { server } = await start()
     const response = await fetch(`http://127.0.0.1:${server.port}/healthz`)
     const body = (await response.json()) as { map?: { name?: string; hash?: string } }
-    expect(body.map?.name).toBe('testbed')
+    expect(body.map?.name).toBe(SERVER_MAP.source.name)
     expect(body.map?.hash).toBe(SERVER_MAP_HASH)
   })
 })

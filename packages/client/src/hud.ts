@@ -58,6 +58,29 @@ export type HudModel = {
    * them together would hide the only one worth acting on.
    */
   readonly selfSplash: { readonly deferred: number; readonly mispredicted: number }
+  /**
+   * Whether there is a second body in the world.
+   *
+   * It decides whether the agreement row is a **verdict** or a **counter**, and
+   * that is not a presentational nicety — it is the difference between an
+   * instrument that is right and one that cries wolf at every player who ever
+   * duels.
+   *
+   * The hash echo compares the world this client *predicted* against the world
+   * the host actually has. Prediction advances the local body from local input
+   * and deliberately does not predict the opponent — "the opponent is never
+   * predicted" (`AGENTS.md`) — so the instant a second body exists, the two
+   * worlds differ between snapshots by however far that body moved, and they
+   * differ on essentially every hash. That is the design working, not a
+   * simulation disagreeing, and it is a much larger effect than the jitter
+   * buffer {@link MISPREDICTION_TOLERANCE} was sized for.
+   *
+   * So the verdict is only offered where it means something: one body in the
+   * world, which is the walking-skeleton case `scripts/e2e.mjs` still gates the
+   * build on. With an opponent in the room the row shows its counters and says
+   * plainly that the comparison does not apply.
+   */
+  readonly duelling: boolean
 }
 
 /**
@@ -134,7 +157,7 @@ export function createHud(root: HTMLElement): Hud {
 
   const title = document.createElement('h1')
   title.className = 'hud-title'
-  title.textContent = 'gladiator — walking skeleton'
+  title.textContent = 'gladiator — diagnostics'
   panel.append(title)
 
   const buildValue = field(panel, 'build', 'build')
@@ -201,7 +224,7 @@ export function createHud(root: HTMLElement): Hud {
         const rate = net.compared === 0 ? 0 : net.mismatched / net.compared
         setText(
           agreementValue,
-          `${net.agree ? 'MATCH' : 'MISMATCH'} · ${net.compared} compared, ${net.mismatched} mismatched` +
+          `${model.duelling ? 'n/a while duelling' : net.agree ? 'MATCH' : 'MISMATCH'} · ${net.compared} compared, ${net.mismatched} mismatched` +
             (net.dropped > 0 ? `, ${net.dropped} dropped` : '') +
             (model.corrected > 0 ? `, ${model.corrected} corrected` : '') +
             (model.pending > 0 ? `, ${model.pending} unacked` : '') +
@@ -212,7 +235,10 @@ export function createHud(root: HTMLElement): Hud {
               ? `, ${model.selfSplash.mispredicted} splash mispredicted`
               : ''),
         )
-        setState(agreementValue, rate <= MISPREDICTION_TOLERANCE ? 'match' : 'mismatch')
+        setState(
+          agreementValue,
+          model.duelling ? 'unknown' : rate <= MISPREDICTION_TOLERANCE ? 'match' : 'mismatch',
+        )
       }
 
       setText(rttValue, net.rttMs === null ? '—' : `${Math.round(net.rttMs)} ms`)

@@ -27,10 +27,12 @@
  * (`@gladiator/server/net/laggedTransport.ts`), not self-inflicted lag in the
  * mode whose entire selling point is feel.
  *
- * There is no opponent in here yet either. The bot is GLAD-V7CMHR, GLAD-TSED8V
- * and GLAD-HK3ATM; when it arrives it joins this room as a second peer over a
- * loopback of its own, which is why `Room` takes a capacity rather than
- * assuming one.
+ * The opponent is now in here, and it arrived exactly the way this header said
+ * it would: `net/botPeer.ts` joins the room as a second peer over a loopback of
+ * its own, which is why `Room` takes a capacity rather than assuming one. It is
+ * not wired in here — an {@link ListenServerOptions.opponent} factory is, so
+ * that the module that knows about the bot is the one that imports it, and a
+ * test can seat something else in that chair.
  */
 import {
   PROTOCOL_VERSION,
@@ -73,6 +75,34 @@ export type ListenServerOptions = {
    * (`sim/src/demo.ts`).
    */
   readonly record?: boolean
+  /**
+   * Somebody to duel, seated once the room exists.
+   *
+   * A factory rather than a value because the opponent has to `join` the room
+   * it is going to play in, and the room is built in here. It is called exactly
+   * once, immediately after the local player is seated, so the bot always takes
+   * the second slot and `main.ts`'s `LOCAL_SLOT` stays true.
+   *
+   * Left out entirely for a match that is waiting for a human, which is what
+   * `?host=1` does — an empty second seat is a room somebody can still join,
+   * and a bot in it is not.
+   */
+  readonly opponent?: (room: Room) => Opponent
+}
+
+/**
+ * The second seat, whatever is in it.
+ *
+ * Narrow on purpose: this module knows that something needs telling how many
+ * sub-steps are about to run, and nothing else about it. `net/botPeer.ts` is
+ * the only implementation, and the reason this type exists rather than
+ * `BotPeer` being named here is that `listenServer.ts` would otherwise import
+ * the bot into every session that never plays one.
+ */
+export type Opponent = {
+  /** Decide and send commands for the `steps` sub-steps about to run. */
+  beat(steps: number): void
+  stop(): void
 }
 
 export type ListenServer = {
@@ -149,6 +179,9 @@ export function createListenServer(options: ListenServerOptions): ListenServer {
   })
   room.join(pair.server)
 
+  // After the local player, so the bot takes slot 1 and the tab keeps slot 0.
+  const opponent: Opponent | null = options.opponent?.(room) ?? null
+
   // The previous frame's clock reading, so a beat knows how much wall-clock it
   // is worth. `null` until the first one: the alternative is a first frame
   // measured against zero, which is every millisecond since the tab was opened.
@@ -171,11 +204,18 @@ export function createListenServer(options: ListenServerOptions): ListenServer {
       lastMs = nowMs
       const fold = stepsFor(remainderMs, elapsedMs)
       remainderMs = fold.remainderMs
+      // Before the advance: the opponent decides from the world as it stands,
+      // and its commands land on the loopback's microtask to be executed by the
+      // next beat. `net/botPeer.ts` argues why that frame of delay is left in.
+      opponent?.beat(fold.steps)
       const steps = room.advance(fold.steps)
       room.sweep(nowMs)
       return steps
     },
 
-    stop: () => pair.close(),
+    stop: () => {
+      opponent?.stop()
+      pair.close()
+    },
   }
 }

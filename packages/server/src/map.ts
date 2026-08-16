@@ -11,14 +11,17 @@
  * the container ships one file and cannot start with a map that is not the one
  * it was built with.
  *
- * Which map is a hard-coded `testbed`. Every room on the machine plays it, and
- * the arena that will replace it is GLAD-B8DI4J — a change of *value*, not of
- * code. Rooms are minted per match (`rooms.ts`) and the map is not, which is
- * why the spawn plan lives out here beside the world rather than inside a room.
+ * Which map is a hard-coded `arena1` — **Crucible**, the duel arena
+ * (GLAD-B8DI4J). Every room on the machine plays it. `maps/testbed.ts` is still
+ * in the tree and still what the map pipeline is proved against, but it is a
+ * fixture rather than a level and no room is ever seated on it.
+ *
+ * Rooms are minted per match (`rooms.ts`) and the map is not, which is why the
+ * spawn plan lives out here beside the world rather than inside a room.
  */
 import { buildSpawnPlan, loadMap, type LoadedMap, type SpawnPlan } from '@gladiator/sim'
 
-import baked from '../../../maps/baked/testbed.json' with { type: 'json' }
+import baked from '../../../maps/baked/arena1.json' with { type: 'json' }
 
 /** The loaded map: source, verified hash, and a collision world to trace against. */
 export const SERVER_MAP: LoadedMap = loadMap(baked)

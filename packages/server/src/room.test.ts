@@ -120,6 +120,10 @@ describe('seating a peer', () => {
         // And the key to *this side* of it, which is what a reconnect presents
         // rather than being refused as a third player (`lifecycle.ts`).
         token: SEAT_TOKEN,
+        // Which of the two players this peer is. The first through the door
+        // gets slot 0; without this field a guest could only guess, and would
+        // guess this same number (`sim/src/protocol.ts`).
+        slot: 0,
       },
     ])
   })

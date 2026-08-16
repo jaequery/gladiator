@@ -242,10 +242,14 @@ export function viewForwardQuake(yawRadians: number, pitchRadians: number): Vec3
 /**
  * The pose the committed reference screenshot is taken from.
  *
- * A fixed vantage in `maps/testbed.ts`: standing on the south-west spawn,
- * looking north-east across the room so that the pillar, both ramps, the
- * stepped ledge and the pane of `nonSolid` glass are all in frame. Fixed,
- * because a reference screenshot of a moving camera is a reference to nothing.
+ * A fixed vantage in `maps/arena1.ts`: standing beside the south-west spawn,
+ * looking north-east down the diagonal so the tower, the mound and one of the
+ * long rail lanes are all in frame. Fixed, because a reference screenshot of a
+ * moving camera is a reference to nothing.
+ *
+ * The pose is deliberately a *coordinate* rather than a named spawn: it has to
+ * mean the same thing after somebody moves a spawn point, or the reference
+ * image starts drifting for reasons that have nothing to do with rendering.
  */
 export const REFERENCE_VIEW: RenderView = {
   origin: [-384, -384, 0],

@@ -235,6 +235,7 @@ describe('net client', () => {
       mapHash: MAP_HASH,
       room: ROOM,
       token: TOKEN,
+      slot: 0,
     })
     expect(client.snapshot().serverMapHash).toBe(MAP_HASH)
     expect(mustHoldStill(client.snapshot().status)).toBe(false)
@@ -254,6 +255,7 @@ describe('net client', () => {
       mapHash: MAP_HASH,
       room: ROOM,
       token: TOKEN,
+      slot: 0,
     })
     expect(client.snapshot().room).toBe(ROOM)
   })
@@ -268,6 +270,7 @@ describe('net client', () => {
       mapHash: MAP_HASH,
       room: ROOM,
       token: TOKEN,
+      slot: 0,
     })
     client.record(10, 0xdeadbeef)
     transport.deliver({ t: 'hash', tick: 10, hash: 0xdeadbeef })
@@ -430,6 +433,7 @@ describe('net client', () => {
       mapHash: MAP_HASH,
       room: ROOM,
       token: TOKEN,
+      slot: 0,
     })
     expect(client.snapshot().status).toBe('live')
 
@@ -454,6 +458,7 @@ describe('net client', () => {
       mapHash: MAP_HASH,
       room: ROOM,
       token: TOKEN,
+      slot: 0,
     })
     transport.close(CloseReason.Abnormal, 'gone')
     client.queue(1, NULL_CMD)
@@ -506,6 +511,7 @@ describe('clock sync over the wire', () => {
       mapHash: MAP_HASH,
       room: ROOM,
       token: TOKEN,
+      slot: 0,
     })
     return {
       transport,
@@ -598,6 +604,7 @@ describe('the quick-match line', () => {
       mapHash: MAP_HASH,
       room: ROOM,
       token: TOKEN,
+      slot: 0,
     })
     expect(client.snapshot().queue).toBeNull()
   })

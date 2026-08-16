@@ -67,7 +67,14 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 /** A colour being accumulated. `Vec3` is deeply readonly, and this one is a sum. */
 type Rgb = [number, number, number]
 
-/** The maps that get a bake. Both, because the reference screenshot is `testbed`. */
+/**
+ * The maps that get a bake.
+ *
+ * `arena1` because it is the one anybody plays on, and `testbed` because it is
+ * still the fixture the map and collision pipeline are proved against
+ * (`packages/server/src/map.test.ts`) — a fixture that failed to bake would be
+ * a test suite reporting on a map nobody could load.
+ */
 export const BAKED_MAPS: readonly string[] = ['arena1', 'testbed']
 
 /* --------------------------------------------------------------------------
