@@ -29,6 +29,14 @@ best-of-five. §7.
 `intermission`, `over`. A player's commands reach their body in the first two
 and not in the other two. `packages/sim/src/match/match.ts`; §7.3.
 
+**Next match** — what a room starts by itself once the last one has been played
+out (GLAD-8VZ12W): `resetMatch` clears the finished match back to `warmup` and
+`startMatch` runs again, nil-nil, after the same intermission that separates
+every other round from the next. Losing is what ends a match for the player who
+lost it, so it is the loser this exists for. A match ended by a **forfeit** is
+never restarted — the simulation cannot tell the two apart, both being `over`
+with a winner, so the host is what decides (`server/src/room.ts`).
+
 **Arena** — the map a match is played on. Gladiator ships one: `arena1`,
 "Crucible" (GLAD-B8DI4J).
 

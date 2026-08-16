@@ -62,7 +62,14 @@ export const MatchPhase = {
   Live: 1,
   /** A round has been decided; the next one's bodies appear when this ends. */
   Intermission: 2,
-  /** The match has a winner, or has run out of rounds. Terminal. */
+  /**
+   * The match has a winner, or has run out of rounds.
+   *
+   * Terminal as far as a sub-step is concerned — `advanceMatch` does nothing in
+   * here, so nothing the world does to itself gets out. The way out is the same
+   * kind of thing as the way in: `resetMatch` in `round.ts`, called by whoever
+   * knows there are still two players to give another match to (GLAD-8VZ12W).
+   */
   Over: 3,
 } as const
 

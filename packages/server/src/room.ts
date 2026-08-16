@@ -86,6 +86,7 @@ import {
   hashState,
   isMatchRunning,
   parseClientMessage,
+  resetMatch,
   snapshotFrame,
   startMatch,
   tick as simTick,
@@ -445,6 +446,14 @@ export function createRoom(options: RoomOptions): Room {
   const peers: PeerRecord[] = []
   let joined = 0
   let starved = 0
+  /**
+   * Matches this room has started. One, for most of a room's life.
+   *
+   * It exists to answer one question — is this the match a resume score belongs
+   * to — which only has an answer now that a room plays more than one
+   * (GLAD-8VZ12W). See `startWhenFull`.
+   */
+  let matchesStarted = 0
   // Frames refused at the door by peers that have since gone. A fuzzer is
   // closed on and then forgotten, and a counter that only summed *live* peers
   // would forget what it did on the way out.
@@ -675,30 +684,80 @@ export function createRoom(options: RoomOptions): Room {
   }
 
   /**
-   * Start the match once every seat is filled by a peer that has greeted.
+   * Start a match once every seat is filled by a peer that has greeted — the
+   * first one, and every one after it.
    *
    * The one edge out of warmup, and it is here rather than in the simulation
    * because the simulation is not the layer that knows both players have
    * arrived (`match/round.ts`). Called between sub-steps, never inside one, so
    * the first tick of round one is a tick both players can act on.
+   *
+   * ## The next match starts by itself (GLAD-8VZ12W)
+   *
+   * A decided match used to be where a room stopped: `Over` is terminal to the
+   * simulation, so the world kept ticking with nobody able to steer anything in
+   * it and the only way back to a duel was a reload. Both players are still
+   * sitting there, so the answer is to give them the next round — the loser
+   * most of all, since losing is what ends a match for them.
+   *
+   * Three conditions, and each rules out a different way of getting it wrong:
+   *
+   * - **the room is still full.** Checked first, so a match whose loser closed
+   *   the tab keeps its final score on the board instead of being cleared to
+   *   nil-nil in front of the player who is still watching it.
+   * - **nothing has been forfeited.** A forfeited seat never reopens
+   *   (`lifecycle.ts`), so the check above already covers this today and this
+   *   line is the statement of intent rather than the mechanism: a match that
+   *   ended because somebody *lost* it and one that ended because a seat
+   *   emptied are the same `Over` with the same winner, and only this layer can
+   *   tell them apart (`resetMatch`). Restarting the second would stand a body
+   *   up for nobody and duel it.
+   * - **the intermission has passed.** The same `intermissionTicks` that
+   *   separates every other round from the next one, measured from the tick the
+   *   match ended (`MatchState.phaseStartTick`). Not a second constant: the
+   *   round that decides a match should not be the one round in the game with
+   *   no beat after it, and the three seconds are what the "match lost" banner
+   *   is on screen for (`client/ui/hudModel.ts`). It is the same clock both
+   *   peers are already counting in, so neither has to be told.
+   *
+   * The score is cleared, not carried: the next match is a new best-of-five and
+   * `resetMatch` is what says so.
    */
   const startWhenFull = (): void => {
-    if (state.match.phase !== MatchPhase.Warmup) return
+    const match = state.match
     if (peers.filter(playing).length < capacity) return
+
+    if (match.phase === MatchPhase.Over) {
+      if (lifecycle.ended) return
+      if (state.tick - match.phaseStartTick < match.rules.intermissionTicks) return
+      log('room.match_restart', {
+        rounds: match.round,
+        score: `${match.wins[0]}-${match.wins[1]}`,
+        winner: match.winner,
+      })
+      resetMatch(state)
+    }
+
+    if (match.phase !== MatchPhase.Warmup) return
     // Nil-nil unless this room was rebuilt after a deploy, in which case the
-    // duel continues at the score both clients brought back (`resume.ts`).
-    const score = options.score ?? NEW_MATCH_SCORE
+    // duel continues at the score both clients brought back (`resume.ts`) — and
+    // only for the match that was actually interrupted. A resume score applied
+    // to the *next* match would have the two of them start a fresh duel two
+    // rounds up on a scoreline they had already played out.
+    const score = matchesStarted === 0 ? (options.score ?? NEW_MATCH_SCORE) : NEW_MATCH_SCORE
+    matchesStarted += 1
     log('room.match_start', {
       peers: peers.length,
       capacity,
       score: `${score.wins[0]}-${score.wins[1]}`,
       resumed: score !== NEW_MATCH_SCORE,
+      match: matchesStarted,
     })
     // Recorded before the edge is taken, because a replay has to take it at the
     // same tick — `startMatch` is the one thing that happens to a world that is
     // not in the command stream. The score goes in the demo's header rather
-    // than here: a room plays one match, so what it started from is a property
-    // of the recording. `sim/src/demo.ts`.
+    // than here: it is where the *recording* began, which is why `matchStarts`
+    // is a list of ticks and the score is not. `sim/src/demo.ts`.
     recorder?.matchStarted(state.tick)
     startMatch(state, plan, score)
   }

@@ -1348,15 +1348,28 @@ tick it happened and two peers end a round on the same tick number.
 
 ```
 Warmup --startMatch--> Live --died, or the clock ran out--> Intermission --3s--> Live
-                         \                                       |
-                          \--score reached, or the round cap-----+--> Over
+   ^                     \                                       |
+   |                      \--score reached, or the round cap-----+--> Over
+   \----------------------------------------------resetMatch---------/
 ```
 
 **`Warmup` is the phase a bare `createGameState` is in**, and it does nothing at
 all. That is what makes a world with no match in it — the golden replay, every
 physics test, the walking skeleton — behave exactly as it did before there were
-round rules. `startMatch` is the one external edge, because the simulation is
-not the layer that knows both players have arrived (GLAD-DVDV6P, GLAD-4G4W2T).
+round rules. `startMatch` is one external edge, because the simulation is not
+the layer that knows both players have arrived (GLAD-DVDV6P, GLAD-4G4W2T).
+
+**`resetMatch` is the other, and it is the way out of `Over`** (GLAD-8VZ12W).
+It clears a finished match — warmup, nil-nil, no winner, the bodies left where
+they fell — so `startMatch` can run again in the same world and the two players
+get the next duel without being handed a new one. It is external for a sharper
+version of the same reason: a match decided on the score leaves two players
+standing in the arena, and one ended by `forfeitMatch` leaves an empty seat and
+a winner who was awarded it *because* nobody is coming back. Both are `Over`
+with a winner and telling them apart means knowing about sockets, so the host
+decides — it restarts the first after the same `intermissionTicks` that
+separates every other round from the next, and never the second
+(`server/src/room.ts`).
 
 **Commands reach a body in `Warmup` and `Live` only.** In `Intermission` and
 `Over` the world keeps simulating — gravity, friction, a body sliding to rest —
@@ -1394,6 +1407,12 @@ score as it stands — which may be no winner at all. The cap exists because a
 draw is genuinely reachable and a format with no cap would let two passive
 players draw forever. A decisive first-to-three is at most five rounds; the cap
 is nine, which leaves room for four draws and then stops.
+
+**And then the next one begins**, three seconds later, if there are still two
+players there to play it (§7.3, GLAD-8VZ12W). The room is what starts it, the
+score goes back to nil-nil, and the interval is `intermissionTicks` — the same
+one every other round is preceded by, so the round that decides a match is not
+the one round in the game with no beat after it.
 
 ### §7.5 The whole match is in the state
 

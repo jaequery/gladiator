@@ -7,19 +7,28 @@
  * network is host behaviour nobody asserts.
  */
 import {
+  EntityFlag,
   MatchPhase,
   NO_SLOT,
+  NO_WINNER,
   PROTOCOL_VERSION,
   SKELETON_SEED,
+  SPAWN_ARMOR,
+  SPAWN_HEALTH,
+  TICK_RATE,
   TransportState,
   UNKNOWN_RTT,
+  applyDamage,
   applyWireState,
   createMapState,
   encodeCmd,
   findPlayer,
   hashState,
+  matchRules,
   parseServerMessage,
   tick as simTick,
+  type GameState,
+  type MatchRules,
   type ServerMessage,
   type Transport,
 } from '@gladiator/sim'
@@ -55,7 +64,13 @@ const SEAT_TOKEN = 'deadbeefdeadbeefdeadbeefdeadbeef'
 const FIXED_TOKEN_DRAW = () => 0xdeadbeef
 
 /** A room over a loopback, plus everything the far end has been told. */
-function hosted(options: { capacity?: number; clock?: ReturnType<typeof manualClock> } = {}) {
+function hosted(
+  options: {
+    capacity?: number
+    clock?: ReturnType<typeof manualClock>
+    rules?: MatchRules
+  } = {},
+) {
   const clock = options.clock ?? manualClock()
   const pair: LoopbackPair = createLoopbackPair()
   const room: Room = createRoom({
@@ -67,6 +82,7 @@ function hosted(options: { capacity?: number; clock?: ReturnType<typeof manualCl
     peerId: (index) => `peer-${index}`,
     seatRandom: FIXED_TOKEN_DRAW,
     ...(options.capacity === undefined ? {} : { capacity: options.capacity }),
+    ...(options.rules === undefined ? {} : { rules: options.rules }),
   })
   const heard: ServerMessage[] = []
   const closes: Array<[number, string]> = []
@@ -497,6 +513,141 @@ describe('two peers in one world', () => {
     room.advance(60)
     expect(room.tick).toBe(60)
     expect(room.snapshot().starved).toBeGreaterThan(0)
+  })
+})
+
+/* --------------------------------------------------------------------------
+ * The match after this one
+ * ----------------------------------------------------------------------- */
+
+/**
+ * A best-of-three with half a second between rounds.
+ *
+ * Short because every round here is decided by hand, and the only clock that
+ * has to be waited out is the one between them — twice for a match, and once
+ * more for the match after it.
+ */
+const NEXT_MATCH_RULES: MatchRules = matchRules({
+  roundsToWin: 2,
+  intermissionTicks: Math.round(0.5 * TICK_RATE),
+})
+
+/** Kill the body in `slot`, credited to the other one: a round, decided. */
+function killIn(state: GameState, slot: number): void {
+  const victim = findPlayer(state, slot)
+  const killer = findPlayer(state, slot === 0 ? 1 : 0)
+  if (victim === null || killer === null) throw new Error('this duel is missing a body')
+  applyDamage(state, victim, killer.id, [0, 0, 1], 1000)
+}
+
+/** Two greeted peers in one room, one sub-step into round one. */
+async function duelling(rules: MatchRules) {
+  const { clock, pair, room, heard } = hosted({ rules })
+  room.join(pair.server)
+  pair.client.send(helloFrame())
+  const guest = seat(room)
+  guest.pair.client.send(helloFrame())
+  await settleLoopback(pair)
+  await settleLoopback(guest.pair)
+  room.advance(1)
+  return { clock, room, host: { pair, heard }, guest }
+}
+
+/** Lose the whole match from `slot`, one round at a time. */
+function loseMatch(room: Room, slot: number): void {
+  const rules = room.state.match.rules
+  for (let round = 0; round < rules.roundsToWin; round += 1) {
+    expect(room.state.match.phase).toBe(MatchPhase.Live)
+    killIn(room.state, slot)
+    // The round rules are the kernel's last phase, so one sub-step is what it
+    // takes for a death to be a decided round.
+    room.advance(1)
+    if (room.state.match.phase === MatchPhase.Intermission) room.advance(rules.intermissionTicks)
+  }
+}
+
+describe('the match after this one', () => {
+  it('starts the next match by itself once this one has been lost', async () => {
+    // GLAD-8VZ12W. A decided match used to be where a room stopped: `Over` is
+    // terminal to the simulation, so both players stood in a world they could
+    // no longer steer and the only way back into a duel was a reload.
+    const { room } = await duelling(NEXT_MATCH_RULES)
+    expect(room.state.match.phase).toBe(MatchPhase.Live)
+
+    loseMatch(room, 0)
+    expect(room.state.match.phase).toBe(MatchPhase.Over)
+    expect(room.state.match.winner).toBe(1)
+    expect(room.state.match.wins).toEqual([0, 2])
+
+    // The same beat every other round is preceded by, and not a tick less: the
+    // final score and the "match lost" banner are what it is on screen for.
+    room.advance(NEXT_MATCH_RULES.intermissionTicks - 1)
+    room.advance(1)
+    expect(room.state.match.phase).toBe(MatchPhase.Over)
+
+    room.advance(1)
+    expect(room.state.match.phase).toBe(MatchPhase.Live)
+    expect(room.state.match.round).toBe(1)
+    // A new best-of-three, not a continuation of the one that was just lost.
+    expect(room.state.match.wins).toEqual([0, 0])
+    expect(room.state.match.winner).toBe(NO_WINNER)
+    expect(room.snapshot().phase).toBe(MatchPhase.Live)
+
+    // And the loser is the point of the whole thing: on their feet, at full
+    // health, without having asked for it.
+    const loser = findPlayer(room.state, 0)
+    expect(loser?.health).toBe(SPAWN_HEALTH)
+    expect(loser?.armor).toBe(SPAWN_ARMOR)
+    expect((loser?.flags ?? 0) & EntityFlag.Dead).toBe(0)
+
+    // The winner is in it too, and could not have been left out: a match is one
+    // piece of shared state, so the round that starts for the player who lost
+    // is the same round that starts for the player who beat them.
+    const winner = findPlayer(room.state, 1)
+    expect(winner?.health).toBe(SPAWN_HEALTH)
+    expect((winner?.flags ?? 0) & EntityFlag.Dead).toBe(0)
+
+    // And again, because a room does not run out of matches.
+    loseMatch(room, 0)
+    expect(room.state.match.phase).toBe(MatchPhase.Over)
+    room.advance(NEXT_MATCH_RULES.intermissionTicks)
+    room.advance(1)
+    expect(room.state.match.phase).toBe(MatchPhase.Live)
+    expect(room.state.match.round).toBe(1)
+  })
+
+  it('starts nothing while the match is still being played', async () => {
+    const { room } = await duelling(NEXT_MATCH_RULES)
+    killIn(room.state, 0)
+    room.advance(1)
+    expect(room.state.match.phase).toBe(MatchPhase.Intermission)
+    expect(room.state.match.wins).toEqual([0, 1])
+
+    // Four times the beat a *finished* match rests for. An intermission is a
+    // match between rounds, and nothing behind it clears the score: round two
+    // starts on its own clock, at one-nil, exactly as it always did.
+    room.advance(NEXT_MATCH_RULES.intermissionTicks * 4)
+    expect(room.state.match.phase).toBe(MatchPhase.Live)
+    expect(room.state.match.round).toBe(2)
+    expect(room.state.match.wins).toEqual([0, 1])
+  })
+
+  it('leaves a decided match alone when there is nobody to play the next one', async () => {
+    const { room, guest } = await duelling(NEXT_MATCH_RULES)
+    loseMatch(room, 0)
+    expect(room.state.match.phase).toBe(MatchPhase.Over)
+
+    // The winner closes the tab. One seat is not a duel, so there is no next
+    // match to start — and the final score stays on the board in front of the
+    // player who is still looking at it rather than being cleared to nil-nil.
+    guest.pair.close()
+    await settleLoopback(guest.pair)
+    room.advance(NEXT_MATCH_RULES.intermissionTicks + 2)
+    room.advance(2)
+
+    expect(room.state.match.phase).toBe(MatchPhase.Over)
+    expect(room.state.match.wins).toEqual([0, 2])
+    expect(room.state.match.winner).toBe(1)
   })
 })
 

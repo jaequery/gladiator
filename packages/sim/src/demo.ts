@@ -52,10 +52,10 @@ import type { WireCmd } from './protocol.ts'
 import { formatHash } from './hash.ts'
 import type { LoadedMap } from './map/load.ts'
 import { createMapState } from './map/load.ts'
-import { DEFAULT_MATCH_RULES } from './match/match.ts'
+import { DEFAULT_MATCH_RULES, MatchPhase } from './match/match.ts'
 import type { MatchRules } from './match/match.ts'
 import { isSelfDamageMode } from './match/selfDamage.ts'
-import { NEW_MATCH_SCORE, startMatch } from './match/round.ts'
+import { NEW_MATCH_SCORE, resetMatch, startMatch } from './match/round.ts'
 import type { MatchScore } from './match/round.ts'
 import { buildSpawnPlan } from './match/spawn.ts'
 import type { SpawnPlan } from './match/spawn.ts'
@@ -93,15 +93,19 @@ export type DemoHeader = {
   readonly seed: number
   readonly rules: MatchRules
   /**
-   * The scoreline the match began at, when it was not nil-nil.
+   * The scoreline the *first* recorded match began at, when it was not nil-nil.
    *
-   * A room plays one match, so where that match *started* is a property of the
-   * recording rather than an event in it. It is absent for every ordinary demo
-   * and present for one recorded on a room rebuilt after a deploy, where the
-   * two clients brought a signed score back with them (`server/resume.ts`).
-   * A replay that ignored it would take the `startMatch` edge at the right tick
-   * into the wrong scoreline, and diverge from its own trace on the first
-   * sample — which is the one thing a demo exists to rule out.
+   * Where a recording starts is a property of the recording rather than an
+   * event in it, which is why it is a header field and `matchStarts` is a list
+   * of ticks. A room that plays another match (GLAD-8VZ12W) starts it nil-nil
+   * like any other, so this belongs to the first start and to no other.
+   *
+   * It is absent for every ordinary demo and present for one recorded on a room
+   * rebuilt after a deploy, where the two clients brought a signed score back
+   * with them (`server/resume.ts`). A replay that ignored it would take the
+   * `startMatch` edge at the right tick into the wrong scoreline, and diverge
+   * from its own trace on the first sample — which is the one thing a demo
+   * exists to rule out.
    */
   readonly score?: MatchScore
 }
@@ -325,9 +329,24 @@ export function replayDemo(demo: Demo, options: ReplayDemoOptions): DemoPlayback
   // state.
   const inputs: (UserCmd | null)[] = []
 
+  let started = 0
+
   for (let frame = 0; frame < limit; frame += 1) {
-    // Between sub-steps, exactly where the host took the edge.
-    if (starts.has(state.tick)) startMatch(state, plan, demo.header.score ?? NEW_MATCH_SCORE)
+    // Between sub-steps, exactly where the host took the edge — including the
+    // clearing edge in front of it, which is what a recording of a room that
+    // played a second match needs (`match/round.ts`, GLAD-8VZ12W). The host
+    // takes the two together and so does this: a `matchStarts` tick reached
+    // with the previous match still sitting in `Over` is that room starting
+    // another one.
+    if (starts.has(state.tick)) {
+      if (state.match.phase === MatchPhase.Over) resetMatch(state)
+      // The header's score is where the *recording* began, so it belongs to the
+      // match that was under way when the recorder was attached and to no other.
+      // A second match starting nil-nil is a second match starting nil-nil.
+      const score = started === 0 ? (demo.header.score ?? NEW_MATCH_SCORE) : NEW_MATCH_SCORE
+      startMatch(state, plan, score)
+      started += 1
+    }
     sample()
 
     const recorded = demo.frames[frame] ?? []
