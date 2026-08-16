@@ -35,8 +35,12 @@ describe('a recorded match', () => {
     const { demo, finalHash, ticks } = await recordScriptedDuel({ seconds: 8 })
 
     // The recording is of a *match*, not of two bodies falling: the host took
-    // the one edge out of warmup, and the rules ran rounds inside it.
-    expect(demo.matchStarts.length).toBeGreaterThan(0)
+    // the edge out of warmup, and the rules ran rounds inside it. Eight seconds
+    // is longer than a best-of-five of two-second rounds takes, so it took that
+    // edge twice — the host played one match out and started the next by itself
+    // (GLAD-8VZ12W), which is the case that makes `matchStarts` a list rather
+    // than a number and the one a replay has to take both edges for.
+    expect(demo.matchStarts.length).toBeGreaterThan(1)
     expect(demo.frames.length).toBe(ticks)
     expect(demo.trace.length).toBeGreaterThan(8)
 
@@ -52,7 +56,9 @@ describe('a recorded match', () => {
     expect(played.state.tick).toBe(ticks)
     expect(formatHash(hashState(played.state))).toBe(formatHash(finalHash))
     expect(played.state.match.phase).not.toBe(MatchPhase.Warmup)
-    expect(played.state.match.round).toBeGreaterThan(1)
+    // A round is being played in it. Not "past round one": the round number
+    // goes back to one with every new match, and this recording contains two.
+    expect(played.state.match.round).toBeGreaterThan(0)
   })
 
   it('can be stopped at the tick the bug report names', async () => {

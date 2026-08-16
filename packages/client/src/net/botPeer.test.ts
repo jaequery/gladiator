@@ -4,8 +4,9 @@
  * `listenServer.test.ts` proves the host in this tab is the host on Fly. This
  * proves there is somebody in the other chair: that the bot takes the second
  * seat through the same handshake a stranger would, that it moves, that it aims
- * and fires **both** weapons, and that it can put damage on a human who is not
- * fighting back.
+ * and fires **both** weapons, that it can put damage on a human who is not
+ * fighting back — and that when it beats them, the tab starts the next match by
+ * itself rather than freezing on the scoreline (GLAD-8VZ12W).
  *
  * The human here stands still and does nothing. That is deliberate and it is
  * the strongest form of the assertion: every shot that lands, every unit of
@@ -15,6 +16,7 @@
  */
 import {
   EntityKind,
+  MatchPhase,
   NULL_CMD,
   SKELETON_SEED,
   Weapon,
@@ -55,6 +57,8 @@ async function duel(): Promise<{
   readonly weapons: ReadonlySet<number>
   readonly fired: number
   readonly humanLow: number
+  readonly decided: number
+  readonly restarted: number
 }> {
   const clock = manualClock()
   let seated: BotPeer | null = null
@@ -92,6 +96,13 @@ async function duel(): Promise<{
   let humanLow = Number.POSITIVE_INFINITY
   let lastBotOrigin: readonly [number, number, number] | null = null
   let lastFireSeen = -1
+  // How many times this world's match was decided, and how many times it left
+  // `Over` again afterwards. The second is only reachable through `resetMatch`
+  // — nothing a sub-step does gets out of that phase — so it is a direct count
+  // of the host starting the next match by itself (GLAD-8VZ12W).
+  let decided = 0
+  let restarted = 0
+  let wasOver = false
 
   const settle = async (): Promise<void> => {
     await settleLoopback(listen.pair)
@@ -113,6 +124,10 @@ async function duel(): Promise<{
       await settle()
 
       const world = listen.room.state
+      const over = world.match.phase === MatchPhase.Over
+      if (over && !wasOver) decided += 1
+      if (!over && wasOver) restarted += 1
+      wasOver = over
       const bot = findPlayer(world, peer.slot)
       if (bot !== null) {
         weapons.add(bot.weapon)
@@ -142,12 +157,12 @@ async function duel(): Promise<{
   }
 
   listen.stop()
-  return { host: listen.room.state, peer, moved, weapons, fired, humanLow }
+  return { host: listen.room.state, peer, moved, weapons, fired, humanLow, decided, restarted }
 }
 
 describe('the bot in the second seat', () => {
   it('joins as a peer, plays a duel, and uses both weapons', async () => {
-    const { host, peer, moved, weapons, fired, humanLow } = await duel()
+    const { host, peer, moved, weapons, fired, humanLow, decided, restarted } = await duel()
 
     // Seated, and not in the seat `main.ts` steers.
     expect(peer.slot).toBeGreaterThanOrEqual(0)
@@ -178,5 +193,14 @@ describe('the bot in the second seat', () => {
     // And it hit something. The human never moved and never fired, so every
     // point of this came off the bot's aim.
     expect(humanLow).toBeLessThan(200)
+
+    // And when the human lost the match, the next one started without anybody
+    // asking for it (GLAD-8VZ12W). Forty-eight seconds is long enough for a
+    // player who never fires to lose a best-of-five and be put back on their
+    // feet in round one of the next duel — which is the whole of the ticket,
+    // observed in the mode a player actually meets it in.
+    expect(decided).toBeGreaterThan(0)
+    expect(restarted).toBeGreaterThan(0)
+    expect(host.match.phase).not.toBe(MatchPhase.Over)
   })
 })

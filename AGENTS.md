@@ -468,7 +468,9 @@ That is not a special case bolted on for the tests — it is what makes the gold
 replay, the walking skeleton and every physics test behave exactly as they did
 before there were round rules. `startMatch` is the single external edge out of
 it, because the simulation is not the layer that knows both players have
-arrived.
+arrived — and `resetMatch` is the single edge back *into* it, for the same
+reason read from the other end: only the host knows whether a finished match has
+two players left to give another one to (**The host**, GLAD-8VZ12W).
 
 Three things in there look like details and are rules:
 
@@ -533,6 +535,17 @@ warmup, taken between sub-steps, because the simulation is not the layer that
 knows both players have arrived. And a room with nobody in it does not tick at
 all — two hundred rooms that players have created and not yet joined would
 otherwise be 25,000 sub-steps a second over worlds nobody is in.
+
+**A room plays more than one match** (GLAD-8VZ12W). A decided match used to be
+where it stopped — `Over` is terminal to the simulation, so both players stood
+in a world they could no longer steer and the only way back into a duel was a
+reload. So `startWhenFull` also takes the *other* edge: three seconds after a
+match is decided, `resetMatch` clears it and the same call starts the next one
+nil-nil. Three conditions, and each rules out a different mistake — the room is
+still full, nothing was forfeited, and the intermission has passed. The second
+is the one worth remembering: a defeat and a forfeit are both `Over` with a
+winner and only this layer can tell them apart, so restarting a forfeit would
+stand a body up for nobody and duel it.
 
 **A tick label is the peer's, not the world's.** A client counts its own
 predicted ticks from one and a room counts sub-steps from one, and the two are

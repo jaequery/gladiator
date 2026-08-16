@@ -197,6 +197,7 @@ export {
   damageReserve,
   forfeitMatch,
   isPlayableScore,
+  resetMatch,
   roundOutcome,
   startMatch,
 } from './match/round.ts'

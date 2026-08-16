@@ -576,6 +576,28 @@ describe('a room, one transition at a time', () => {
     expect(room.seats.some((seat) => seat.peerId === 'peer-3')).toBe(false)
   })
 
+  it('never starts another match on top of a forfeit', async () => {
+    // The distinction `resetMatch` cannot make (GLAD-8VZ12W): a defeat and a
+    // forfeit both leave the match `Over` with a winner, and the difference —
+    // whether there is anybody in the other seat — is a fact about sockets. A
+    // room that restarted this one would stand a body up for nobody and duel
+    // it, three seconds after awarding the match against exactly that body.
+    const { clock, room, host, guest } = await duelling()
+    host.pair.close()
+    await settleLoopback(host.pair)
+    await idleAlong(room, clock, guest, RECONNECT_GRACE_MS)
+    expect(room.state.match.phase).toBe(MatchPhase.Over)
+    expect(room.snapshot().ended).toBe(true)
+
+    // Far past the beat a match decided on the score rests for, with the winner
+    // still connected and the world still ticking under them.
+    room.advance(QUICK_RULES.intermissionTicks * 4)
+    room.advance(2)
+    expect(room.state.match.phase).toBe(MatchPhase.Over)
+    expect(room.state.match.winner).toBe(1)
+    expect(room.state.match.wins).toEqual([0, 1])
+  })
+
   it('abandons a match both of whose players stopped answering', async () => {
     const { clock, room, host, guest } = await duelling()
 

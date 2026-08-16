@@ -37,6 +37,7 @@ import {
   damageReserve,
   forfeitMatch,
   isPlayableScore,
+  resetMatch,
   roundOutcome,
   startMatch,
 } from './round.ts'
@@ -454,6 +455,114 @@ describe('forfeiting', () => {
     // A decided match cannot be un-decided by an explosion that arrives
     // afterwards — the same rule as a round ending, for the same reason.
     expect(state.entities.some((entity) => entity.kind === EntityKind.Projectile)).toBe(false)
+  })
+})
+
+/* --------------------------------------------------------------------------
+ * The match after this one
+ * ----------------------------------------------------------------------- */
+
+describe('clearing a finished match', () => {
+  it('puts a decided match back where a fresh one starts', () => {
+    const { state } = playMatch(7, matchRules(), (world) => kill(world, DUEL_SLOTS[1]))
+    expect(state.match.phase).toBe(MatchPhase.Over)
+    expect(state.match.wins).toEqual([3, 0])
+
+    const decidedAt = state.tick
+    const rules = state.match.rules
+    resetMatch(state)
+
+    // Everything a fresh `createMatchState` has, at the tick it was cleared on.
+    expect(state.match.phase).toBe(MatchPhase.Warmup)
+    expect(state.match.round).toBe(0)
+    expect(state.match.wins).toEqual([0, 0])
+    expect(state.match.winner).toBe(NO_WINNER)
+    expect(state.match.lastRoundWinner).toBe(NO_WINNER)
+    expect(state.match.phaseStartTick).toBe(decidedAt)
+    // The rules are the room's, not this match's, and survive it — the same
+    // object, so the next match is played under the one both peers hashed.
+    expect(state.match.rules).toBe(rules)
+  })
+
+  it('leaves the bodies alone — standing them up is the next round\'s job', () => {
+    const { state } = playMatch(7, matchRules(), (world) => kill(world, DUEL_SLOTS[1]))
+    const loser = playerIn(state, DUEL_SLOTS[1])
+    const fellAt: [number, number, number] = [loser.origin[0], loser.origin[1], loser.origin[2]]
+
+    resetMatch(state)
+    expect([...loser.origin]).toEqual(fellAt)
+    expect(loser.health).toBeLessThanOrEqual(0)
+
+    // And the next round is the one that picks them up — same entity, same id,
+    // full health, on a spawn point.
+    startMatch(state, PLAN)
+    expect(state.match.phase).toBe(MatchPhase.Live)
+    expect(state.match.round).toBe(1)
+    expect(playerIn(state, DUEL_SLOTS[1]).id).toBe(loser.id)
+    expect(loser.health).toBe(SPAWN_HEALTH)
+    expect(loser.armor).toBe(SPAWN_ARMOR)
+    expect([...loser.origin]).not.toEqual(fellAt)
+  })
+
+  it('plays the next match out like any other', () => {
+    // The point of the whole edge: a second best-of-five in the same world,
+    // scored from nil-nil and decided on its own rounds.
+    const rules = matchRules()
+    const { state } = playMatch(7, rules, (world) => kill(world, DUEL_SLOTS[1]))
+    resetMatch(state)
+    startMatch(state, PLAN)
+
+    const kernel = createKernel(state, WORLD, PLAN)
+    const limit = rules.maxRounds * (rules.roundTimeLimitTicks + rules.intermissionTicks) + 100
+    const acted = new Set<number>()
+    for (let i = 0; i < limit && state.match.phase !== MatchPhase.Over; i += 1) {
+      advanceTicks(kernel, 1, idle)
+      const match = state.match
+      if (
+        match.phase === MatchPhase.Live &&
+        state.tick - match.phaseStartTick === 8 &&
+        !acted.has(match.round)
+      ) {
+        acted.add(match.round)
+        kill(state, DUEL_SLOTS[0])
+      }
+    }
+
+    // The other player takes this one, and the score has no memory of the last.
+    expect(state.match.phase).toBe(MatchPhase.Over)
+    expect(state.match.winner).toBe(DUEL_SLOTS[1])
+    expect(state.match.wins).toEqual([0, 3])
+  })
+
+  it('refuses a match that is still being played', () => {
+    const warmup = createGameState(3, matchRules())
+    expect(() => resetMatch(warmup)).toThrow(/only a finished match/)
+
+    const live = createGameState(3, matchRules())
+    const kernel = createKernel(live, WORLD, PLAN)
+    startMatch(live, PLAN)
+    expect(() => resetMatch(live)).toThrow(RangeError)
+
+    kill(live, DUEL_SLOTS[1])
+    advanceTicks(kernel, 1, idle)
+    expect(live.match.phase).toBe(MatchPhase.Intermission)
+    // An intermission is a match between rounds, not a match that is over — and
+    // clearing one would throw away a scoreline two players are mid-duel on.
+    expect(() => resetMatch(live)).toThrow(RangeError)
+    expect(live.match.wins).toEqual([1, 0])
+  })
+
+  it('cannot tell a forfeit from a defeat, which is why the host decides', () => {
+    // Both are `Over` with a winner, and the difference between them — whether
+    // there is anybody left in the other seat — is a fact about sockets. So
+    // this layer does what it is told and `server/room.ts` is what refuses to
+    // restart a forfeit (GLAD-8VZ12W, `room.test.ts`).
+    const state = createGameState(1, matchRules())
+    startMatch(state, PLAN)
+    forfeitMatch(state, DUEL_SLOTS[1])
+
+    expect(() => resetMatch(state)).not.toThrow()
+    expect(state.match.phase).toBe(MatchPhase.Warmup)
   })
 })
 

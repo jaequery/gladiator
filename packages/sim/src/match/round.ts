@@ -11,9 +11,13 @@
  *                              \--score reached, or the round cap--------------> Over
  * ```
  *
- * Plus one edge that comes from outside the world: {@link forfeitMatch} takes
+ * Plus two edges that come from outside the world. {@link forfeitMatch} takes
  * either playing phase straight to `Over`, because a seat that has been empty
- * for thirty seconds is a match that cannot be finished (GLAD-DVDV6P).
+ * for thirty seconds is a match that cannot be finished (GLAD-DVDV6P). And
+ * {@link resetMatch} is the way back out of `Over` — it clears a finished match
+ * to `Warmup`, which is the one phase {@link startMatch} will take, so the two
+ * players who just finished a duel can be given another without being handed a
+ * new world (GLAD-8VZ12W).
  *
  * {@link advanceMatch} is a kernel phase and runs at the end of every sub-step,
  * after damage has been dealt and rockets have been removed. That position is
@@ -308,6 +312,48 @@ export function startMatch(
   match.lastRoundWinner = NO_WINNER
   match.winner = NO_WINNER
   beginRound(state, plan)
+}
+
+/**
+ * Clear a finished match, so another one can be started in the same world.
+ *
+ * The way back out of {@link MatchPhase.Over}, and what makes that phase the
+ * end of a *match* rather than the end of the world: it puts the match state
+ * back where `createMatchState` left it — warmup, nil-nil, no winner — which is
+ * the only phase {@link startMatch} will take.
+ *
+ * Deliberately not a `restartMatch` that does both halves. Everything that is
+ * true of the first `startMatch` has to stay true of the second — the demo
+ * recorder is told the tick the edge was taken on, a replay takes it at the
+ * same tick, and the score it starts from is the host's business — and the way
+ * to keep all of that true is for the second start to be literally the same
+ * call rather than a sibling that has to remember the same things.
+ *
+ * **Whether there is another match to play is the host's question, not this
+ * layer's** (GLAD-8VZ12W), which is the same division {@link startMatch} makes
+ * and for a sharper reason. A match decided on the score leaves two players
+ * standing in the arena waiting for the next round; a match ended by
+ * {@link forfeitMatch} leaves an empty seat and a winner who was awarded it
+ * *because* nobody is coming back. Those two look identical from in here — both
+ * are `Over` with a winner — and telling them apart means knowing about
+ * sockets. So this refuses to guess and `server/room.ts` decides.
+ *
+ * The bodies are left exactly where they fell. `spawnRound` is what stands them
+ * up, and it runs from `startMatch` on the tick the next round actually begins.
+ */
+export function resetMatch(state: GameState): void {
+  const match = state.match
+  if (match.phase !== MatchPhase.Over) {
+    throw new RangeError(
+      `gladiator: resetMatch was called on a match in phase ${match.phase}; only a finished match can be cleared, and a match still being played is finished by playing it out or by forfeiting it.`,
+    )
+  }
+  match.round = 0
+  match.wins[0] = 0
+  match.wins[1] = 0
+  match.lastRoundWinner = NO_WINNER
+  match.winner = NO_WINNER
+  enterPhase(state, MatchPhase.Warmup, NO_DEADLINE)
 }
 
 /**
