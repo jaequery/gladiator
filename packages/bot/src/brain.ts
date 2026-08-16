@@ -58,6 +58,8 @@ import { moveBot } from './movement/move.ts'
 import type { MoveState } from './movement/move.ts'
 import { DAMAGE_ASSUMED_RANGE, hasContact, isAlert } from './perception/worldModel.ts'
 import type { WorldModel } from './perception/worldModel.ts'
+import { SHIPPED_SKILL } from './tuning.ts'
+import type { BotSkill } from './tuning.ts'
 
 /** Re-exported from where the servo lives, so every importer keeps one name. */
 export { MAX_TURN_UNITS, TURN_RATE_DEGREES, wrapDelta, wrapUnits } from './aim/controller.ts'
@@ -80,10 +82,44 @@ export const BRAIN_INTERVAL_TICKS = 6
  * is 120 (`weapons.ts`), so this is comfortably outside the range at which
  * advancing on somebody is the same as standing in their explosion.
  */
-export const ENGAGE_RANGE = 600
+export const ENGAGE_RANGE = SHIPPED_SKILL.engageRange
+
+/**
+ * What the decision layer has decided to *be doing*. One of five, and they are
+ * exclusive.
+ *
+ * The tuning band table (GLAD-6BIYFQ) has a row for how often this changes, and
+ * a row needs a thing to count. It is deliberately the top-level intention and
+ * not the weapon or the shot mode: which of the two guns is in the bot's hands
+ * flips whenever the opponent's feet leave the floor, and counting that would
+ * measure how much the *opponent* is jumping rather than whether the bot is
+ * dithering.
+ *
+ * Ordered by precedence, which is the order {@link decide} resolves them in: a
+ * rocket in the air outranks whatever the bot was doing about the person who
+ * fired it.
+ */
+export type BotAction =
+  /** Not alive, or between rounds. Nothing is decided. */
+  | 'dead'
+  /** Getting out of the way of a rocket. */
+  | 'dodge'
+  /** A contact further away than {@link ENGAGE_RANGE}: closing on it. */
+  | 'hunt'
+  /** A contact inside it: holding ground and shooting. */
+  | 'fight'
+  /** Shot at by somebody it cannot see: looking down the bearing. */
+  | 'listen'
+  /** Nothing known. `movement/roam.ts` answers this one. */
+  | 'roam'
 
 /** A standing intention. Five ticks in six, this is what the command is built from. */
 export type BotDecision = {
+  /**
+   * What the bot has decided to be doing. Diagnostics — nothing below this layer
+   * branches on it, and it is written last so it cannot be read half-decided.
+   */
+  action: BotAction
   /**
    * Whether {@link aim} means anything.
    *
@@ -124,9 +160,10 @@ export type BotBrain = {
   lastDecisionTick: number
 }
 
-export function createBrain(rng: RngHolder): BotBrain {
+export function createBrain(rng: RngHolder, skill: BotSkill = SHIPPED_SKILL): BotBrain {
   return {
     decision: {
+      action: 'dead',
       hasAim: false,
       aim: vec3(),
       hasGoal: false,
@@ -136,7 +173,7 @@ export function createBrain(rng: RngHolder): BotBrain {
       buttons: 0,
       weapon: Weapon.RocketLauncher,
     },
-    combat: createCombat(rng),
+    combat: createCombat(rng, skill),
     lastDecisionTick: -1,
   }
 }
@@ -184,6 +221,7 @@ export function decide(
 
   if (!model.self.alive) {
     brain.combat.plan.mode = 'none'
+    d.action = 'dead'
     return
   }
 
@@ -194,12 +232,14 @@ export function decide(
     const enemy = model.enemy
     const dx = enemy.origin[0] - model.self.origin[0]
     const dy = enemy.origin[1] - model.self.origin[1]
-    if (dx * dx + dy * dy > ENGAGE_RANGE * ENGAGE_RANGE) {
+    const engage = brain.combat.skill.engageRange
+    if (dx * dx + dy * dy > engage * engage) {
       d.hasGoal = true
       d.goal[0] = enemy.origin[0]
       d.goal[1] = enemy.origin[1]
       d.goal[2] = enemy.origin[2]
     }
+    d.action = d.hasEvade ? 'dodge' : d.hasGoal ? 'hunt' : 'fight'
     return
   }
 
@@ -209,6 +249,8 @@ export function decide(
     d.aim[1] = model.self.origin[1] + model.damageBearing[1] * DAMAGE_ASSUMED_RANGE
     d.aim[2] = model.self.origin[2] + PLAYER_VIEW_HEIGHT
   }
+
+  d.action = d.hasEvade ? 'dodge' : d.hasAim ? 'listen' : 'roam'
 }
 
 /* --------------------------------------------------------------------------

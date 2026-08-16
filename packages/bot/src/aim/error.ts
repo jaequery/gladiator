@@ -70,6 +70,9 @@
 import { TICK_DT, TICK_INTERVAL_MS, cosRad, rngFloat, rngRange, sinRad, vec3 } from '@gladiator/sim'
 import type { MutVec3, RngHolder, Vec3 } from '@gladiator/sim'
 
+import { SHIPPED_SKILL } from '../tuning.ts'
+import type { BotSkill } from '../tuning.ts'
+
 /* --------------------------------------------------------------------------
  * Reaction
  * ----------------------------------------------------------------------- */
@@ -81,19 +84,23 @@ import type { MutVec3, RngHolder, Vec3 } from '@gladiator/sim'
  * gets from photons to a finger, and anything under it in a game reads as the
  * bot having been told. It is a *floor* rather than a mean, so the acceptance
  * check can be a hard bound rather than a percentile.
+ *
+ * The shipped bot's value; a bot at another skill carries its own
+ * ({@link BotSkill}). The `expert` end of the band in `tuning.json` is where
+ * that 140 ms floor lives, and no skill goes under it.
  */
-export const REACTION_MIN_MS = 140
+export const REACTION_MIN_MS = SHIPPED_SKILL.reactionMinMs
 
 /**
  * How much slower than the floor a reaction may be, in ms. Uniform over the
- * band, so the mean is the floor plus half of this: **210 ms**.
+ * band, so the mean is the floor plus half of this.
  *
  * Anchored on prior art rather than on human-subject data — Quake 3's
  * `reactiontime` characteristic runs from 0.5 s down to 0.1 s across its skill
- * range, and 210 ms is where a good-but-mortal player sits. Treat it as a
- * starting point to tune against the band table (GLAD-6BIYFQ), not as measured.
+ * range, and this game's axis is the same idea with the ends measured against
+ * the band table (GLAD-6BIYFQ) rather than guessed.
  */
-export const REACTION_SPREAD_MS = 140
+export const REACTION_SPREAD_MS = SHIPPED_SKILL.reactionSpreadMs
 
 /**
  * Draw a reaction, in whole sub-steps.
@@ -101,8 +108,8 @@ export const REACTION_SPREAD_MS = 140
  * Rounded **up**, so the floor is a floor: 140 ms is 17.5 sub-steps and a bot
  * that rounded to nearest would react in 136 ms one time in two.
  */
-export function reactionTicks(rng: RngHolder): number {
-  const ms = REACTION_MIN_MS + rngFloat(rng) * REACTION_SPREAD_MS
+export function reactionTicks(rng: RngHolder, skill: BotSkill = SHIPPED_SKILL): number {
+  const ms = skill.reactionMinMs + rngFloat(rng) * skill.reactionSpreadMs
   return Math.ceil(ms / TICK_INTERVAL_MS)
 }
 
@@ -117,9 +124,12 @@ export function reactionTicks(rng: RngHolder): number {
  * schedule that depends on when a bot was constructed rather than on what it
  * perceived, which is the one thing the draws in here may not do.
  */
-export const NOMINAL_REACTION_TICKS = Math.ceil(
-  (REACTION_MIN_MS + REACTION_SPREAD_MS / 2) / TICK_INTERVAL_MS,
-)
+export function nominalReactionTicks(skill: BotSkill = SHIPPED_SKILL): number {
+  return Math.ceil((skill.reactionMinMs + skill.reactionSpreadMs / 2) / TICK_INTERVAL_MS)
+}
+
+/** {@link nominalReactionTicks} for the shipped bot. */
+export const NOMINAL_REACTION_TICKS = nominalReactionTicks()
 
 /* --------------------------------------------------------------------------
  * The track
@@ -208,7 +218,7 @@ export function trackTarget(
  * 24 units from the body centre to the floor, so the error is 6 units, which is
  * nothing. Both of those are the model working rather than two tuned cases.
  */
-export const AIM_ERROR_FRACTION = 0.25
+export const AIM_ERROR_FRACTION = SHIPPED_SKILL.aimErrorFraction
 
 /**
  * The largest the error may grow to, in Quake units. **96**.
@@ -219,7 +229,7 @@ export const AIM_ERROR_FRACTION = 0.25
  * is this uncertain. The cap is what stops a 3000-unit lead from producing an
  * error the size of the arena.
  */
-export const MAX_AIM_ERROR = 96
+export const MAX_AIM_ERROR = SHIPPED_SKILL.maxAimError
 
 /**
  * How much of the error is vertical, as a share of the horizontal.
@@ -229,10 +239,39 @@ export const MAX_AIM_ERROR = 96
  * zero, because a bot whose error was exactly horizontal would splash the floor
  * at the right height every single time.
  */
-export const VERTICAL_ERROR_SHARE = 0.4
+export const VERTICAL_ERROR_SHARE = SHIPPED_SKILL.verticalErrorShare
 
 /** How wrong the applied acceleration may be, either way, as a fraction. */
-export const MOTOR_ERROR = 0.25
+export const MOTOR_ERROR = SHIPPED_SKILL.motorError
+
+/**
+ * How far a *held* crosshair wanders, in angle units. The shipped bot's value.
+ *
+ * ## 4. Tremor, and the turret it exists to stop
+ *
+ * The three error sources above have a hole in them, and it is only visible once
+ * the bot is measured: they all vanish at steady state. A rail at a body the bot
+ * can see has zero displacement, so {@link errorRadius} is zero; the servo's
+ * arrival clause lands the view exactly on the target and the motor error, which
+ * multiplies *acceleration*, has nothing left to multiply. A bot with all three
+ * modelled therefore hits essentially every rail it takes at a visible body,
+ * which no person does and which the band table refuses (36-48%).
+ *
+ * What is missing is that a crosshair a person is holding still is not still.
+ * So the aim point is offset by a small **angular** wobble, re-rolled on the
+ * same reaction period as everything else in {@link AimNoise}. Angular rather
+ * than positional, and that is the load-bearing choice: a fixed angle is a
+ * lateral miss proportional to range, so long-range rails are harder than close
+ * ones *for the reason they are actually harder*, and the band table's two
+ * railgun rows — 36-48% overall against 28-40% past 900 units — are one
+ * mechanism rather than a range table.
+ *
+ * It is inside the settle test rather than outside it: the servo chases the
+ * wobbling point, so `combat/railDiscipline.ts` still sees an aim that has
+ * arrived and stopped. The bot is not firing sloppily. It is firing at where it
+ * believes the crosshair is.
+ */
+export const TREMOR_UNITS = SHIPPED_SKILL.tremorUnits
 
 /** A full turn in radians, for the offset's bearing. */
 const TAU = 6.283185307179586
@@ -247,24 +286,43 @@ export type AimNoise = {
   scale: number
   /** The multiplier on applied angular acceleration. See the header. */
   motor: number
+  /** This period's tremor, in angle units of yaw. See {@link TREMOR_UNITS}. */
+  tremorYaw: number
+  /** This period's tremor, in angle units of pitch. */
+  tremorPitch: number
 }
 
 export function createNoise(): AimNoise {
-  return { ticksLeft: 0, offset: vec3(1, 0, 0), scale: 0, motor: 1 }
+  return { ticksLeft: 0, offset: vec3(1, 0, 0), scale: 0, motor: 1, tremorYaw: 0, tremorPitch: 0 }
 }
 
 /**
- * Draw a fresh error and a fresh motor multiplier.
+ * Draw a fresh error, a fresh motor multiplier and a fresh tremor.
  *
- * Four draws, always four, in this order — the count is what has to be
+ * Six draws, always six, in this order — the count is what has to be
  * independent of what the bot did or did not perceive, so this function has no
- * early return in it.
+ * early return in it and no branch on `skill`.
+ *
+ * The tremor's radial draw is square-rooted and the displacement error's is not,
+ * and the difference is not an oversight: a square root makes the offset uniform
+ * over the *disc*, which is what "the crosshair is somewhere within this much of
+ * where I want it" means, and it is the shape the railgun rows were tuned
+ * against. The displacement error keeps its linear draw because it is a bias on
+ * top of a guess rather than a wobble around a point, and because
+ * `aim/error.test.ts` bounds it rather than fitting it.
  */
-export function rollNoise(noise: AimNoise, rng: RngHolder, period: number): void {
+export function rollNoise(
+  noise: AimNoise,
+  rng: RngHolder,
+  period: number,
+  skill: BotSkill = SHIPPED_SKILL,
+): void {
   const bearing = rngRange(rng, 0, TAU)
-  const rise = rngRange(rng, -VERTICAL_ERROR_SHARE, VERTICAL_ERROR_SHARE)
+  const rise = rngRange(rng, -skill.verticalErrorShare, skill.verticalErrorShare)
   const scale = rngFloat(rng)
-  const motor = rngRange(rng, 1 - MOTOR_ERROR, 1 + MOTOR_ERROR)
+  const motor = rngRange(rng, 1 - skill.motorError, 1 + skill.motorError)
+  const tremorBearing = rngRange(rng, 0, TAU)
+  const tremorScale = Math.sqrt(rngFloat(rng))
 
   const flatX = cosRad(bearing)
   const flatY = sinRad(bearing)
@@ -274,6 +332,14 @@ export function rollNoise(noise: AimNoise, rng: RngHolder, period: number): void
   noise.offset[2] = rise / length
   noise.scale = scale
   noise.motor = motor
+
+  const tremor = skill.tremorUnits * tremorScale
+  noise.tremorYaw = cosRad(tremorBearing) * tremor
+  // Vertical aim is genuinely steadier than lateral — a duel is fought on a
+  // floor — and it is the same share `VERTICAL_ERROR_SHARE` states for the
+  // displacement error, for the same reason and out of the same number.
+  noise.tremorPitch = sinRad(tremorBearing) * tremor * skill.verticalErrorShare
+
   noise.ticksLeft = period
 }
 
@@ -284,22 +350,31 @@ export function rollNoise(noise: AimNoise, rng: RngHolder, period: number): void
  * condition — see the header on why the draw schedule may not depend on what
  * was perceived.
  */
-export function ageNoise(noise: AimNoise, rng: RngHolder, period: number): void {
+export function ageNoise(
+  noise: AimNoise,
+  rng: RngHolder,
+  period: number,
+  skill: BotSkill = SHIPPED_SKILL,
+): void {
   noise.ticksLeft -= 1
-  if (noise.ticksLeft <= 0) rollNoise(noise, rng, period)
+  if (noise.ticksLeft <= 0) rollNoise(noise, rng, period, skill)
 }
 
 /**
  * How far the aim point may be displaced, in Quake units, given how far it is
  * from the reference point.
  */
-export function errorRadius(aimPoint: Vec3, reference: Vec3): number {
+export function errorRadius(
+  aimPoint: Vec3,
+  reference: Vec3,
+  skill: BotSkill = SHIPPED_SKILL,
+): number {
   const dx = aimPoint[0] - reference[0]
   const dy = aimPoint[1] - reference[1]
   const dz = aimPoint[2] - reference[2]
   const displacement = Math.sqrt(dx * dx + dy * dy + dz * dz)
-  const radius = displacement * AIM_ERROR_FRACTION
-  return radius > MAX_AIM_ERROR ? MAX_AIM_ERROR : radius
+  const radius = displacement * skill.aimErrorFraction
+  return radius > skill.maxAimError ? skill.maxAimError : radius
 }
 
 /**
@@ -315,8 +390,9 @@ export function displaceAim(
   aimPoint: Vec3,
   reference: Vec3,
   noise: AimNoise,
+  skill: BotSkill = SHIPPED_SKILL,
 ): MutVec3 {
-  const radius = errorRadius(aimPoint, reference) * noise.scale
+  const radius = errorRadius(aimPoint, reference, skill) * noise.scale
   out[0] = aimPoint[0] + noise.offset[0] * radius
   out[1] = aimPoint[1] + noise.offset[1] * radius
   out[2] = aimPoint[2] + noise.offset[2] * radius

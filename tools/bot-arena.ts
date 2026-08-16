@@ -69,8 +69,8 @@ import {
   createBot,
   onNavStuck,
 } from '@gladiator/bot'
-import { NAV_MAX_STEP } from '@gladiator/bot'
-import type { Bot, LoadedNav, NavStuck } from '@gladiator/bot'
+import { NAV_MAX_STEP, SHIPPED_SKILL } from '@gladiator/bot'
+import type { Bot, BotSkill, LoadedNav, NavStuck } from '@gladiator/bot'
 
 /** The two seats. */
 export const SLOTS: readonly number[] = [0, 1]
@@ -105,13 +105,32 @@ export type BotArenaOptions = {
   readonly botSlots?: readonly number[]
   /** What a seat with no bot in it sends. Standing still, by default. */
   readonly scripted?: (slot: number, tick: number) => UserCmd
+  /**
+   * How good each seat is, indexed by slot. The shipped skill where absent.
+   *
+   * Two entries rather than one because the asymmetric rows of GLAD-6BIYFQ's
+   * band table are a bot at one skill against a bot at another, and that is the
+   * measurement that proves the difficulty axis is wired to something —
+   * `packages/bot/src/tuning.ts`.
+   */
+  readonly skills?: readonly (BotSkill | undefined)[]
+  /**
+   * A spawn plan already built for this map, if there is one.
+   *
+   * `buildSpawnPlan` is `spawns² × 9` traces with the real player box and a
+   * function of the map alone — `server/src/map.ts` builds it once at module
+   * load for exactly that reason. A harness that plays five hundred matches on
+   * one arena (`tools/bot-bands.ts`) would otherwise pay a level-design question
+   * five hundred times for an answer that cannot change.
+   */
+  readonly plan?: SpawnPlan
 }
 
 /** Two bots, both seated, the match started, on the first sub-step of round one. */
 export function createBotArena(options: BotArenaOptions): BotArena {
   const rules = options.rules ?? DEFAULT_MATCH_RULES
   const state = createGameState(options.seed, rules)
-  const plan = buildSpawnPlan(options.map.source, options.map.world)
+  const plan = options.plan ?? buildSpawnPlan(options.map.source, options.map.world)
   const terrain = { world: options.map.world, nav: options.nav }
 
   // `startMatch` places both bodies, creating them if this is their first round —
@@ -124,7 +143,14 @@ export function createBotArena(options: BotArenaOptions): BotArena {
     world: options.map.world,
     plan,
     bots: SLOTS.map((slot) =>
-      seated.includes(slot) ? createBot(slot, options.seed * 31 + slot, terrain) : null,
+      seated.includes(slot)
+        ? createBot(
+            slot,
+            options.seed * 31 + slot,
+            terrain,
+            options.skills?.[slot] ?? SHIPPED_SKILL,
+          )
+        : null,
     ),
     scripted: options.scripted ?? null,
     commands: [NULL_CMD, NULL_CMD],

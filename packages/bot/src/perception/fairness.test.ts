@@ -36,6 +36,7 @@ import {
 import type { UserCmd } from '@gladiator/sim'
 import { describe, expect, it } from 'vitest'
 
+import { TREMOR_UNITS } from '../aim/error.ts'
 import { MAX_TURN_UNITS } from '../brain.ts'
 import { FLOOR, angleBetween, bearingDegrees, createArena, place, runBot } from './fixture.ts'
 import type { Arena, RunOptions } from './fixture.ts'
@@ -300,9 +301,16 @@ describe('the blind test', () => {
     // which is a different place from where they are in four of the five runs.
     // (In the fifth the two happen to be on the same bearing, which is a
     // coincidence of the geometry and not the bot knowing anything.)
+    //
+    // The tolerance is the crosshair's own tremor (`aim/error.ts`, GLAD-6BIYFQ)
+    // plus a degree, and it is derived rather than typed: a held crosshair is
+    // not still, so "pointing at the last place it saw them" is only ever true
+    // to within however much the hands are wandering. What the tremor cannot do
+    // is *correlate with the truth* — that is the assertion above, and it is bit
+    // for bit.
     const finalYaw = (first?.[first.length - 1]?.yaw ?? 0) / UNITS_PER_DEGREE
     const lastSeen = bearingDegrees([0, -700, FLOOR], [0, -200, FLOOR])
-    expect(angleBetween(finalYaw, lastSeen)).toBeLessThan(1)
+    expect(angleBetween(finalYaw, lastSeen)).toBeLessThan(TREMOR_UNITS / UNITS_PER_DEGREE + 1)
     expect(trueBearings.filter((bearing) => angleBetween(finalYaw, bearing) > 10)).toHaveLength(4)
   })
 })

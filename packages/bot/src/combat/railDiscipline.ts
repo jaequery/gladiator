@@ -28,34 +28,39 @@
  */
 
 import type { AimState } from '../aim/controller.ts'
+import { SHIPPED_SKILL } from '../tuning.ts'
+import type { BotSkill } from '../tuning.ts'
 
 /**
- * How far off the aim may be and still count as settled, in angle units.
+ * How far off the aim may be and still count as settled, in angle units. The
+ * shipped bot's value; a bot at another skill carries its own (`tuning.ts`).
  *
- * Sixty is a third of a degree — 17 units of lateral error at the far end of the
- * bot's sight range (`perception/worldModel.ts`'s `SIGHT_RANGE`, 3000) and under
- * six at a thousand. The player box is 30 wide, so this is a threshold that
- * means "on the body" everywhere the bot can see a body.
+ * It is measured against the point the aim is *being sent to*, which since
+ * GLAD-6BIYFQ includes the tremor (`aim/error.ts`). So this threshold still
+ * means what it always meant — the servo has arrived where it was aimed — and
+ * whether where it was aimed is the body is a different question, asked by a
+ * different number.
  */
-export const RAIL_SETTLE_UNITS = 60
+export const RAIL_SETTLE_UNITS = SHIPPED_SKILL.railSettleUnits
 
 /**
  * How fast the view may still be moving, in angle units per sub-step.
  *
- * Ninety is half a degree a sub-step, which is 62 degrees a second. Above it the
+ * At the shipped skill this is well under a degree a sub-step. Above it the
  * crosshair is sweeping rather than tracking — see the header for why that is
- * the half of "settled" that does the interesting work.
+ * the half of "settled" that does the interesting work, and why loosening it is
+ * one of the things that makes a novice bot a novice.
  */
-export const RAIL_SETTLE_RATE = 90
+export const RAIL_SETTLE_RATE = SHIPPED_SKILL.railSettleRate
 
 /**
  * Has the aim settled enough to spend a rail on?
  *
- * Both halves, and the constants are the configured threshold the acceptance
- * check names. Nothing else gates a rail: whether the target is worth railing at
- * all is `combat/weaponSelect.ts`'s question, and whether the trigger may be
- * pulled at all is the reaction and the refire timer.
+ * Both halves, and the thresholds are this bot's own. Nothing else gates a rail:
+ * whether the target is worth railing at all is `combat/weaponSelect.ts`'s
+ * question, and whether the trigger may be pulled at all is the reaction and the
+ * refire timer.
  */
-export function railSettled(aim: AimState): boolean {
-  return aim.error <= RAIL_SETTLE_UNITS && aim.rate <= RAIL_SETTLE_RATE
+export function railSettled(aim: AimState, skill: BotSkill = SHIPPED_SKILL): boolean {
+  return aim.error <= skill.railSettleUnits && aim.rate <= skill.railSettleRate
 }

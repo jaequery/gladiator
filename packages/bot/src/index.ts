@@ -12,6 +12,23 @@
 export { botCommand, createBot } from './bot.ts'
 export type { Bot } from './bot.ts'
 
+/* --------------------------------------------------------------------------
+ * Tuning — GLAD-6BIYFQ
+ *
+ * One blob of numbers and one dial over it. `tuning.ts` is the argument;
+ * `tools/bot-bands.ts` is what decides whether the numbers are right.
+ * ----------------------------------------------------------------------- */
+
+export { SHIPPED_SKILL, TUNING, deriveSkill } from './tuning.ts'
+export type {
+  BotSkill,
+  SkillBand,
+  TuningAnchors,
+  TuningAxis,
+  TuningFixed,
+  TuningSource,
+} from './tuning.ts'
+
 export {
   BRAIN_INTERVAL_TICKS,
   ENGAGE_RANGE,
@@ -26,7 +43,7 @@ export {
   wrapUnits,
   yawUnitsToward,
 } from './brain.ts'
-export type { BotBrain, BotDecision } from './brain.ts'
+export type { BotAction, BotBrain, BotDecision } from './brain.ts'
 
 export { createPerception, observe } from './perception/perceive.ts'
 export type { Ground, Perception } from './perception/perceive.ts'
@@ -238,6 +255,7 @@ export {
   NOMINAL_REACTION_TICKS,
   REACTION_MIN_MS,
   REACTION_SPREAD_MS,
+  TREMOR_UNITS,
   VERTICAL_ERROR_SHARE,
   ageNoise,
   clearTrack,
@@ -245,6 +263,7 @@ export {
   createTrack,
   displaceAim,
   errorRadius,
+  nominalReactionTicks,
   reactionTicks,
   rollNoise,
   trackTarget,
@@ -296,6 +315,7 @@ export {
   PATH_SAMPLES,
   PATH_SAMPLE_TICKS,
   PATH_WINDOW_TICKS,
+  TREMOR_MEAN_SHARE,
   clearPath,
   createPath,
   createPlan,

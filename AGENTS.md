@@ -1745,6 +1745,120 @@ rocket mid-flight is not a measurement of the circle jump.
 
 ---
 
+## Tuning the bot
+
+`packages/bot/src/tuning.json`, `tuning.ts`, and the two harnesses that decide
+whether the numbers in them are right: `tools/bot-bands.ts` and
+`tools/bot-sweep.ts`. GLAD-6BIYFQ, which was time-boxed on purpose — hitting a
+target distribution has no upper bound on iterations, so the box is the
+deliverable.
+
+`pnpm bot:bands` plays the sample and prints the table; `pnpm bot:sweep` searches
+for a better one and `--write`s it. Both are the same code as
+`tools/bot-bands.test.ts`, and the only difference between the three is `n`.
+
+### One blob, one dial, and every number carried per bot
+
+Every constant the tuning moved is in the JSON, and `deriveSkill(skill)` resolves
+it into a `BotSkill` that rides on the bot. That is not decoration. Two bots in
+one process may be at two different skills — which is what the ladder is — and a
+sweep has to try a value *without restarting the process*, which a module
+constant read at import cannot do.
+
+Not in the blob: perception ranges, field of view, memory decay, the nav costs.
+There is no value of any knob here that lets the bot see further, which is the
+strong version of the fairness fence. Also not in it: the turn rate and the aim
+acceleration, which are the **arm** rather than the skill and are shared by every
+bot.
+
+### The axis is anchored on the two rungs, not on the ends of the dial
+
+The one structural thing this ticket got wrong first, and it is worth knowing
+before touching the file. `skill` runs `[0, 1]`, the ladder is 0.45 and 0.80, and
+those two rungs span **35% of the dial**. Anchoring each band on the dial's ends
+therefore meant the rungs only ever differed by 35% of whatever the ends said:
+measured, the shipped bot beat the novice rung 62/38 and lost to the expert rung
+43/57 no matter how the ends were set, and the band table asks for 75/25 both
+ways. Making the rungs far apart demanded ends that were not numbers — a negative
+tremor, a reaction faster than a person's.
+
+So a `SkillBand`'s `novice` and `expert` are the values **at 0.45 and at 0.80**,
+the line runs off past them, and `deriveSkill` clamps each value where it stops
+meaning anything. Those clamps are facts rather than tuning: no difficulty is
+ever faster off the mark than 140 ms, and a motor multiplier that could go
+negative is a wrist that pushes the wrong way.
+
+### Skill is a decision as much as it is a wrist
+
+The axis started as five things the hands do, and the ladder would not separate.
+A duel at these speeds is decided by rockets, and whether a rocket lands depends
+far more on **when the other player started moving** and on **whether the shooter
+shot where they were going** than on a fraction of a degree of aim. So
+`dodgeHorizonSeconds` and `leadStraightness` are on the axis too, and they are
+what make the rungs mean something.
+
+A weaker bot still sees, hears and remembers exactly what the shipped one does.
+
+### The tremor, and the turret it exists to stop
+
+`aim/error.ts` had three error sources and all three vanish at steady state: a
+rail at a visible body has zero displacement so the error radius is zero, the
+servo's arrival clause lands the view exactly, and the motor error multiplies an
+acceleration that has nothing left to multiply. Measured, the bot landed **two
+rails in three**. Nobody does that.
+
+What was missing is that a crosshair somebody is holding still is not still. The
+tremor is an angular wobble on the servo's target, re-rolled on the reaction
+period. **Angular** is the load-bearing half: a fixed angle is a lateral miss
+proportional to range, so long rails are harder than close ones for the reason
+they are actually harder, and the band table's two railgun rows are one mechanism
+rather than a range table. It sits *inside* the settle test — the servo chases
+the wobbling point and arrives — so the bot is not firing sloppily; it is firing
+at where it believes the crosshair is.
+
+### What the band table measures, and the one row that had to be interpreted
+
+Everything is measured from the world. Shots come off `lastFireTick`, which the
+sim writes when a shot actually leaves rather than when the trigger was asked
+for; hits come through `onDamage`, the third observation seam
+(`packages/sim/src/damage.ts`), because a rail, a direct rocket and a rocket at
+somebody's feet all take exactly 100 points and two of those are separate rows;
+line of sight is a ray against the map rather than the bot's own `WorldModel`,
+because a perception leak would be invisible to a check that asked the perception
+layer.
+
+Two definitions are judgement calls and are written down where they are made:
+
+- **"Meaningfully dodged"** is a counterfactual, and the first version of it was
+  wrong in a way worth remembering: comparing the rocket's line against where the
+  target *was* threw away every led shot, so the denominator filled up with the
+  shooter's misses. Both bodies move — closest approach of two constant-velocity
+  points — and the rocket counted as dodged is the one that would have landed had
+  the target not changed anything.
+- **The splash row counts directs too.** Quake declines to charge splash to
+  somebody it already hit directly (`radiusDamage`'s `ignoreId`), which is damage
+  bookkeeping rather than a statement about where the rocket went. Treating the
+  two rows as disjoint would demand that 58–82% of every rocket lands on a
+  duellist who is actively dodging it, and a bot that did would end a round in
+  four seconds rather than the nine to sixteen the row above asks for.
+
+The ticket is also honest that **bot-versus-identical-bot at 50% is 50% by
+symmetry** and passes on a bot that stands still. It is kept as a spawn-and-side
+fairness check under that name.
+
+### The test asserts monotonicity, the CLI asserts the bands
+
+`tools/bot-bands.test.ts` runs a hundred matches, not five hundred. Eight of the
+ten rows have thousands of shots behind them either way and are asserted exactly.
+The two win-rate rows have a standard error of about five points at that size
+against a fourteen-point band, so asserting the band would fail about one run in
+six for no reason — and a test that fails one run in six teaches people to
+re-run. At the default size those two are asserted as what the acceptance check
+actually claims: **the axis is monotone**. `GLADIATOR_BANDS_MATCHES=500` asserts
+every row against its band instead, and that is what `pnpm bot:bands` does.
+
+---
+
 ## The HUD
 
 `packages/client/src/ui/`. Four modules and one rule, and the rule is the
@@ -1895,6 +2009,15 @@ Capture is off unless somebody asks: `GLADIATOR_DEMO_DIR` on the server,
 `packages/sim/src/counters.ts` installs both observation seams and tallies them.
 The sim has no `console` and no counters, so each is a seam a host fills in —
 `onSpeedClamp` in `pmove/index.ts`, `onSelfSplash` in `damage.ts`.
+
+There is a **third** seam and `counters.ts` deliberately does not install it.
+`onDamage` (`damage.ts`, GLAD-6BIYFQ) reports every hit that reaches a body along
+with what delivered it, because a rail, a direct rocket and a rocket at somebody's
+feet all take exactly 100 points and nothing outside the tick can tell them
+apart. It fires several times a second in a live duel, which makes it an
+*instrument* rather than a canary — the two below are here precisely because any
+non-zero value is a sentence somebody has to explain, and an ordinary event does
+not belong beside them. Its consumer is `tools/bot-bands.ts`.
 
 - **The speed clamp** is a 3000 qu/s rail on a game whose best rocket jump peaks
   near 1000, and Quake has no clamp at all. Ours firing means something upstream

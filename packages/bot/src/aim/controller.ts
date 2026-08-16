@@ -58,6 +58,8 @@ import {
 } from '@gladiator/sim'
 import type { Vec3 } from '@gladiator/sim'
 
+import { TUNING } from '../tuning.ts'
+
 /* --------------------------------------------------------------------------
  * The limits
  * ----------------------------------------------------------------------- */
@@ -72,7 +74,7 @@ import type { Vec3 } from '@gladiator/sim'
  * (`perception/worldModel.ts`); limiting how fast it gets there is a physical
  * constraint a player has too.
  */
-export const TURN_RATE_DEGREES = 540
+export const TURN_RATE_DEGREES = TUNING.fixed.turnRateDegrees
 
 /** The same rate as whole angle units per sub-step. Integers all the way down. */
 export const MAX_TURN_UNITS = Math.round((TURN_RATE_DEGREES * ANGLE_UNITS_PER_DEGREE) / TICK_RATE)
@@ -91,7 +93,7 @@ export const MAX_TURN_UNITS = Math.round((TURN_RATE_DEGREES * ANGLE_UNITS_PER_DE
  * end. A 5-degree correction never leaves the acceleration phase and takes
  * about 50 ms. Neither is a number that had to be written down.
  */
-export const AIM_ACCEL_TICKS = 10
+export const AIM_ACCEL_TICKS = TUNING.fixed.aimAccelTicks
 
 /**
  * The acceleration limit, in angle units per sub-step squared.

@@ -96,18 +96,40 @@ describe('the reaction, over a thousand acquisitions', () => {
     expect(Math.min(...delays)).toBeGreaterThanOrEqual(REACTION_MIN_MS)
   })
 
-  it('averages a competent-but-mortal 190 to 230 ms', () => {
+  it('is competent but mortal, whatever the tuning moved the band to', () => {
+    // The band itself, rather than the sample. Both ends of it moved in
+    // GLAD-6BIYFQ and both may move again — what may not move is that the bot
+    // never beats a person off the mark and never reads as asleep.
+    //
+    // Both bounds are anchored rather than chosen. **140 ms** is the
+    // simple-visual-reaction floor `aim/error.ts` argues, and nothing at any
+    // difficulty may go under it. **500 ms** is the slow end of Quake 3's own
+    // `reactiontime` characteristic, which is the prior art this model was built
+    // against; the shipped bot's mean landed at about 316 ms, which is a
+    // competent player having a normal day rather than a machine.
+    expect(REACTION_MIN_MS).toBeGreaterThanOrEqual(140)
+    expect(REACTION_MIN_MS + REACTION_SPREAD_MS / 2).toBeLessThanOrEqual(500)
+  })
+
+  it('averages the middle of the band', () => {
+    // The draw is uniform, so a thousand of them should land on the midpoint —
+    // which is the claim that the *sample* is the band rather than some corner
+    // of it. The tolerance is one sub-step, which is the rounding the draw does
+    // on its way into whole ticks, plus a sampling allowance.
     const mean = delays.reduce((total, ms) => total + ms, 0) / delays.length
-    expect(mean).toBeGreaterThanOrEqual(190)
-    expect(mean).toBeLessThanOrEqual(230)
+    const midpoint = REACTION_MIN_MS + REACTION_SPREAD_MS / 2
+    expect(Math.abs(mean - midpoint)).toBeLessThanOrEqual(TICK_INTERVAL_MS * 1.5)
   })
 
   it('spans the whole band rather than sitting on one value', () => {
-    // Without this the two bounds above would pass on a constant. The draw is
+    // Without this the bounds above would pass on a constant. The draw is
     // uniform over `[REACTION_MIN_MS, + REACTION_SPREAD_MS)`, so the realised
-    // spread should be most of it.
+    // spread should be most of it — and the ceiling is one sub-step over the top
+    // of the band, because the draw is rounded *up* into whole ticks.
     const spread = Math.max(...delays) - Math.min(...delays)
     expect(spread).toBeGreaterThan(REACTION_SPREAD_MS * 0.75)
-    expect(Math.max(...delays)).toBeLessThanOrEqual(REACTION_MIN_MS + REACTION_SPREAD_MS)
+    expect(Math.max(...delays)).toBeLessThanOrEqual(
+      REACTION_MIN_MS + REACTION_SPREAD_MS + TICK_INTERVAL_MS,
+    )
   })
 })

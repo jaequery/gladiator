@@ -23,6 +23,8 @@
     "map:bake": "tsx tools/bake-map.ts",
     "nav:bake": "tsx tools/nav-bake.ts",
     "bot:soak": "tsx tools/bot-soak.ts",
+    "bot:bands": "tsx tools/bot-bands-cli.ts",
+    "bot:sweep": "tsx tools/bot-sweep.ts",
     "audio:bake": "tsx tools/synth-audio.ts",
     "lightmap:bake": "tsx tools/bake-lightmap.ts",
     "audio:verify": "node scripts/audio-check.mjs",

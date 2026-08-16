@@ -163,6 +163,72 @@ export function onSelfSplash(observer: ((splash: SelfSplash) => void) | null): v
 let selfSplashObserver: ((splash: SelfSplash) => void) | null = null
 
 /* --------------------------------------------------------------------------
+ * The attribution seam
+ * ----------------------------------------------------------------------- */
+
+/**
+ * What delivered a hit.
+ *
+ * Three, because there are three ways to lose health in this game and the
+ * difference between them is not recoverable from outside: a rail and a direct
+ * rocket both deal exactly 100, and a rocket detonating at somebody's feet deals
+ * exactly 100 of *splash* — so a harness watching health go down cannot tell any
+ * of the three apart, and "rocket direct-hit rate" and "rocket splash-damage
+ * rate" are two different rows of GLAD-6BIYFQ's band table.
+ */
+export type DamageCause = 'rail' | 'direct' | 'splash'
+
+/** One hit landing, as the tick that dealt it saw it. */
+export type DamageEvent = {
+  /** The world tick it landed on. */
+  readonly tick: number
+  readonly cause: DamageCause
+  /** The entity that caused it — the same entity as the target, for self-damage. */
+  readonly attackerId: number
+  readonly targetId: number
+  /** The target's player slot, or `NO_SLOT` for a body no peer is steering. */
+  readonly targetSlot: number
+  /** The damage before the self-damage rule was consulted — what the push came from. */
+  readonly points: number
+  /** What it actually cost: armour plus health. */
+  readonly absorbed: number
+  /** Whether this is the hit that killed. */
+  readonly fatal: boolean
+}
+
+/**
+ * Called for every hit that reaches a body, with what delivered it.
+ *
+ * The third observation seam, and the same shape as the other two
+ * (`onSpeedClamp` in `pmove/index.ts`, {@link onSelfSplash} above): the
+ * simulation has no counters, so anything the outside world wants to *notice* is
+ * something a host fills in.
+ *
+ * It exists for the bot's band table (GLAD-6BIYFQ), which has to say what
+ * fraction of rails hit and what fraction of rockets landed a direct rather than
+ * a splash. Both are questions about *attribution*, and attribution is
+ * information the tick has and the state does not keep — a health bar that went
+ * down by 100 is the same health bar whichever of the three did it. Deriving it
+ * from outside would mean re-tracing every rail and re-integrating every rocket
+ * against a copy of this file, which is the kind of second implementation that
+ * is right until the day it silently is not.
+ *
+ * Unlike {@link onSelfSplash} this is *not* installed by `counters.ts`. It fires
+ * several times a second in a live duel, which makes it an instrument rather
+ * than a canary: the two counters exist because any non-zero value is a sentence
+ * somebody has to explain, and this one is ordinary by design.
+ *
+ * Purely observational, in both directions: it cannot reach the state, nothing
+ * consults it, and two peers with different observers still produce the same
+ * world. `null` removes it.
+ */
+export function onDamage(observer: ((event: DamageEvent) => void) | null): void {
+  damageObserver = observer
+}
+
+let damageObserver: ((event: DamageEvent) => void) | null = null
+
+/* --------------------------------------------------------------------------
  * G_Damage
  * ----------------------------------------------------------------------- */
 
@@ -182,6 +248,11 @@ let selfSplashObserver: ((splash: SelfSplash) => void) | null = null
  * Returns the points the target actually absorbed — armour plus health — which
  * is zero for a hit that spawn protection or a self-damage mode threw away, and
  * is *not* `points` whenever either armour or the halving got involved.
+ *
+ * `cause` is carried for {@link onDamage} and for nothing else — no branch in
+ * this function or below it reads it. It defaults to `'direct'` because that is
+ * what a hit with nothing between the shooter and the target is, and it is what
+ * both callers that do not name one are.
  */
 export function applyDamage(
   state: GameState,
@@ -190,6 +261,7 @@ export function applyDamage(
   dir: Vec3,
   points: number,
   mode: SelfDamageMode = state.match.rules.selfDamage,
+  cause: DamageCause = 'direct',
 ): number {
   if (points <= 0) return 0
   if ((target.flags & EntityFlag.Dead) !== 0) return 0
@@ -225,7 +297,8 @@ export function applyDamage(
   const split = resolveDamage(mode, selfInflicted, points, target.armor)
   target.armor -= split.armor
   target.health -= split.health
-  if (target.health <= 0) target.flags |= EntityFlag.Dead
+  const fatal = target.health <= 0
+  if (fatal) target.flags |= EntityFlag.Dead
 
   const absorbed = split.armor + split.health
 
@@ -234,6 +307,19 @@ export function applyDamage(
   // {@link onSelfSplash}.
   if (selfInflicted && target.kind === EntityKind.Player && selfSplashObserver !== null) {
     selfSplashObserver({ tick: state.tick, slot: target.slot, points, absorbed })
+  }
+
+  if (damageObserver !== null) {
+    damageObserver({
+      tick: state.tick,
+      cause,
+      attackerId,
+      targetId: target.id,
+      targetSlot: target.slot,
+      points,
+      absorbed,
+      fatal,
+    })
   }
 
   return absorbed
@@ -382,7 +468,7 @@ export function radiusDamage(
       target.origin[2] + DAMAGE_ORIGIN_HEIGHT - point[2] + SPLASH_UP_BIAS,
     )
 
-    if (applyDamage(state, target, attackerId, splashDir, points, mode) > 0) hits += 1
+    if (applyDamage(state, target, attackerId, splashDir, points, mode, 'splash') > 0) hits += 1
   }
 
   return hits

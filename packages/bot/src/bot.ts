@@ -36,10 +36,21 @@ import type { BotTerrain, MoveState } from './movement/move.ts'
 import { createPerception, observe } from './perception/perceive.ts'
 import type { Ground, Perception } from './perception/perceive.ts'
 import type { WorldModel } from './perception/worldModel.ts'
+import { SHIPPED_SKILL } from './tuning.ts'
+import type { BotSkill } from './tuning.ts'
 
 export type Bot = {
   /** The seeded stream. See the header. */
   readonly rng: RngHolder
+  /**
+   * How good this bot is, resolved from the one dial. `tuning.ts`, GLAD-6BIYFQ.
+   *
+   * The shipped skill unless somebody asks for another, and the only thing that
+   * differs between the bot a player fights and the ladder the band table proves
+   * the axis with. It changes how well the bot's hands work and nothing about
+   * what it is allowed to know.
+   */
+  readonly skill: BotSkill
   readonly perception: Perception
   readonly brain: BotBrain
   /**
@@ -79,13 +90,19 @@ export type Bot = {
  * it does not restrain itself. Nothing that ships is in that configuration; every
  * bot in a match is handed the arena it is standing in.
  */
-export function createBot(slot: number, seed: number, terrain: BotTerrain | null = null): Bot {
+export function createBot(
+  slot: number,
+  seed: number,
+  terrain: BotTerrain | null = null,
+  skill: BotSkill = SHIPPED_SKILL,
+): Bot {
   const rng: RngHolder = { rng: seedRng(seed) }
   const perception = createPerception(slot, rng)
   return {
     rng,
+    skill,
     perception,
-    brain: createBrain(rng),
+    brain: createBrain(rng, skill),
     movement: createMovement(rng, terrain),
     worldModel: perception.model,
   }

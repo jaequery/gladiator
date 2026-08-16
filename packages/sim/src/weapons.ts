@@ -408,7 +408,9 @@ function fireRailgun(
     }
   }
 
-  if (hit !== null) applyDamage(state, hit, shooter.id, dir, def.damage)
+  if (hit !== null) {
+    applyDamage(state, hit, shooter.id, dir, def.damage, state.match.rules.selfDamage, 'rail')
+  }
 }
 
 /**

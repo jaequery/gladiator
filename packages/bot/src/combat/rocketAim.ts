@@ -50,6 +50,7 @@
 import {
   DAMAGE_ORIGIN_HEIGHT,
   MISSILE_PRESTEP_MS,
+  RADIANS_PER_ANGLE_UNIT,
   PLAYER_MAXS,
   PLAYER_MINS,
   ROCKET_SPEED,
@@ -64,6 +65,8 @@ import type { CollisionWorld, MutVec3, TraceResult, Vec3 } from '@gladiator/sim'
 
 import { errorRadius } from '../aim/error.ts'
 import type { AimTrack } from '../aim/error.ts'
+import { SHIPPED_SKILL } from '../tuning.ts'
+import type { BotSkill } from '../tuning.ts'
 import { SPLASH_RADIUS, expectedDirect, expectedSplash } from './damage.ts'
 
 /* --------------------------------------------------------------------------
@@ -71,7 +74,7 @@ import { SPLASH_RADIUS, expectedDirect, expectedSplash } from './damage.ts'
  * ----------------------------------------------------------------------- */
 
 /** The longest lead worth computing, in seconds. See the header. */
-export const LEAD_MAX_SECONDS = 0.5
+export const LEAD_MAX_SECONDS = SHIPPED_SKILL.leadMaxSeconds
 
 /**
  * The rocket's head start, in seconds, net of the command's own latency.
@@ -92,7 +95,19 @@ export const LEAD_LAG_SECONDS = (TICK_INTERVAL_MS - MISSILE_PRESTEP_MS) / 1000
  * so they score near 0. **0.45** sits between "changing direction while going
  * somewhere" and "going nowhere on purpose".
  */
-export const LEAD_STRAIGHTNESS = 0.45
+export const LEAD_STRAIGHTNESS = SHIPPED_SKILL.leadStraightness
+
+/**
+ * The mean radius of a point drawn uniformly over a disc, as a share of the
+ * disc's own radius. **2/3**.
+ *
+ * The tremor is drawn that way (`aim/error.ts`), and the miss radius the shot
+ * selection compares its two candidates under is an *expected* miss rather than
+ * a worst case. Using the full radius would make the bot believe every shot is
+ * its worst shot, and it would splash from across the arena rather than take a
+ * direct rocket it would in fact have landed.
+ */
+export const TREMOR_MEAN_SHARE = 2 / 3
 
 /** Sub-steps between path samples. Four is 32 ms, well under any real juke. */
 export const PATH_SAMPLE_TICKS = 4
@@ -317,6 +332,7 @@ export function planRocket(
   muzzle: Vec3,
   track: AimTrack,
   path: TargetPath,
+  skill: BotSkill = SHIPPED_SKILL,
 ): ShotPlan {
   plan.mode = 'none'
   plan.lead = 0
@@ -338,10 +354,10 @@ export function planRocket(
 
   // The lead, and the refusal to take one on a target that is going nowhere.
   let lead = 0
-  if (straight >= LEAD_STRAIGHTNESS && speed > 0) {
+  if (straight >= skill.leadStraightness && speed > 0) {
     lead = interceptSeconds(muzzle, track.origin, track.velocity) + LEAD_LAG_SECONDS
     if (lead < 0) lead = 0
-    if (lead > LEAD_MAX_SECONDS) lead = LEAD_MAX_SECONDS
+    if (lead > skill.leadMaxSeconds) lead = skill.leadMaxSeconds
   }
   plan.lead = lead
 
@@ -365,11 +381,18 @@ export function planRocket(
   // difference between the two.
   const evasion = speed * flight * (1 - straight)
 
+  // And how far the hands will be off, in units, at this range. The tremor is an
+  // *angle* (`aim/error.ts`), so it is a miss that grows with distance — which is
+  // the term that makes the bot prefer a splash at long range without anything
+  // saying so. `TREMOR_MEAN_SHARE` is the mean radius of a uniform disc, because
+  // this is an expectation being fed to an expectation.
+  const wobble = range * skill.tremorUnits * RADIANS_PER_ANGLE_UNIT * TREMOR_MEAN_SHARE
+
   /* ---- the direct candidate ---- */
   candidate[0] = predicted[0]
   candidate[1] = predicted[1]
   candidate[2] = predicted[2] + DAMAGE_ORIGIN_HEIGHT
-  const directRadius = errorRadius(candidate, reference) + evasion
+  const directRadius = errorRadius(candidate, reference, skill) + evasion + wobble
   plan.directExpected = expectedDirect(directRadius)
 
   /* ---- the splash candidate ---- */
@@ -378,7 +401,7 @@ export function planRocket(
     plan.surface[0] = probe.endpos[0]
     plan.surface[1] = probe.endpos[1]
     plan.surface[2] = probe.endpos[2]
-    const splashRadius = errorRadius(plan.surface, reference) + evasion
+    const splashRadius = errorRadius(plan.surface, reference, skill) + evasion + wobble
     const gap = distanceToBox(plan.surface, predicted, PLAYER_MINS, PLAYER_MAXS)
     plan.splashExpected = expectedSplash(gap, splashRadius)
     plan.missRadius = splashRadius
