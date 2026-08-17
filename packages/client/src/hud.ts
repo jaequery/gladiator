@@ -111,9 +111,35 @@ export type Hud = {
    * turned the numbers off still needs to be told to reload.
    */
   setVisible(visible: boolean): void
-  /** A fatal message, in place of everything else. */
+  /**
+   * The client is finished. Say so, in place of everything else.
+   *
+   * A panel and not a banner, and the difference is the whole of GLAD-G42FEB.
+   * A fatal state leaves the canvas holding whatever it last drew — which, if
+   * the player died facing a wall, is a black rectangle — and if the pointer was
+   * locked there is not even a cursor on it. A line of red text at the top of
+   * that is easy to miss and offers nothing to do about it. So this dims the
+   * dead picture, says what happened in the middle of the screen where the eye
+   * already is, prints the reason it was given rather than a guess, and carries
+   * the one action there is.
+   *
+   * `main.ts` calls it from three places, and they are the three ways a session
+   * can end: the renderer would not start, `boot()` threw, and a frame threw.
+   */
   fail(message: string): void
 }
+
+/**
+ * What the failure panel says above the reason.
+ *
+ * One sentence, and deliberately about the *player's* situation rather than the
+ * program's: what has stopped, and what to do. The reason underneath is where
+ * the diagnosis goes, and it is quoted rather than paraphrased — GLAD-ZCEQMN was
+ * a day spent chasing a cause this page had asserted and did not know.
+ */
+export const FAILURE_TITLE = 'Gladiator stopped'
+export const FAILURE_BODY =
+  'Something went wrong and the game cannot carry on. Reloading starts a fresh one.'
 
 /**
  * Assign only when the value changed.
@@ -261,11 +287,45 @@ export function createHud(root: HTMLElement): Hud {
 
     fail(message) {
       root.innerHTML = ''
-      const failure = document.createElement('div')
-      failure.className = 'hud-banner'
-      failure.dataset['hud'] = 'banner'
-      failure.textContent = message
-      root.append(failure)
+
+      // The overlay is `pointer-events: none` so that a live HUD never eats a
+      // click meant for the arena. Nothing here is live, and the one control on
+      // it has to be clickable, so the backdrop takes events back — which also
+      // swallows clicks aimed at a canvas that has stopped answering.
+      const backdrop = document.createElement('div')
+      backdrop.className = 'hud-stop-backdrop'
+      backdrop.dataset['hud'] = 'stop'
+
+      const panel = document.createElement('div')
+      panel.className = 'hud-stop'
+
+      const title = document.createElement('h2')
+      title.className = 'hud-stop-title'
+      title.textContent = FAILURE_TITLE
+
+      const body = document.createElement('p')
+      body.className = 'hud-stop-body'
+      body.textContent = FAILURE_BODY
+
+      // Still `data-hud="banner"`: this is the fatal message, and it is what
+      // every check that ever looked for one reads.
+      const reason = document.createElement('p')
+      reason.className = 'hud-stop-reason'
+      reason.dataset['hud'] = 'banner'
+      reason.textContent = message
+
+      const reload = document.createElement('button')
+      reload.type = 'button'
+      reload.className = 'menu-button hud-stop-reload'
+      reload.dataset['hud'] = 'stop-reload'
+      reload.textContent = 'Reload'
+      reload.addEventListener('click', () => {
+        window.location.reload()
+      })
+
+      panel.append(title, body, reason, reload)
+      backdrop.append(panel)
+      root.append(backdrop)
     },
   }
 }

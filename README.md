@@ -57,8 +57,10 @@ pnpm run e2e         # the whole acceptance list, in headless Chromium
 `pnpm run e2e` builds the real bundles, runs the real server, and drives a real
 browser through it: the page loads with no console errors, clicking locks the
 pointer, the player runs and jumps, the hashes agree over a minute of movement,
-and `?protocol=999` and `?map=deadbeef` each put a readable mismatch message on
-screen. It needs a browser download
+a match is played *past the end of a round* — which is where GLAD-G42FEB used to
+end the client — and `?protocol=999`, `?map=deadbeef` and `?fault=frame` each put
+a readable message on screen instead of a page that has quietly stopped. It needs
+a browser download
 (`pnpm exec playwright install --with-deps chromium`), so it is its own CI job
 rather than part of `pnpm run ci`.
 

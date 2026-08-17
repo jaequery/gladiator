@@ -1230,6 +1230,117 @@ try {
     ),
   )
 
+  // --- playing past the end of a round -------------------------------------
+  // GLAD-G42FEB, and the reason it shipped: everything above this line plays
+  // *one* round. A predicted world only asks for a spawn plan when an
+  // intermission runs out, so the entire client used to die on the second
+  // round of every match and no check here ever got that far.
+  //
+  // Single-player, because it is the shortest path to a real round boundary
+  // that runs the real host: `?local=1` is a `Room` in this tab with the bot in
+  // the second seat, taking the same edge over the same loopback the socket
+  // takes over the wire.
+  //
+  // The round is ended on purpose rather than waited out. A duel with the bot
+  // takes tens of seconds and could run to the 120-second time limit; aiming at
+  // the floor and holding fire is a splash to the feet, and self-damage is on
+  // (`sim/src/match/selfDamage.ts`). Two rockets do it.
+  const errorsBeforeDuel = consoleErrors.length
+  await tab.goto(`${STATIC_ORIGIN}/?local=1`, { waitUntil: 'load' })
+  const duelLive = await waitFor('the single-player host to welcome us', async () =>
+    tab.evaluate(() => window.__gladiator?.snapshot().net.status === 'live'),
+  )
+  check('single-player connects to the host in the tab', duelLive)
+
+  let duelLocked = false
+  for (let attempt = 0; attempt < 5 && !duelLocked; attempt += 1) {
+    await tab.locator('#stage').click()
+    duelLocked = await waitFor(
+      'the pointer lock for the round-boundary run',
+      async () => tab.evaluate(() => document.pointerLockElement !== null),
+      2000,
+    )
+  }
+  check('the pointer is locked for the round-boundary run', duelLocked)
+
+  // Straight down. One move, because a locked pointer reports the whole delta:
+  // 3200 counts at the default sensitivity is far past the 89° clamp.
+  await tab.mouse.move(300, 3400)
+  await tab.mouse.down()
+  const died = await waitFor(
+    'the round to end',
+    async () => tab.evaluate(() => (window.__gladiator?.snapshot().hud.match.phase ?? 0) === 2),
+    20_000,
+  )
+  check('a rocket at your own feet ends the round', died)
+
+  // The intermission is three seconds (`RESPAWN_DELAY_TICKS`), and the tick
+  // after it is the one that used to throw.
+  const roundTwo = await waitFor(
+    'the next round to start',
+    async () => tab.evaluate(() => (window.__gladiator?.snapshot().hud.match.round ?? 0) >= 2),
+    30_000,
+  )
+  await tab.mouse.up()
+  const afterBoundary = await tab.evaluate(() => window.__gladiator?.snapshot())
+  check(
+    'the client survives the end of a round and plays the next one',
+    roundTwo,
+    `round ${String(afterBoundary?.hud.match.round)}, phase ${String(afterBoundary?.hud.match.phase)}`,
+  )
+
+  // And it is still *running*, which is the part the report was about: a client
+  // that threw here did not stop drawing a picture, it stopped being a client.
+  const framesBefore = afterBoundary?.render.frames ?? 0
+  const tickBefore = afterBoundary?.tick ?? 0
+  await tab.waitForTimeout(1000)
+  const stillGoing = await tab.evaluate(() => window.__gladiator?.snapshot())
+  check(
+    'frames and ticks keep advancing on the far side of the boundary',
+    (stillGoing?.render.frames ?? 0) > framesBefore && (stillGoing?.tick ?? 0) > tickBefore,
+    `frames ${framesBefore} → ${String(stillGoing?.render.frames)}, tick ${tickBefore} → ${String(stillGoing?.tick)}`,
+  )
+  // The sharpest form of the regression: the throw this ticket is about was an
+  // *uncaught* one, so a boundary crossed with nothing new in the error log is
+  // a boundary crossed without it. Warnings are left alone — a hard snap is one
+  // and is ordinary business here.
+  check(
+    'nothing was thrown crossing the boundary',
+    consoleErrors.length === errorsBeforeDuel,
+    consoleErrors.slice(errorsBeforeDuel, errorsBeforeDuel + 5).join(' | '),
+  )
+
+  // --- and what a frame that *does* throw looks like ------------------------
+  // `?fault=frame` throws once in the frame loop, for the same reason
+  // `?protocol=999` sends the wrong version: the only way to check what a
+  // failure looks like is to cause one. What is being checked is that the page
+  // says something — the old loop had no `catch` at all and re-armed
+  // `requestAnimationFrame` only on its last line, so a throw left a frozen
+  // picture, a locked pointer and no message. That is this ticket.
+  await tab.goto(`${STATIC_ORIGIN}/?local=1&fault=frame`, { waitUntil: 'load' })
+  const said = await waitFor('the failure panel', async () =>
+    tab.evaluate(() => document.querySelector('[data-hud="stop"]') !== null),
+  )
+  const stopState = await tab.evaluate(() => ({
+    reason: document.querySelector('[data-hud="banner"]')?.textContent ?? '',
+    reload: document.querySelector('[data-hud="stop-reload"]') !== null,
+    locked: document.pointerLockElement !== null,
+  }))
+  check(
+    'a frame that throws puts a panel on the page rather than freezing it',
+    said && stopState.reload,
+    `panel ${said}, reload button ${stopState.reload}`,
+  )
+  check(
+    'the panel quotes the reason it was given, so the cause is not a guess',
+    stopState.reason.includes('?fault=frame'),
+    JSON.stringify(stopState.reason),
+  )
+  check(
+    'the pointer goes back, so there is a cursor to click the way out with',
+    !stopState.locked,
+  )
+
   // --- the reference screenshot -------------------------------------------
   // `?shot=1` is a page with nothing moving in it: no socket, no simulation,
   // no HUD, no adaptive quality, one device pixel per CSS pixel, WebGL pinned,

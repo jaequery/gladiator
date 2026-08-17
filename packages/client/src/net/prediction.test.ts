@@ -10,11 +10,14 @@
  * discontinuity is left to the render offset.
  */
 import {
+  EntityFlag,
+  MatchPhase,
   NULL_CMD,
   SKELETON_SEED,
   createMapState,
   findPlayer,
   hashState,
+  startMatch,
   tick as simTick,
   type GameState,
   type UserCmd,
@@ -23,7 +26,7 @@ import {
 } from '@gladiator/sim'
 import { describe, expect, it } from 'vitest'
 
-import { CLIENT_MAP } from '../map.ts'
+import { CLIENT_MAP, CLIENT_PLAN } from '../map.ts'
 import { lerp } from '../render/view.ts'
 import { PENDING_CAPACITY, createPredictor } from './prediction.ts'
 import { CorrectionBand } from './reconcile.ts'
@@ -206,5 +209,93 @@ describe('a correction and the camera', () => {
     expect(stats.noticeable).toBe(3)
     expect(stats.worstUnits).toBe(Math.max(...distances))
     expect(stats.worstUnits).toBeGreaterThan(400)
+  })
+})
+
+/* --------------------------------------------------------------------------
+ * The end of a round
+ *
+ * GLAD-G42FEB, and the reason it went unnoticed for so long: every test above
+ * this line predicts a world in **warmup**, and warmup never starts a round. A
+ * predicted world in a *match* reaches the end of an intermission, because it
+ * adopts the host's match phase along with everything else — and `tick()` ends
+ * in `advanceMatch`, which stands two players up.
+ *
+ * Both halves of prediction cross that edge and both used to throw there: the
+ * live tick, and the replay a snapshot triggers.
+ * ----------------------------------------------------------------------- */
+
+/** A world with a match running in it, round one under way. */
+function duel(): GameState {
+  const state = createMapState(CLIENT_MAP.source, SKELETON_SEED)
+  startMatch(state, CLIENT_PLAN)
+  return state
+}
+
+/** End the round the only way a round ends: somebody stops standing. */
+function fell(state: GameState, slot: number): void {
+  const body = findPlayer(state, slot)
+  if (body === null) throw new Error(`no player in slot ${slot}`)
+  body.flags |= EntityFlag.Dead
+}
+
+describe('predicting across the end of a round', () => {
+  it('starts the next one, given the map’s spawn plan', () => {
+    const state = duel()
+    const predictor = createPredictor({
+      state,
+      world: CLIENT_MAP.world,
+      plan: CLIENT_PLAN,
+      slot: 0,
+    })
+
+    fell(state, 1)
+    // The death, the whole intermission, and a couple of ticks the far side of
+    // it — so the assertion is about a round that started, not one about to.
+    const across = state.match.rules.intermissionTicks + 4
+    for (let i = 0; i < across; i += 1) predictor.predict(NULL_CMD)
+
+    expect(state.match.round).toBe(2)
+    expect(state.match.phase).toBe(MatchPhase.Live)
+    // Both bodies back up, which is the thing the plan was needed for.
+    expect(findPlayer(state, 0)).not.toBeNull()
+    expect(findPlayer(state, 1)).not.toBeNull()
+  })
+
+  it('takes the whole client down without one — the bug this ticket reported', () => {
+    const state = duel()
+    const predictor = createPredictor({ state, world: CLIENT_MAP.world, slot: 0 })
+
+    fell(state, 1)
+    const across = state.match.rules.intermissionTicks + 4
+    expect(() => {
+      for (let i = 0; i < across; i += 1) predictor.predict(NULL_CMD)
+    }).toThrow(/spawn plan/)
+  })
+
+  it('replays across it too, when a snapshot lands from before the edge', () => {
+    const state = duel()
+    const predictor = createPredictor({
+      state,
+      world: CLIENT_MAP.world,
+      plan: CLIENT_PLAN,
+      slot: 0,
+    })
+
+    fell(state, 1)
+    const across = state.match.rules.intermissionTicks + 4
+    for (let i = 0; i < across; i += 1) predictor.predict(NULL_CMD)
+
+    // The host, two ticks past the death and so still inside the intermission.
+    // Adopting it winds the world back to *before* the edge, and an ack of zero
+    // means every command in the ring is replayed forward over it again — which
+    // is the replay running the round rules, in `reconcile.ts`, from a socket
+    // message rather than from a frame.
+    const host = duel()
+    fell(host, 1)
+    for (let i = 0; i < 2; i += 1) simTick(host, [NULL_CMD], CLIENT_MAP.world, CLIENT_PLAN)
+
+    expect(() => predictor.accept(snapshotFrame(host, 0))).not.toThrow()
+    expect(state.match.round).toBe(2)
   })
 })

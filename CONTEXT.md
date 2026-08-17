@@ -369,6 +369,13 @@ guessed would be a game whose cm/360 quietly means something else.
 sentence, the room code, and the link back. Detected from capabilities and never
 from a user-agent string. `ui/unsupported.ts`.
 
+**Failure panel** — what the page shows when the client is finished: a dimmed
+screen, what stopped, the reason it was given quoted rather than paraphrased,
+and a Reload. The three ways a session ends — the renderer would not start,
+`boot()` threw, a frame threw — all arrive here, because the alternative is the
+canvas holding its last frame and nobody being told anything. `client/hud.ts`'s
+`fail`; `?fault=frame` causes one on purpose.
+
 ---
 
 ## The network
