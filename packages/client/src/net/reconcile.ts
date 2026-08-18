@@ -63,6 +63,7 @@ import {
   type CollisionWorld,
   type GameState,
   type ServerSnapshot,
+  type SpawnPlan,
   type TickHooks,
   type UserCmd,
   type Vec3,
@@ -163,6 +164,17 @@ export type ReconcileOptions = {
   /** The predicted world. Overwritten in place with the reconciled one. */
   readonly state: GameState
   readonly world: CollisionWorld
+  /**
+   * The host's spawn plan, for the same reason the live tick needs it and with
+   * the same consequence for getting it wrong: a replay is `tick()` too, and a
+   * replay that crosses the end of an intermission has to be able to start the
+   * round the live tick would have started. `net/prediction.ts` argues it.
+   *
+   * A replay with a `null` plan is not merely unable to spawn — it throws, and
+   * it throws from inside `accept`, which runs on a socket message rather than
+   * on a frame. GLAD-G42FEB.
+   */
+  readonly plan?: SpawnPlan | null
   /** The player slot this client steers. */
   readonly slot: number
   readonly snapshot: ServerSnapshot
@@ -210,6 +222,7 @@ export type PendingCommand = {
 export function reconcile(options: ReconcileOptions): Correction | null {
   const { state, world, slot, snapshot, pending } = options
   const hooks = options.hooks ?? null
+  const plan = options.plan ?? null
 
   const predictedTick = state.tick
   const predicted = originOf(state, slot)
@@ -225,7 +238,7 @@ export function reconcile(options: ReconcileOptions): Correction | null {
   let replayed = 0
   for (const entry of pending) {
     if (entry.tick <= snapshot.ack) continue
-    simTick(state, inputsFor(slot, entry.cmd), world, null, hooks)
+    simTick(state, inputsFor(slot, entry.cmd), world, plan, hooks)
     replayed += 1
     options.onReplayTick?.(state)
   }

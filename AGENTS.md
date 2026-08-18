@@ -1112,6 +1112,31 @@ entity — because a client that rebuilt only the entities would agree about the
 picture and disagree about the hash forever, which turns the desync canary into
 noise.
 
+**Predicting means running the whole of `tick()`, so the client needs the whole
+of the host's level data — not the part movement happens to touch.** `tick()`
+takes a `CollisionWorld` *and* a `SpawnPlan` (**Level data sits beside the
+state**, in the kernel section), and for a long time `prediction.ts` and
+`reconcile.ts` passed the world and `null`. That is invisible in warmup, which
+is every physics test and the walking skeleton, and fatal in a match: the
+predicted world adopts the host's match phase along with everything else, so it
+reaches the end of an intermission, and `advanceMatch` throws rather than
+silently failing to start a round. The client died at the end of round one of
+every match anyone played (GLAD-G42FEB). `client/src/map.ts` builds the plan
+beside `CLIENT_MAP`, from the same artifact the server builds its own from, and
+the spawn draw comes from `state.rng` — which is what makes both ends pick the
+same pair rather than merely both being able to pick one.
+
+**A frame that throws must not be able to end the client in silence.** The frame
+loop in `main.ts` is the whole client — the host in this tab, prediction, the
+renderer, every readout — and it re-armed `requestAnimationFrame` as its last
+statement with no `catch` anywhere, so one exception stopped everything: no
+frames, no ticks, no input, no menu, no message, and a canvas still holding
+whatever it last drew. Reported, accurately, as a black screen with nothing on
+it but a cursor. The loop now re-arms *outside* a `try` and a throw goes to a
+panel that says what happened, quoting the reason rather than guessing at it
+(`hud.ts`'s `fail`). `?fault=frame` causes one on purpose so the panel can be
+checked in a browser, the way `?protocol=999` causes a version mismatch.
+
 **A snapshot carries two tick numbers and they answer different questions.**
 `state[0]` is how far the world has been advanced; `ServerSnapshot.ack` is how
 much of *this peer's* input is in it. They came apart the moment a fixed-rate

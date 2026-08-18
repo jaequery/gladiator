@@ -63,7 +63,7 @@ import { createInputController } from './input/controller.ts'
 import type { RawInput } from './input/pointerLock.ts'
 import { advance, alphaOf } from './loop.ts'
 import { shouldSnap, slewMs } from './net/clockSync.ts'
-import { CLIENT_MAP, CLIENT_MAP_HASH } from './map.ts'
+import { CLIENT_MAP, CLIENT_MAP_HASH, CLIENT_PLAN } from './map.ts'
 import { CLIENT_NAV } from './nav.ts'
 import {
   NO_SESSION,
@@ -281,6 +281,21 @@ function protocolOverride(search: string): number | undefined {
 function mapHashOverride(search: string): string | undefined {
   const raw = new URLSearchParams(search).get('map')
   return raw !== null && /^[0-9a-f]{8}$/.test(raw) ? raw : undefined
+}
+
+/**
+ * `?fault=frame` throws in the frame loop, to prove the page says so.
+ *
+ * The same species as `?protocol=` above and there for the same reason: the
+ * only way to check what a failure *looks like* is to cause one, and a failure
+ * nobody can cause is a failure nobody has ever seen. `scripts/e2e.mjs` loads
+ * this and reads the panel.
+ *
+ * It throws once, on the first frame after the loop starts, which is enough:
+ * one throw is the whole of what the loop does about a throw.
+ */
+function faultRequested(search: string): boolean {
+  return new URLSearchParams(search).get('fault') === 'frame'
 }
 
 /**
@@ -657,6 +672,10 @@ async function boot(): Promise<void> {
   let predictor = createPredictor({
     state,
     world: CLIENT_MAP.world,
+    // The host's own plan, rebuilt from the same artifact. Prediction runs the
+    // whole of `tick()`, and the end of `tick()` starts the next round — see
+    // `map.ts`, and GLAD-G42FEB for what happens without it.
+    plan: CLIENT_PLAN,
     slot: localSlot,
     hooks: { selfSplash },
   })
@@ -689,6 +708,7 @@ async function boot(): Promise<void> {
     predictor = createPredictor({
       state,
       world: CLIENT_MAP.world,
+      plan: CLIENT_PLAN,
       slot: localSlot,
       hooks: { selfSplash },
     })
@@ -1236,14 +1256,49 @@ async function boot(): Promise<void> {
   // which is what the script is written in.
   let demoTicks = 0
 
-  const frame = (nowMs: number) => {
+  /**
+   * The session is over, and the page has to say so.
+   *
+   * A frame is the whole client — the host in this tab, prediction, the
+   * renderer, the readouts — so a throw anywhere in one is not a glitch to skip
+   * past: the world is now in whatever half-advanced state the exception left,
+   * and running another tick on top of that would be inventing a match. So this
+   * stops, and the stopping is the *design* rather than the accident it used to
+   * be (GLAD-G42FEB): the loop is not re-armed, the pointer goes back so there
+   * is a cursor to click with, and `hud.fail` puts the reason on the screen.
+   *
+   * The old shape had no `catch` at all and re-armed `requestAnimationFrame`
+   * only on its last line, so one exception ended the client in silence: a
+   * frozen picture, a locked pointer, the crosshair in the middle of it and
+   * nothing that answered. That is what this ticket was reported as.
+   */
+  let stopped = false
+  const stop = (cause: unknown): void => {
+    if (stopped) return
+    stopped = true
+    console.error('gladiator: the game loop stopped', cause)
+    hud.fail(`the game loop stopped: ${String(cause)}`)
+    // After the panel, because `fail` empties the overlay: the lock change this
+    // provokes brings the pause screen up, and by now there is no pause screen
+    // in the document to bring.
+    document.exitPointerLock?.()
+  }
+
+  /** `?fault=frame`, spent on the first frame it reaches. */
+  let fault = faultRequested(window.location.search)
+
+  const drawFrame = (nowMs: number) => {
+    if (fault) {
+      fault = false
+      throw new Error('a deliberate fault, from ?fault=frame')
+    }
+
     const elapsedMs = nowMs - lastFrameMs
     lastFrameMs = nowMs
     fps = elapsedMs > 0 ? fps * 0.9 + (1000 / elapsedMs) * 0.1 : fps
 
     if (shot) {
       renderer.render(REFERENCE_VIEW, elapsedMs)
-      window.requestAnimationFrame(frame)
       return
     }
 
@@ -1449,10 +1504,7 @@ async function boot(): Promise<void> {
     matchHud.setVisible(!isFatal(status) && (session !== null || hudDemo))
 
     hudDueMs -= elapsedMs
-    if (hudDueMs > 0) {
-      window.requestAnimationFrame(frame)
-      return
-    }
+    if (hudDueMs > 0) return
     hudDueMs = HUD_INTERVAL_MS
     // The menu's own reading of the session: the room code, whether the friend
     // arrived, and what the browser did with the pointer lock. Ten times a
@@ -1508,7 +1560,25 @@ async function boot(): Promise<void> {
     // is the only way to make displaying it cheap. Nothing in `devHudModel`
     // asks the GPU anything — `ui/devHud.ts` argues why that is a rule.
     devHud?.update(devHudModel(netNow, p99Ms))
+  }
 
+  /**
+   * One frame, and the only place the loop is re-armed.
+   *
+   * `requestAnimationFrame` is asked for *outside* the `try` and after it, so
+   * every path that did not throw schedules the next frame — including
+   * `drawFrame`'s early return on a frame that owed the slow readouts nothing.
+   * Before this ticket the re-arm was the last statement of the frame body
+   * itself, which made "this frame threw" and "this client is over" the same
+   * event, silently.
+   */
+  const frame = (nowMs: number) => {
+    try {
+      drawFrame(nowMs)
+    } catch (cause) {
+      stop(cause)
+      return
+    }
     window.requestAnimationFrame(frame)
   }
 

@@ -41,6 +41,7 @@ import {
   type CollisionWorld,
   type GameState,
   type ServerSnapshot,
+  type SpawnPlan,
   type TickHooks,
   type UserCmd,
   type Vec3,
@@ -171,6 +172,22 @@ export type PredictorOptions = {
    */
   readonly state: GameState
   readonly world: CollisionWorld
+  /**
+   * Where a round may stand its two players, or `null` for a world that will
+   * never start one.
+   *
+   * Level data beside the state, exactly as `world` is, and it has to be the
+   * host's: `tick()` ends in `advanceMatch`, which spawns the next round when an
+   * intermission runs out, and a predicted world reaches that moment because it
+   * adopts the host's match phase along with everything else. With `null` there
+   * it throws (`sim/src/match/round.ts`), out of `predict` and into the frame
+   * loop — GLAD-G42FEB, where it ended the client at the end of every round.
+   *
+   * Optional only for the callers that genuinely have no match in them: the
+   * netcode fixtures and the physics tests predict worlds that stay in warmup,
+   * and warmup never asks.
+   */
+  readonly plan?: SpawnPlan | null
   /** The player slot this client steers. */
   readonly slot: number
   /**
@@ -191,6 +208,7 @@ export function createPredictor(options: PredictorOptions): Predictor {
   const { state, world, slot } = options
   const capacity = options.capacity ?? PENDING_CAPACITY
   const hooks = options.hooks ?? null
+  const plan = options.plan ?? null
 
   // A plain array used as a queue rather than an index-wrapped ring. The
   // acknowledged prefix is spliced off the front, which is O(n) in a handful of
@@ -251,7 +269,7 @@ export function createPredictor(options: PredictorOptions): Predictor {
         previousOrigin[2] = before[2]
       }
 
-      simTick(state, inputsFor(cmd), world, null, hooks)
+      simTick(state, inputsFor(cmd), world, plan, hooks)
       stats.predicted += 1
       mispredicts.predicted(state.tick, vitalsOf(state, slot))
 
@@ -284,6 +302,7 @@ export function createPredictor(options: PredictorOptions): Predictor {
       const correction = reconcile({
         state,
         world,
+        plan,
         slot,
         snapshot,
         pending,

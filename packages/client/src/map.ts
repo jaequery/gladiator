@@ -21,7 +21,7 @@
  * Rendering it is GLAD-0IDR6J's; `mapGeometry` turns `CLIENT_MAP.source` into
  * merged, surface-grouped triangles cut from the same planes the trace uses.
  */
-import { loadMap, type LoadedMap } from '@gladiator/sim'
+import { buildSpawnPlan, loadMap, type LoadedMap, type SpawnPlan } from '@gladiator/sim'
 
 import baked from '../../../maps/baked/arena1.json' with { type: 'json' }
 
@@ -30,3 +30,21 @@ export const CLIENT_MAP: LoadedMap = loadMap(baked)
 
 /** Eight hex digits, sent in the hello frame and compared by the server. */
 export const CLIENT_MAP_HASH: string = CLIENT_MAP.hash
+
+/**
+ * Where a round may stand its two players — the client's copy of the host's.
+ *
+ * Level data, like `CLIENT_MAP.world`: a pure function of the map, computed
+ * once here and never mutated by a tick. `packages/server/src/map.ts` builds the
+ * identical value from the identical artifact, which is what lets both ends run
+ * the round rules and agree — `selectSpawnPair` draws from `state.rng`, so the
+ * pair is a function of the seed and the plan, and both peers hold both.
+ *
+ * **The client needs it because the client predicts.** `net/prediction.ts` runs
+ * the same `tick()` the host runs, and `tick()` ends in `advanceMatch`, which
+ * has to stand two players up when an intermission runs out. Without a plan that
+ * throws (`match/round.ts`'s `requirePlan`) — which for a while it did, at the
+ * end of every round of every match, taking the whole client down with it
+ * (GLAD-G42FEB). Warmup hid it: a world that never starts a round never asks.
+ */
+export const CLIENT_PLAN: SpawnPlan = buildSpawnPlan(CLIENT_MAP.source, CLIENT_MAP.world)

@@ -162,6 +162,69 @@
         text-align: center;
       }
 
+      /* ------------------------------------------------------------------
+         The client is finished. `src/hud.ts`'s `fail`, and GLAD-G42FEB.
+
+         It covers the page because the page underneath it is a corpse: a
+         canvas holding whatever frame it stopped on, which is a black
+         rectangle if the player died facing a wall. Dimming it is what turns
+         "the screen went black" into "the game stopped, and here is why".
+
+         Deliberately not part of the no-overlap set the aspect-ratio check
+         measures — it is what replaces that layout, not a member of it.
+         ------------------------------------------------------------------ */
+      .hud-stop-backdrop {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        background: rgba(2, 4, 8, 0.74);
+        /* `#overlay` is `pointer-events: none`; the button needs them back. */
+        pointer-events: auto;
+      }
+
+      .hud-stop {
+        width: min(100%, 440px);
+        padding: 20px 22px 18px;
+        border: 1px solid var(--mismatch);
+        border-radius: 6px;
+        background: rgba(13, 17, 23, 0.95);
+        box-shadow: 0 18px 50px rgba(0, 0, 0, 0.6);
+      }
+
+      .hud-stop-title {
+        margin: 0 0 8px;
+        color: var(--mismatch);
+        font-size: 13px;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+      }
+
+      .hud-stop-body {
+        margin: 0 0 12px;
+      }
+
+      /* The cause, exactly as it was handed over. Wrapped rather than clipped:
+         a truncated stack is a diagnosis nobody can finish. */
+      .hud-stop-reason {
+        margin: 0 0 16px;
+        padding: 9px 11px;
+        border-radius: 4px;
+        background: rgba(248, 81, 73, 0.12);
+        color: #ffb4ae;
+        overflow-wrap: anywhere;
+      }
+
+      /* Scoped to the panel so it beats `.menu-button`, which it borrows the
+         rest of its look from and which is declared further down this sheet. */
+      .hud-stop .hud-stop-reload {
+        width: 100%;
+        margin: 0;
+        text-align: center;
+      }
+
       /* Clear of the bottom row of the in-match HUD, which is 22px up and
          about 60px tall. At 1024x768 the prompt is wide enough to reach the
          health readout otherwise, which the aspect-ratio check in
