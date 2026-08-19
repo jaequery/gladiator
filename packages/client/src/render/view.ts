@@ -107,12 +107,11 @@ export type RenderView = {
 /**
  * A camera transform, in the form Babylon consumes it.
  *
- * `rotation` is Babylon's Euler triple `(x = pitch, y = yaw, z = roll)`. That
- * the Quake angles go in unchanged is not luck: Babylon composes the rotation
- * as `Rx(pitch) · Ry(yaw)` applied to its forward vector `(0, 0, -1)`, and
- * running that through `QUAKE_TO_ENGINE` gives exactly Quake's
- * `(cos p cos y, cos p sin y, sin p)`. `view.test.ts` asserts it against a real
- * Babylon camera rather than trusting the derivation.
+ * `rotation` is Babylon's Euler triple `(x = pitch, y = yaw, z = roll)`.
+ * Babylon's pitch is positive upward while Quake's is positive downward, so
+ * pitch changes sign at this boundary. Yaw does not. `view.test.ts` compares a
+ * real Babylon camera with the simulation's `angleVectors` result rather than
+ * trusting a second copy of the derivation.
  */
 export type CameraPose = {
   /** Eye position, engine frame. */
@@ -211,7 +210,7 @@ export function cameraPose(view: RenderView): CameraPose {
     // The eye is 50 units above the feet, not at them. `bbox.ts`.
     position: quakeToEngine([x, y, z + PLAYER_VIEW_HEIGHT]),
     rotation: [
-      angleUnitsToRadians(view.pitchUnits),
+      -angleUnitsToRadians(view.pitchUnits),
       angleUnitsToRadians(view.yawUnits),
       // No roll, ever. A rolled view is a Quake death-camera effect and it
       // would make the horizon lie about which way gravity points.
@@ -235,7 +234,7 @@ export function viewForwardQuake(yawRadians: number, pitchRadians: number): Vec3
   return [
     Math.cos(yawRadians) * cosPitch,
     Math.sin(yawRadians) * cosPitch,
-    Math.sin(pitchRadians),
+    -Math.sin(pitchRadians),
   ]
 }
 

@@ -8,18 +8,21 @@ import {
   SKELETON_ARENA,
   type UserCmd,
   type Vec3,
+  angleVectors,
   angleUnitsToRadians,
   createSkeletonState,
   findPlayer,
   pitchUnitsFromDegrees,
   quakeToEngine,
   tick as simTick,
+  vec3,
   Weapon,
   yawUnitsFromDegrees,
 } from '@gladiator/sim'
 import { describe, expect, it } from 'vitest'
 
 import { advance, alphaOf } from '../loop.ts'
+import { commandFrom } from '../input/controller.ts'
 import { applyPose, createCamera, createScene } from './scene.ts'
 import {
   type CameraPose,
@@ -218,6 +221,26 @@ describe('the pose Babylon ends up with', () => {
       // Six digits, because Babylon's matrices are `Float32Array`. The failure
       // this guards against is a dropped minus sign, which is off by 2.
       const where = `yaw ${yawDegrees}, pitch ${pitchDegrees}`
+      expect(actual.x, `x at ${where}`).toBeCloseTo(expected[0], 6)
+      expect(actual.y, `y at ${where}`).toBeCloseTo(expected[1], 6)
+      expect(actual.z, `z at ${where}`).toBeCloseTo(expected[2], 6)
+    }
+  })
+
+  it('keeps the crosshair on the rocket trajectory for human aim in every direction', () => {
+    for (const [yawDegrees, pitchDegrees] of cases) {
+      const cmd = commandFrom(new Set(), { yawDegrees, pitchDegrees })
+      applyPose(
+        camera,
+        cameraPose({ origin: [0, 0, 0], yawUnits: cmd.yaw, pitchUnits: cmd.pitch }),
+      )
+
+      const rocketForward = vec3()
+      angleVectors(cmd.pitch, cmd.yaw, 0, rocketForward, null, null)
+      const expected = quakeToEngine(rocketForward)
+      const actual = camera.getDirection(Vector3.Forward(true))
+
+      const where = `yaw ${yawDegrees}, human pitch ${pitchDegrees}`
       expect(actual.x, `x at ${where}`).toBeCloseTo(expected[0], 6)
       expect(actual.y, `y at ${where}`).toBeCloseTo(expected[1], 6)
       expect(actual.z, `z at ${where}`).toBeCloseTo(expected[2], 6)
