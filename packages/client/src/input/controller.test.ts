@@ -3,6 +3,7 @@ import {
   BUTTON_JUMP,
   MAX_PITCH_UNITS,
   Weapon,
+  pitchUnitsFromDegrees,
   yawUnitsFromDegrees,
 } from '@gladiator/sim'
 import { describe, expect, it } from 'vitest'
@@ -56,13 +57,15 @@ describe('commandFrom', () => {
   it('quantises the view to angle units', () => {
     const cmd = commandFrom(new Set(), { yawDegrees: 90, pitchDegrees: 45 })
     expect(cmd.yaw).toBe(yawUnitsFromDegrees(90))
-    expect(Number.isInteger(cmd.pitch)).toBe(true)
+    expect(cmd.pitch).toBe(pitchUnitsFromDegrees(-45))
   })
 
   it('clamps a pitch that has run past straight up', () => {
-    expect(commandFrom(new Set(), { yawDegrees: 0, pitchDegrees: 500 }).pitch).toBe(MAX_PITCH_UNITS)
-    expect(commandFrom(new Set(), { yawDegrees: 0, pitchDegrees: -500 }).pitch).toBe(
+    expect(commandFrom(new Set(), { yawDegrees: 0, pitchDegrees: 500 }).pitch).toBe(
       -MAX_PITCH_UNITS,
+    )
+    expect(commandFrom(new Set(), { yawDegrees: 0, pitchDegrees: -500 }).pitch).toBe(
+      MAX_PITCH_UNITS,
     )
   })
 
