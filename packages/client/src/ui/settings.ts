@@ -35,16 +35,15 @@
 /**
  * Centimetres of mouse movement per 360 degrees.
  *
- * 30 cm is squarely inside what arena shooters are played at — fast enough for
- * a rocket-jump landing to be re-aimed in one motion, slow enough that a rail
- * shot at the far end of the arena is not a twitch. Quake's own default is
- * `sensitivity 2.5` on top of `m_yaw 0.022`, which on the 800 CPI mouse below
- * is about 21 cm; this is a little slower and much easier to say out loud.
+ * The shipped default is 10.5 cm/360: a fast arena-shooter turn that keeps a
+ * rocket-jump landing within one compact mouse motion. Players can still tune
+ * this physical distance directly without translating another game's
+ * sensitivity multiplier.
  */
-export const DEFAULT_CM_360 = 30
+export const DEFAULT_CM_360 = 10.5
 
-/** Counts per inch. What most mice ship at, and the number to correct first. */
-export const DEFAULT_DPI = 800
+/** Counts per inch. The shipped mouse baseline, and the number to correct first. */
+export const DEFAULT_DPI = 300
 
 /**
  * Horizontal field of view at 4:3, in degrees — Quake's `fov`.

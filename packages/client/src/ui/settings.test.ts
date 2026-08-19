@@ -34,6 +34,10 @@ function fakeStorage(initial: Record<string, string> = {}): SettingsStorage & { 
 }
 
 describe('cm/360', () => {
+  it('ships the intended input defaults', () => {
+    expect(DEFAULT_SETTINGS).toMatchObject({ cm360: 10.5, dpi: 300 })
+  })
+
   it('turns centimetres into mouse counts through the mouse’s own DPI', () => {
     // Ten inches of travel at 800 CPI is 8000 counts, by definition.
     expect(countsPer360(at({ cm360: 10 * CM_PER_INCH, dpi: 800 }))).toBeCloseTo(8000, 9)

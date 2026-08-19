@@ -18,6 +18,7 @@ import {
   yawUnitsFromDegrees,
 } from '@gladiator/sim'
 
+import { DEFAULT_SETTINGS, degreesPerCount as settingsDegreesPerCount } from '../ui/settings.ts'
 import { type RawInput, createPointerLock } from './pointerLock.ts'
 
 /**
@@ -36,9 +37,10 @@ export const DEGREES_PER_COUNT = 0.022
  *
  * Only ever seen by a controller constructed without one — a test, or the
  * handful of frames before the first `setDegreesPerCount`. `ui/settings.ts`
- * owns the real number and `DEFAULT_CM_360` is where it comes from.
+ * owns the real number and `DEFAULT_CM_360` is where it comes from. Deriving it
+ * here keeps a controller used without a store on that same default.
  */
-export const DEFAULT_DEGREES_PER_COUNT = 0.0381
+export const DEFAULT_DEGREES_PER_COUNT = settingsDegreesPerCount(DEFAULT_SETTINGS)
 
 /** Movement keys, by `KeyboardEvent.code` so the layout does not matter. */
 const FORWARD_KEYS = ['KeyW', 'ArrowUp']
