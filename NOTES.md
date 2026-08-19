@@ -92,49 +92,27 @@ will feel like the 180 ms row. It is not a region away from being fixed.
 
 ---
 
-## 2. The origin allowlist: project **and scope** scoped, failing closed
+## 2. The origin allowlist: same-origin, failing closed
 
-**Decided 2026-08-15. `packages/server/src/origin.ts`, tested in `origin.test.ts`.**
+**Decided 2026-08-19. `fly.toml`, `packages/server/src/origin.ts`.**
 
 A WebSocket upgrade is not subject to CORS and triggers no preflight: the
 browser sends `Origin` and then does whatever the server says, so any page on
 the internet can open a socket to this server unless the server checks. That is
 cross-site WebSocket hijacking, and this check is the whole defence.
 
-The ticket's framing was exactly right — a regex tight enough to be a control
-rejects some preview deployments, and one loose enough to accept all of them is
-not a control. Three candidates:
+The browser and WebSocket now ship from the same Fly application. Production's
+one allowed origin is therefore `https://gladiator.fly.dev`, committed in
+`fly.toml` rather than copied into a second provider's settings. The older
+Vercel preview pattern remains in `origin.ts` as a general explicit option, but
+the shipping deployment neither configures nor depends on it.
 
-| Candidate | Admits | Verdict |
-| --------- | ------ | ------- |
-| Production origin only | `gladiator.vercel.app` | Airtight, and every preview fails to connect in a way that looks exactly like the server being down — so the person testing the preview files the wrong bug. |
-| `^https://[a-z0-9-]+\.vercel\.app$` | every preview | And every page every other Vercel customer on earth has ever deployed. A wildcard in a regex costume. |
-| **`^https://gladiator-[a-z0-9][a-z0-9-]*-<scope>\.vercel\.app$`** | this project's previews in this account | **Chosen.** |
-
-**The scope is the load-bearing half, and it is the part the obvious version
-gets wrong.** `^https://gladiator(-[a-z0-9-]+)?\.vercel\.app$` looks
-project-scoped and is not: anybody may create a Vercel project called
-`gladiator-x` and be handed `gladiator-x.vercel.app`, which that pattern
-admits. The account slug Vercel appends to every generated preview hostname is
-globally unique, so requiring it means an attacker would have to own our
-account.
-
-Three consequences, all deliberate:
-
-1. **Production goes in `ALLOWED_ORIGINS`, not in the pattern.** It is one fixed
-   string; a pattern that also matched it would need to allow an empty middle,
-   which is the hole above.
-2. **No `VERCEL_SCOPE`, no previews.** Not a looser fallback — none. A deploy
-   that forgot the variable loses preview connectivity, which is visible and
-   recoverable in one command; silently downgrading to the pattern that is not a
-   control is neither. The boot log says which state the process is in.
-3. **This is not authentication.** `Origin` is set by browsers, not by people.
-   It stops browser-based abuse and nothing else, in front of a server that is
-   authoritative anyway. The rest is GLAD-V7M6PQ.
+This is not authentication. `Origin` is set by browsers, not by people. It
+stops browser-based abuse and nothing else, in front of a server that is
+authoritative anyway. The rest is GLAD-V7M6PQ.
 
 ```sh
-flyctl secrets set ALLOWED_ORIGINS=https://gladiator.vercel.app
-flyctl secrets set VERCEL_SCOPE=<team-slug>     # the tail of a preview hostname
+ALLOWED_ORIGINS=https://gladiator.fly.dev       # committed in fly.toml
 ```
 
 ---

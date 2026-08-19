@@ -263,10 +263,10 @@ describe('protocol version mismatch', () => {
 
 describe('map mismatch', () => {
   it('refuses to play with a client holding a different arena', async () => {
-    // The deploy race this exists for: Vercel ships the client and Fly ships
-    // the server, never at the same instant. A browser holding yesterday's map
-    // and a server holding today's would simulate different worlds from
-    // identical inputs — and every symptom of that points at the netcode.
+    // A cached browser bundle may outlive the Fly image that served it. A
+    // browser holding yesterday's map and a server holding today's would
+    // simulate different worlds from identical inputs — and every symptom of
+    // that points at the netcode.
     const { server } = await start()
     const socket = connect(server.port)
     await new Promise((resolve) => socket.once('open', resolve))

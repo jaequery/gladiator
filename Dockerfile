@@ -35,13 +35,15 @@ COPY packages/bot/package.json packages/bot/
 COPY packages/client/package.json packages/client/
 COPY packages/server/package.json packages/server/
 
-# `--filter @gladiator/server...` installs the server and what it depends on,
-# and skips Babylon — a hundred megabytes this image has no use for.
-RUN pnpm install --frozen-lockfile --filter @gladiator/server...
+# The Fly image serves the browser bundle as well as the authoritative host, so
+# the build stage needs the client's renderer dependencies. The runtime stage
+# still receives only static output, the server bundle and `ws`.
+RUN pnpm install --frozen-lockfile --filter @gladiator/client...
 
 COPY tsconfig.base.json ./
 COPY packages/sim packages/sim
 COPY packages/bot packages/bot
+COPY packages/client packages/client
 COPY packages/server packages/server
 
 # The baked maps. `packages/server/src/map.ts` imports `maps/baked/*.json`
@@ -51,6 +53,8 @@ COPY packages/server packages/server
 # round.
 COPY maps/baked maps/baked
 
+ARG GLADIATOR_BUILD=dev
+RUN VITE_BUILD="$GLADIATOR_BUILD" VITE_SAME_ORIGIN_SERVER=1 pnpm --filter @gladiator/client run build
 RUN pnpm --filter @gladiator/server run build
 
 # The runtime dependency tree, built with npm so it is real directories rather
@@ -73,6 +77,7 @@ FROM node:22-slim AS runtime
 ENV NODE_ENV=production
 # Fly overrides this via fly.toml; the default keeps `docker run` working.
 ENV PORT=8080
+ENV CLIENT_DIST_DIR=/app/public
 
 # The commit this image was built from. Passed by `flyctl deploy --build-arg`,
 # and shown to a client whose protocol version does not match — "server is on
@@ -85,6 +90,7 @@ WORKDIR /app
 COPY --from=build /runtime/package.json ./package.json
 COPY --from=build /runtime/node_modules ./node_modules
 COPY --from=build /app/packages/server/dist/index.js ./index.js
+COPY --from=build /app/packages/client/dist ./public
 
 USER node
 EXPOSE 8080

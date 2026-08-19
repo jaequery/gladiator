@@ -162,9 +162,9 @@ their licence is ours to give. Reasoning and the measurements:
 
 ## Deploying
 
-The client is a static bundle on Vercel; the server is a long-lived process on
-Fly.io, and they talk over `wss://`. The runbook — what to run, the secrets it
-needs, and the recorded server timer jitter — is
+The static client bundle and long-lived server ship in one Fly.io image and use
+the same origin for HTTPS and WebSockets. The runbook — what to run, the secrets
+it needs, and the recorded server timer jitter — is
 [`docs/deploy.md`](./docs/deploy.md). The decisions it rests on are
 [`NOTES.md`](./NOTES.md): the region and the latency budget by geography, the
 origin allowlist, the machine class and what it costs, and the drain that means

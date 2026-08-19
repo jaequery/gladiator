@@ -98,9 +98,9 @@ describe('session handshake', () => {
   })
 
   it('refuses a client holding a different map, and says which two', () => {
-    // The scenario: Vercel has deployed and Fly has not (or the reverse). The
-    // protocol matches, the build string does not have to, and the two would
-    // simulate different worlds from identical inputs.
+    // The scenario: a cached browser bundle no longer matches the Fly image.
+    // The protocol matches, the build string does not have to, and the two
+    // would simulate different worlds from identical inputs.
     const step = applyFrame(fresh(), hello({ mapHash: 'deadbeef' }), IDENTITY, 0)
     expect(step.replies).toEqual([
       { t: 'map_mismatch', serverMapHash: MAP_HASH, clientMapHash: 'deadbeef' },

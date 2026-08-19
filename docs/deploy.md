@@ -1,7 +1,7 @@
 # Deploying Gladiator
 
-The client is a static bundle on **Vercel**. The server is a long-lived Node
-process on **Fly.io**. They talk over `wss://`.
+The client bundle and the long-lived Node server ship together on **Fly.io**.
+The page and its WebSocket use one origin.
 
 This document is the **runbook**: what to run, in what order, and what each
 setting is for. The decisions behind it — which region and the latency budget by
@@ -14,55 +14,14 @@ costs, and what a deploy does to a match in progress — are recorded in
 ## The shape
 
 ```
-  browser ──── https ────► Vercel (packages/client/dist, static)
-     │
-     └──────── wss:// ───► Fly.io (packages/server/dist/index.js, one process)
+  browser ── https + wss ──► Fly.io
+                              ├─ packages/client/dist (static)
+                              └─ packages/server/dist/index.js (rooms)
 ```
 
-Two hosts, because they are two different things: the client is bytes that never
-change between requests, and the server is a process that has to stay alive for
-the length of a match. There is no origin they can share that is good at both.
-
----
-
-## Vercel
-
-### Root Directory is the repo root — not `packages/client`
-
-This is the setting that costs an afternoon. Pointing Vercel's Root Directory at
-`packages/client` makes it run `pnpm install` *inside* that directory, where
-there is no `pnpm-workspace.yaml`. pnpm then has no workspace, `@gladiator/sim`
-is a `workspace:*` dependency with no workspace to resolve it in, and the build
-fails with a message about an unresolvable specifier that says nothing about the
-real cause.
-
-Root Directory stays at the repo root. `vercel.json`, committed at the root,
-carries the rest:
-
-| Field             | Value                                     |
-| ----------------- | ----------------------------------------- |
-| `installCommand`  | `pnpm install --frozen-lockfile`          |
-| `buildCommand`    | `pnpm --filter @gladiator/client run build`|
-| `outputDirectory` | `packages/client/dist`                    |
-| `framework`       | `null`                                    |
-
-`framework: null` matters too: a framework preset would look for a Vite config
-at the root, not find one, and quietly build nothing.
-
-### Environment variables — all three environments
-
-| Variable          | Value                          |
-| ----------------- | ------------------------------ |
-| `VITE_SERVER_URL` | `wss://gladiator.fly.dev`      |
-| `VITE_BUILD`      | `$VERCEL_GIT_COMMIT_SHA`       |
-
-Vite **inlines** these at build time. A preview deploy is its own build, so it
-bakes in whatever the *Preview* environment held at that moment — setting the
-variable only in Production means every preview ships pointing at nothing.
-
-When `VITE_SERVER_URL` is missing on an `https:` origin the client says so on
-screen rather than guessing a URL. A guess produces a browser error that names
-no cause, and the page just does not work.
+One container builds both packages. The Node HTTP edge serves Vite's files and
+upgrades WebSockets on the same listener; `Room` remains behind the transport
+boundary and knows nothing about either job.
 
 ---
 
@@ -75,21 +34,16 @@ flyctl launch --no-deploy --copy-config      # reads the committed fly.toml
 flyctl deploy --build-arg GLADIATOR_BUILD="$(git rev-parse --short HEAD)"
 ```
 
-Three secrets, and the deploy is wrong in a different way without each of them:
+Two secrets are required:
 
 ```sh
-# The production origin. Without it, only previews can connect.
-flyctl secrets set ALLOWED_ORIGINS=https://gladiator.vercel.app
-
-# The Vercel account slug preview hostnames end with. Without it, no preview
-# can connect at all — deliberately: `origin.ts` fails closed rather than
-# falling back to a pattern that is not a control.
-flyctl secrets set VERCEL_SCOPE=<team-slug>
-
 # Signs the resume tickets a drain hands out. It must be the SAME on every
 # machine, because the machine that reads a ticket is never the one that minted
 # it. Without it, every deploy ends every live match.
 flyctl secrets set RESUME_SECRET="$(openssl rand -hex 32)"
+
+# Lets GitHub deploy the one application after CI.
+flyctl tokens create deploy | gh secret set FLY_API_TOKEN
 ```
 
 Then check it:
@@ -107,10 +61,10 @@ every deploy:
 ```
 
 It exits non-zero when the machine is up but not fit to serve, and warns without
-failing on the two things a rollback would not fix. **It is not wired into CI
-yet** — see "Wiring the gate into CI" below.
+failing on the two things a rollback would not fix. CI runs it immediately after
+each Fly deploy.
 
-### Wiring the gate into CI
+### The deploy gate in CI
 
 `flyctl deploy` exiting 0 says a machine started. It does not say the machine is
 serving *this* commit, that it can hold a tick rate, or that a deploy will not
@@ -118,10 +72,10 @@ end every match on it — and those are the three ways this deploy is known to b
 able to go wrong, so the deploy job should read `/healthz` rather than trust an
 exit code.
 
-The change is two steps at the end of the `deploy-server` job in
-[`.github/workflows/ci.yml`](../.github/workflows/ci.yml), and it is **not
-applied yet**: modifying a workflow file needs a token with GitHub's `workflow`
-scope, which the agent that wrote this did not have. Paste it in:
+The `deploy-server` job in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)
+runs the verification after `flyctl deploy`. A missing `FLY_API_TOKEN` fails
+that job: silently skipping it would leave the public application absent or
+stale while CI appeared green.
 
 ```yaml
       - name: Deploy
@@ -182,16 +136,17 @@ on the internet can open a socket to this server unless the server checks. That
 is cross-site WebSocket hijacking, and the check at upgrade is the whole
 defence.
 
-Three things are allowed. The decision — and the trap in the obvious version of
-it — is [`NOTES.md` §2](../NOTES.md); the code is
+Three things may be allowed by the reusable policy. The shipping configuration
+uses only the first and third; the decision is [`NOTES.md` §2](../NOTES.md):
 `packages/server/src/origin.ts`:
 
-1. **Anything in `ALLOWED_ORIGINS`** — the production domain, verbatim.
+1. **Anything in `ALLOWED_ORIGINS`** — `https://gladiator.fly.dev`, verbatim.
 2. **`^https://gladiator-[a-z0-9][a-z0-9-]*-<scope>\.vercel\.app$`** — this
    project's preview deployments *in this Vercel account*. The scope is what
    makes it a control: anybody may create a project called `gladiator-x` and be
    handed `gladiator-x.vercel.app`, which a project-only pattern would admit.
-   With `VERCEL_SCOPE` unset there is no preview pattern at all.
+   With `VERCEL_SCOPE` unset, as it is in the Fly deployment, there is no
+   preview pattern at all.
 3. **`http://localhost:*`, and only when `NODE_ENV !== 'production'`.**
 
 A missing `Origin` header is refused. A browser always sends one; something that
@@ -597,10 +552,9 @@ SIGKILLed rather than drained writes nothing.
 ## Verifying a deploy
 
 ```sh
-# the client
-curl -sfo /dev/null -w '%{http_code}\n' https://<vercel-url>/
+# the client and server health, from the same app
+curl -sfo /dev/null -w '%{http_code}\n' https://gladiator.fly.dev/
 
-# the server
 curl -sf https://gladiator.fly.dev/healthz | jq
 
 # both together, in a real browser

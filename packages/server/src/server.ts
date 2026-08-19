@@ -110,6 +110,7 @@ import { createResumeAuthority, type ResumeAuthority } from './resume.ts'
 import { createTickScheduler, type Timer, type TickScheduler } from './scheduler.ts'
 import { CLOSE_NO_SUCH_ROOM } from './session.ts'
 import { DRAIN_RETRY_AFTER_MS } from './shutdown.ts'
+import { serveClient } from './static.ts'
 
 /** How often to ping an idle socket, to notice a peer that has gone away. */
 const HEARTBEAT_MS = 20_000
@@ -166,6 +167,8 @@ export type GladiatorServer = {
 
 export type StartOptions = {
   readonly config: ServerConfig
+  /** Vite output served by this same HTTP listener in the Fly image. */
+  readonly staticDir?: string
   /** Injected so tests can run without a live timer. */
   readonly jitter?: JitterProbe
   /** Injected, because `Room` is not allowed to read one. `clock.ts`. */
@@ -497,6 +500,7 @@ export function startServer(options: StartOptions): Promise<GladiatorServer> {
       response.end(JSON.stringify({ alive: true, build: config.build, draining }))
       return
     }
+    if (options.staticDir !== undefined && serveClient(request, response, options.staticDir)) return
     if (request.url === '/') {
       response.writeHead(200, { 'content-type': 'text/plain' })
       response.end(`gladiator server, build ${config.build}, protocol ${PROTOCOL_VERSION}\n`)

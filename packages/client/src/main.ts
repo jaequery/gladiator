@@ -732,7 +732,11 @@ async function boot(): Promise<void> {
   // Shot mode gets neither: a reference screenshot is a picture of a page with
   // nothing happening on it, and a page that opened a socket would be one where
   // something was.
-  const serverUrl = resolveServerUrl(import.meta.env.VITE_SERVER_URL, window.location)
+  const serverUrl = resolveServerUrl(
+    import.meta.env.VITE_SERVER_URL,
+    window.location,
+    import.meta.env.VITE_SAME_ORIGIN_SERVER === '1',
+  )
 
   /**
    * A match: the pipe to a host, and the host itself when it is in this tab.

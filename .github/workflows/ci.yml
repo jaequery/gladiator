@@ -82,9 +82,8 @@ jobs:
       - name: End-to-end
         run: pnpm run e2e
 
-  # Vercel deploys the client itself, from its own Git integration. Duplicating
-  # that here would mean two deploys racing for the same URL, so this job is
-  # only the Fly half.
+  # One Fly image contains the static client and the authoritative host. A
+  # successful deploy therefore moves the page and protocol together.
   deploy-server:
     name: fly deploy
     needs: [ci, e2e]
@@ -108,9 +107,9 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
           if [ -z "${FLY_API_TOKEN}" ]; then
-            echo "::warning::FLY_API_TOKEN is not set — skipping the Fly deploy."
+            echo "::error::FLY_API_TOKEN is not set — the authoritative server cannot be deployed."
             echo "Set it with: flyctl tokens create deploy | gh secret set FLY_API_TOKEN"
-            exit 0
+            exit 1
           fi
           # GLADIATOR_BUILD is what a client on a stale protocol is told to
           # reload for, so it has to mean something: it is the commit.
@@ -118,3 +117,6 @@ jobs:
             --remote-only \
             --wait-timeout 300 \
             --build-arg "GLADIATOR_BUILD=$(git rev-parse --short HEAD)"
+
+      - name: Verify the deployed server
+        run: ./scripts/verify-deploy.sh https://gladiator.fly.dev "$(git rev-parse --short HEAD)"
