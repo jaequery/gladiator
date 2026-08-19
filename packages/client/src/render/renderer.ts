@@ -43,6 +43,7 @@ import {
   hardwareScalingFor,
   ladderRung,
   nextPixelRatio,
+  renderFrame,
 } from './engine.ts'
 import {
   FRAME_BUDGET_MS,
@@ -316,7 +317,7 @@ export async function createRenderer(options: RendererOptions): Promise<Renderer
       // been put where it goes this frame.
       fx.update(view.fx ?? NO_EVENTS, view.rockets ?? NO_ROCKETS, tick, alpha, pose.position)
 
-      scene.render()
+      renderFrame(engine, scene)
       frames += 1
 
       if (options.adaptQuality === false) return
@@ -339,7 +340,7 @@ export async function createRenderer(options: RendererOptions): Promise<Renderer
       // Drawn again first, so the copy is of a frame that is definitely in the
       // buffer: without `preserveDrawingBuffer` the contents are only valid
       // until the browser composites, which is the end of this task.
-      scene.render()
+      renderFrame(engine, scene)
       const target = document.createElement('canvas')
       target.width = width
       target.height = height

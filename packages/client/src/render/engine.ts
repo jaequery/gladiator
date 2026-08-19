@@ -32,6 +32,7 @@
  */
 import { Engine } from '@babylonjs/core/Engines/engine'
 import type { AbstractEngine } from '@babylonjs/core/Engines/abstractEngine'
+import type { WebGPUEngineOptions } from '@babylonjs/core/Engines/webgpuEngine'
 
 /** Which backend actually came up. Reported, never branched on. */
 export type Backend = 'webgpu' | 'webgl2' | 'webgl1'
@@ -41,6 +42,37 @@ export type RenderEngine = {
   readonly backend: Backend
   /** One line for the HUD: backend, Babylon version, driver string. */
   readonly description: string
+}
+
+/**
+ * The part of an engine and scene needed to submit one frame.
+ *
+ * Kept structural so the lifecycle can be checked without constructing a GPU
+ * in a unit test. The production values are an {@link AbstractEngine} and a
+ * Babylon `Scene`.
+ */
+export type FrameEngine = Pick<AbstractEngine, 'beginFrame' | 'endFrame'>
+export type FrameScene = { render(): void }
+
+/**
+ * Draw and submit one frame when the application owns the animation loop.
+ *
+ * `AbstractEngine.runRenderLoop()` normally puts these calls around the render
+ * callback. Gladiator cannot use that loop because `main.ts` owns the one
+ * clock read that drives input, simulation, networking and rendering. WebGL
+ * submits draws eagerly and happened to tolerate a bare `scene.render()`;
+ * WebGPU records commands and submits them from `endFrame()`, so omitting this
+ * lifecycle leaves a healthy, ready scene displaying only the clear colour.
+ */
+export function renderFrame(engine: FrameEngine, scene: FrameScene): void {
+  engine.beginFrame()
+  try {
+    scene.render()
+  } finally {
+    // Submit even when Babylon throws while drawing, so the engine does not
+    // carry an open frame into a later recovery or disposal path.
+    engine.endFrame()
+  }
 }
 
 /**
@@ -69,6 +101,32 @@ export const PIXEL_RATIO_LADDER: readonly number[] = [2, 1.5, 1.25, 1, 0.85, 0.7
  * evaluation window, forever.
  */
 export const RECOVER_FRACTION = 0.7
+
+/**
+ * The GPU features the KTX2 decoder may transcode a 2D texture into.
+ *
+ * A WebGPU adapter advertising a feature is not enough: it has to be requested
+ * when the device is created before Babylon exposes the matching texture cap.
+ * `WebGPUEngine` filters this list against the adapter, so a machine may enable
+ * any subset and the decoder chooses among the formats it actually received.
+ */
+export const WEBGPU_TEXTURE_FEATURES: readonly GPUFeatureName[] = [
+  'texture-compression-bc',
+  'texture-compression-etc2',
+  'texture-compression-astc',
+]
+
+/** A fresh options object because Babylon filters `requiredFeatures` in place. */
+export function createWebGPUOptions(): WebGPUEngineOptions {
+  return {
+    antialias: true,
+    stencil: false,
+    audioEngine: false,
+    powerPreference: 'high-performance',
+    adaptToDeviceRatio: false,
+    deviceDescriptor: { requiredFeatures: [...WEBGPU_TEXTURE_FEATURES] },
+  }
+}
 
 /**
  * How far over budget the typical frame has to be before the dial reacts.
@@ -202,13 +260,7 @@ async function tryWebGPU(canvas: HTMLCanvasElement): Promise<AbstractEngine | nu
     // concept, and the one thing that reads the canvas back — the reference
     // screenshot — pins itself to WebGL precisely so the committed image does
     // not depend on which backend the machine happened to offer.
-    const engine = new WebGPUEngine(canvas, {
-      antialias: true,
-      stencil: false,
-      audioEngine: false,
-      powerPreference: 'high-performance',
-      adaptToDeviceRatio: false,
-    })
+    const engine = new WebGPUEngine(canvas, createWebGPUOptions())
     await engine.initAsync()
     return engine
   } catch {

@@ -527,6 +527,26 @@ try {
     `${drawnSnapshot?.frames ?? 0} frames of ${drawnSnapshot?.triangles ?? 0} triangles`,
   )
 
+  // A frame counter only proves that `scene.render()` returned. WebGPU records
+  // commands there and submits them in `engine.endFrame()`, so the client once
+  // counted healthy frames over a canvas containing only its clear colour.
+  // Read back a tiny copy of the live view: at Crucible's fixed first spawn the
+  // arena fills nearly every pixel, while a missing submission or failed KTX2
+  // fallback leaves almost all of them dark.
+  const framebuffer = await tab.evaluate(() => {
+    const shot = window.__gladiator.capture(64, 40)
+    let arenaPixels = 0
+    for (let i = 0; i < shot.data.length; i += 4) {
+      if (shot.data[i] + shot.data[i + 1] + shot.data[i + 2] > 90) arenaPixels += 1
+    }
+    return { arenaPixels, pixels: shot.data.length / 4 }
+  })
+  check(
+    'the live framebuffer contains the arena, not only its clear colour',
+    framebuffer.arenaPixels / framebuffer.pixels > 0.75,
+    `${framebuffer.arenaPixels}/${framebuffer.pixels} arena pixels`,
+  )
+
   // --- pointer lock -------------------------------------------------------
   await tab.locator('#stage').click()
   const locked = await waitFor('pointer lock', async () =>

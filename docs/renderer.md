@@ -172,6 +172,41 @@ import time and has nothing to say to an adapter, which is why that assertion
 runs in CI with no GPU under it — and it is the shape to copy when the client
 starts using the sixth extension.
 
+### A manual animation loop still owes the engine a frame
+
+`main.ts` owns the browser's `requestAnimationFrame` loop because it reads the
+clock once and hands the same interval to input, simulation, networking and the
+renderer. That means it cannot hand timing to Babylon's `runRenderLoop`, but it
+still owes Babylon the lifecycle that loop would have provided:
+
+```ts
+engine.beginFrame()
+scene.render()
+engine.endFrame()
+```
+
+`renderFrame` in `render/engine.ts` is the one place that bracket lives, and it
+also wraps the extra draw used by frame capture. WebGL submits draw calls
+eagerly and tolerated a bare `scene.render()`. WebGPU records them and submits
+the command buffer from `endFrame()`, so leaving the bracket out produces the
+particularly deceptive failure where the scene is ready, the frame counter is
+advancing, and the canvas remains black. The smoke test reads back a small live
+frame rather than trusting the counter.
+
+### Adapter support is not device support
+
+WebGPU features are opt-in when the device is created. An adapter may advertise
+BC, ETC2 or ASTC texture compression, but Babylon reports the matching KTX2
+capability only if the feature was requested in `deviceDescriptor`. Without
+that request the decoder sees no compressed target and the arena's lightmap can
+collapse to its 1×1 fallback.
+
+`WEBGPU_TEXTURE_FEATURES` names the three 2D compression families the asset
+pipeline can choose. `createWebGPUOptions` passes them to Babylon, which filters
+the list against the adapter before requesting the device; no unsupported
+feature is made mandatory, and the KTX2 decision tree sees exactly the formats
+that were enabled.
+
 ---
 
 ## §4 Pixel ratio is the quality dial

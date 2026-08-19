@@ -4,11 +4,14 @@ import {
   MAX_PIXEL_RATIO,
   PIXEL_RATIO_LADDER,
   RECOVER_FRACTION,
+  WEBGPU_TEXTURE_FEATURES,
   clampPixelRatio,
+  createWebGPUOptions,
   hardwareScalingFor,
   ladderRung,
   loadWebGPU,
   nextPixelRatio,
+  renderFrame,
 } from './engine.ts'
 import { FRAME_BUDGET_MS, summarise } from './frameStats.ts'
 
@@ -138,5 +141,49 @@ describe('loadWebGPU', () => {
     // import registers both, and a fix that only satisfied the assertion above
     // would still fall over on the first `finishDetail`.
     expect(typeof proto.updateDynamicTexture).toBe('function')
+  })
+})
+
+describe('WebGPU texture features', () => {
+  it('requests every compressed 2D target the KTX2 pipeline can choose', () => {
+    const requested = createWebGPUOptions().deviceDescriptor?.requiredFeatures ?? []
+    expect(Array.from(requested)).toEqual(WEBGPU_TEXTURE_FEATURES)
+    expect(WEBGPU_TEXTURE_FEATURES).toEqual([
+      'texture-compression-bc',
+      'texture-compression-etc2',
+      'texture-compression-astc',
+    ])
+  })
+})
+
+describe('renderFrame', () => {
+  it('brackets a draw with the engine frame that submits WebGPU commands', () => {
+    const calls: string[] = []
+    const engine = {
+      beginFrame: () => calls.push('begin'),
+      endFrame: () => calls.push('end'),
+    }
+    const scene = { render: () => calls.push('render') }
+
+    renderFrame(engine, scene)
+
+    expect(calls).toEqual(['begin', 'render', 'end'])
+  })
+
+  it('ends a frame whose scene render throws', () => {
+    const calls: string[] = []
+    const engine = {
+      beginFrame: () => calls.push('begin'),
+      endFrame: () => calls.push('end'),
+    }
+    const scene = {
+      render: () => {
+        calls.push('render')
+        throw new Error('draw failed')
+      },
+    }
+
+    expect(() => renderFrame(engine, scene)).toThrow('draw failed')
+    expect(calls).toEqual(['begin', 'render', 'end'])
   })
 })
