@@ -26,14 +26,11 @@ kill_timeout = "30s"
 [env]
   PORT = "8080"
   NODE_ENV = "production"
-  # VERCEL_SCOPE is the Vercel team slug preview hostnames end with, and it is
-  # what makes the preview origin pattern a control rather than a wildcard
-  # (`packages/server/src/origin.ts`). Deliberately not committed with a guessed
-  # value: with it unset the server admits no previews at all and says so at
-  # boot, which is a visible failure. Set it with the real slug:
-  #   flyctl secrets set VERCEL_SCOPE=<team-slug>
+  # The browser bundle is served by this same process, so its one production
+  # origin is known and versioned with the deployment.
+  ALLOWED_ORIGINS = "https://gladiator.fly.dev"
   #
-  # RESUME_SECRET is the other one, and matches survive a deploy only if it is
+  # RESUME_SECRET is secret, and matches survive a deploy only if it is
   # set and identical on every machine:
   #   flyctl secrets set RESUME_SECRET="$(openssl rand -hex 32)"
 

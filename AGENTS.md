@@ -384,9 +384,9 @@ falling does not count as reaching, because a ledge you can only drop on to is a
 ledge you can only leave.
 
 Client and server exchange `mapHash` in the handshake and refuse the session if
-it differs, because the client deploys to Vercel and the server to Fly and
-never at the same instant. `PROTOCOL_VERSION` covers the message shapes; the
-map hash covers the world they describe.
+it differs. They ship in one Fly image, but a browser may still hold yesterday's
+cached bundle across a deploy. `PROTOCOL_VERSION` covers the message shapes;
+the map hash covers the world they describe.
 
 **The client and the server simulate the map they draw.** Both load `arena1`,
 verify its hash, exchange it, and tick `LoadedMap.world` — the collision world

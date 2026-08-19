@@ -11,8 +11,9 @@
  * `?room=H7K2Q9` is the whole of it. A query parameter rather than a fragment
  * because the fragment is not sent anywhere and this one has to survive being
  * pasted into a chat window that rewrites links, and rather than a path segment
- * because the client is a static bundle on Vercel and a path would need a
- * rewrite rule to serve the same `index.html`.
+ * because the client is a static bundle and a path would need a rewrite rule
+ * in both the Fly static edge and every local host to serve the same
+ * `index.html`.
  *
  * It is also the reason there is no client-side "state" to lose: the code in
  * the address bar *is* the session, so a reload rejoins the same match and a

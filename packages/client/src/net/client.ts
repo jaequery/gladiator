@@ -441,18 +441,20 @@ export type RedialContext = {
 /**
  * Where the server is.
  *
- * `VITE_SERVER_URL` is inlined at build time, which means it has to be set in
- * *every* Vercel environment — Production, Preview and Development — or a
- * preview deploy ships with whatever Preview happens to hold. When it is
- * missing entirely we say so rather than guessing: a guessed `wss://` URL on a
- * deployed origin fails with a browser error that names no cause, and the
- * player sees a page that simply does not work.
+ * The Fly image opts into same-origin WebSockets at build time. A separately
+ * hosted client can still provide `VITE_SERVER_URL`; when neither is present
+ * on HTTPS we say so rather than guessing a URL that may not be authoritative.
  */
 export function resolveServerUrl(
   configured: string | undefined,
-  location: { protocol: string; hostname: string },
+  location: { protocol: string; hostname: string; host?: string },
+  sameOrigin = false,
 ): string | null {
   if (configured !== undefined && configured !== '') return configured
+  if (sameOrigin) {
+    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
+    return `${protocol}//${location.host ?? location.hostname}`
+  }
   // Local development: the server is the one from `pnpm --filter @gladiator/server dev`.
   if (location.protocol !== 'https:') return `ws://${location.hostname}:8787`
   return null

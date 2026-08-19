@@ -53,7 +53,13 @@ const counters = countSimEvents({
   },
 })
 
-const server = await startServer({ config, jitter, log })
+const staticDir = process.env['CLIENT_DIST_DIR']?.trim() ?? ''
+const server = await startServer({
+  config,
+  jitter,
+  log,
+  ...(staticDir === '' ? {} : { staticDir }),
+})
 
 log('server.listening', {
   port: server.port,

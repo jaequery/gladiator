@@ -161,6 +161,23 @@ describe('resolveServerUrl', () => {
     )
   })
 
+  it('uses the page origin when the deployment serves client and host together', () => {
+    expect(
+      resolveServerUrl(
+        undefined,
+        { protocol: 'https:', hostname: 'gladiator.fly.dev', host: 'gladiator.fly.dev' },
+        true,
+      ),
+    ).toBe('wss://gladiator.fly.dev')
+    expect(
+      resolveServerUrl(
+        undefined,
+        { protocol: 'http:', hostname: '127.0.0.1', host: '127.0.0.1:8787' },
+        true,
+      ),
+    ).toBe('ws://127.0.0.1:8787')
+  })
+
   it('refuses to guess on a deployed origin', () => {
     // Guessing here produces a browser error that names no cause. Better to
     // say "VITE_SERVER_URL is not set" on screen.

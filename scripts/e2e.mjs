@@ -792,9 +792,9 @@ try {
   )
 
   // --- the map mismatch path ----------------------------------------------
-  // The deploy race: Vercel ships the client and Fly ships the server, and for
-  // a minute or two after either one, a page can be holding a different arena
-  // than the server is authoritative over. `?map=` forces that state.
+  // A browser may keep a cached bundle across a Fly deploy and briefly hold a
+  // different arena than the server is authoritative over. `?map=` forces
+  // that state.
   await tab.goto(`${STATIC_ORIGIN}/?host=1&map=deadbeef`, { waitUntil: 'load' })
   const mapShown = await waitFor('the map-mismatch banner', async () => {
     const text = await banner.textContent()
