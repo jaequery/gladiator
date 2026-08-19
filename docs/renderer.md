@@ -64,14 +64,14 @@ Past one splash radius it is cleared rather than pushed: there is no honest way
 to smooth a teleport, and carrying two hundred units of offset would draw the
 player somewhere they demonstrably are not.
 
-### Babylon's Euler angles are Quake's angles
+### Babylon's pitch has the opposite sign to Quake's
 
-`camera.rotation = (pitch, yaw, 0)`, in radians, unchanged from the simulation.
-That is not a coincidence: Babylon composes the rotation as `Rx(pitch)·Ry(yaw)`
-applied to its forward vector `(0, 0, -1)`, and running that through
-`QUAKE_TO_ENGINE` gives exactly Quake's `(cos p cos y, cos p sin y, sin p)`.
-`view.test.ts` asserts it against a real Babylon camera under `NullEngine`
-rather than trusting the derivation.
+`camera.rotation = (-pitch, yaw, 0)`, in radians. Quake pitch is positive
+downward; Babylon camera pitch is positive upward. Yaw has the same sign in
+both frames. `view.test.ts` compares a real Babylon camera under `NullEngine`
+with the simulation's `angleVectors` direction, so this boundary is tested
+against the weapon trajectory rather than against a second copy of its own
+derivation.
 
 ---
 

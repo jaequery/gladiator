@@ -41,11 +41,11 @@ describe('listenerVectors', () => {
   })
 
   it('tilts the forward vector with pitch, so elevation is audible', () => {
-    const up = listenerVectors({ ...AT_ORIGIN, pitchUnits: pitchUnitsFromDegrees(90) })
+    const up = listenerVectors({ ...AT_ORIGIN, pitchUnits: pitchUnitsFromDegrees(-90) })
     // Straight up is `+y` in the engine frame. Not exactly 1, and the shortfall
     // is the interesting part: `pitchUnitsFromDegrees` clamps at 89 degrees, so
-    // the listener looks as far up as the *simulation* lets a player look, and
-    // the remaining degree leans forward at `-z`.
+    // negative Quake pitch looks as far up as the simulation lets a player
+    // look, and the remaining degree leans forward at `-z`.
     expect(up.forward[1]).toBeCloseTo(Math.sin((89 * Math.PI) / 180), 3)
     expect(up.forward[0]).toBeCloseTo(0, 6)
     expect(up.forward[2]).toBeLessThan(0)

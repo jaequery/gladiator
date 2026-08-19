@@ -131,7 +131,10 @@ export function commandFrom(
     forwardMove: forward - back,
     sideMove: right - left,
     yaw: yawUnitsFromDegrees(angles.yawDegrees),
-    pitch: pitchUnitsFromDegrees(angles.pitchDegrees),
+    // Human-facing pitch is positive up; Quake's `UserCmd` pitch is positive
+    // down. Convert once at the input boundary so every command producer and
+    // both peers keep the simulation's convention.
+    pitch: pitchUnitsFromDegrees(-angles.pitchDegrees),
     buttons: (jump ? BUTTON_JUMP : 0) | (attack ? BUTTON_ATTACK : 0),
     weapon,
   }

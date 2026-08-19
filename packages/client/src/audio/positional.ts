@@ -68,7 +68,7 @@ export type ListenerPose = {
   readonly origin: Vec3
   /** View yaw in angle units. */
   readonly yawUnits: number
-  /** View pitch in angle units. */
+  /** View pitch in angle units, positive downward as in Quake. */
   readonly pitchUnits: number
 }
 
