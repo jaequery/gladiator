@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { PLAYER_MAXS, PLAYER_MINS } from '../bbox.ts'
+import { PLAYER_HEIGHT, PLAYER_MAXS, PLAYER_MINS } from '../bbox.ts'
 import { boxBrush, createCollisionWorld } from '../collide.ts'
 import { FELT_GRAVITY, JUMP_VELOCITY, RUN_SPEED, createPmoveBody, pmove } from '../pmove/index.ts'
 import { STEP_SIZE } from '../slidemove.ts'
@@ -93,9 +93,9 @@ function canReach(height: number, launch: number, pressJump: boolean): boolean {
 
 describe('the four techniques', () => {
   it('are the ones §5.4 names', () => {
-    expect(TECHNIQUES.map((t) => t.height)).toEqual([18, 48, 166, 395])
+    expect(TECHNIQUES.map((t) => t.height)).toEqual([18, 48, 201, 448])
     expect(TECHNIQUES.map((t) => t.key)).toEqual(['step', 'jump', 'rocket-jump', 'jump-rocket'])
-    expect(MAX_CLIMB).toBe(395)
+    expect(MAX_CLIMB).toBe(448)
   })
 
   it('state heights the real pmove reaches, to the unit', () => {
@@ -114,8 +114,8 @@ describe('the four techniques', () => {
   it('are derived from the movement constants rather than typed beside them', () => {
     expect(FELT_GRAVITY).toBe(750)
     expect(apexOf(JUMP_VELOCITY)).toBeCloseTo(48.6, 6)
-    expect(apexOf(ROCKET_JUMP_LAUNCH)).toBeCloseTo(166.667, 3)
-    expect(apexOf(JUMP_VELOCITY + ROCKET_JUMP_LAUNCH)).toBeCloseTo(395.267, 3)
+    expect(apexOf(ROCKET_JUMP_LAUNCH)).toBeCloseTo(201.667, 3)
+    expect(apexOf(JUMP_VELOCITY + ROCKET_JUMP_LAUNCH)).toBeCloseTo(448.267, 3)
   })
 
   it('each get a running player on to a ledge of exactly their height', () => {
@@ -164,22 +164,36 @@ describe('horizontal reach', () => {
  * The sampled world
  * ----------------------------------------------------------------------- */
 
+/**
+ * The fixture room's ceiling, derived rather than typed.
+ *
+ * The tests below stand a pillar 25 units out of reach of everything and
+ * expect the bake to call it unreachable — which only means anything if a
+ * player could *stand* on top of it, so the room has to clear
+ * `MAX_CLIMB + 25 + PLAYER_HEIGHT` with room to spare. A literal 512 was fine
+ * while the tallest climb was 395 and silently stopped being a ledge at all
+ * when the climb grew: no headroom, no ledge, no diagnostic, two green tests
+ * asserting nothing.
+ */
+const CEILING = MAX_CLIMB + 25 + PLAYER_HEIGHT + 64
+const SHELL = CEILING + 64
+
 /** A sealed room with two legal spawns, plus whatever the test puts in it. */
 function room(...brushes: MapBrush[]): MapSource {
   const shell: MapBrush[] = [
     { kind: 'box', surface: 'shell', mins: [-576, -576, -64], maxs: [576, 576, 0] },
-    { kind: 'box', surface: 'shell', mins: [-576, -576, 512], maxs: [576, 576, 576] },
-    { kind: 'box', surface: 'shell', mins: [512, -576, -64], maxs: [576, 576, 576] },
-    { kind: 'box', surface: 'shell', mins: [-576, -576, -64], maxs: [-512, 576, 576] },
-    { kind: 'box', surface: 'shell', mins: [-576, 512, -64], maxs: [576, 576, 576] },
-    { kind: 'box', surface: 'shell', mins: [-576, -576, -64], maxs: [576, -512, 576] },
+    { kind: 'box', surface: 'shell', mins: [-576, -576, CEILING], maxs: [576, 576, SHELL] },
+    { kind: 'box', surface: 'shell', mins: [512, -576, -64], maxs: [576, 576, SHELL] },
+    { kind: 'box', surface: 'shell', mins: [-576, -576, -64], maxs: [-512, 576, SHELL] },
+    { kind: 'box', surface: 'shell', mins: [-576, 512, -64], maxs: [576, 576, SHELL] },
+    { kind: 'box', surface: 'shell', mins: [-576, -576, -64], maxs: [576, -512, SHELL] },
     // Something standing in the line between the two spawns. `map/validate.ts`
     // refuses a map where no two spawns are both far enough apart and out of
     // each other's sight, and a bare room is exactly that map. Floor to
     // ceiling, so it adds no ledge for the reachability pass to have an opinion
     // about, and off to one corner so it is clear of the brushes the tests
     // below put around the origin.
-    { kind: 'box', surface: 'shell', mins: [224, 288, 0], maxs: [352, 416, 512] },
+    { kind: 'box', surface: 'shell', mins: [224, 288, 0], maxs: [352, 416, CEILING] },
   ]
   return {
     name: 'fixture',

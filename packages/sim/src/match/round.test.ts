@@ -733,15 +733,15 @@ function selfSplash(state: GameState, player: EntityState): void {
 }
 
 describe('self-damage: full', () => {
-  it('takes 33 armour and 17 health from a rocket jump, and still launches at 500', () => {
+  it('takes 33 armour and 17 health from a rocket jump, and still launches at 550', () => {
     const { state, player } = standing(SelfDamage.Full)
     rocketJump(state)
 
     expect(player.armor).toBe(67)
     expect(player.health).toBe(83)
-    // Not exactly 500: the pitch clamp is 89 degrees rather than 90, so the
+    // Not exactly 550: the pitch clamp is 89 degrees rather than 90, so the
     // rocket drifts a fraction of a unit sideways over its first 45.
-    expect(player.velocity[2]).toBeCloseTo(500, 1)
+    expect(player.velocity[2]).toBeCloseTo(550, 1)
   })
 
   it('allows exactly three survivable full-power rocket jumps; the fourth kills', () => {
@@ -767,13 +767,13 @@ describe('self-damage: full', () => {
 })
 
 describe('self-damage: armor_only', () => {
-  it('costs 33 armour and 0 health, and still launches at 500', () => {
+  it('costs 33 armour and 0 health, and still launches at 550', () => {
     const { state, player } = standing(SelfDamage.ArmorOnly)
     rocketJump(state)
 
     expect(player.armor).toBe(SPAWN_ARMOR - 33)
     expect(player.health).toBe(SPAWN_HEALTH)
-    expect(player.velocity[2]).toBeCloseTo(500, 1)
+    expect(player.velocity[2]).toBeCloseTo(550, 1)
   })
 
   it('never takes health, however many times you do it', () => {
@@ -803,20 +803,20 @@ describe('self-damage: armor_only', () => {
 })
 
 describe('self-damage: none', () => {
-  it('costs nothing at all and still launches at 500', () => {
+  it('costs nothing at all and still launches at 550', () => {
     const { state, player } = standing(SelfDamage.None)
     rocketJump(state)
 
     expect(player.armor).toBe(SPAWN_ARMOR)
     expect(player.health).toBe(SPAWN_HEALTH)
-    expect(player.velocity[2]).toBeCloseTo(500, 1)
+    expect(player.velocity[2]).toBeCloseTo(550, 1)
   })
 
   it('still arms the knockback window, so a jump cannot be cancelled on landing', () => {
     const { state, player } = standing(SelfDamage.None)
     selfSplash(state, player)
 
-    expect(player.velocity[2]).toBe(500)
+    expect(player.velocity[2]).toBe(550)
     expect(player.knockbackTicks).toBe(25)
   })
 })
@@ -826,7 +826,7 @@ describe('self-damage: health_only', () => {
     expect(createGameState(1).match.rules.selfDamage).toBe(SelfDamage.HealthOnly)
   })
 
-  it('never touches the armour, and still launches at 500', () => {
+  it('never touches the armour, and still launches at 550', () => {
     const { state, player } = standing(SelfDamage.HealthOnly)
     rocketJump(state)
 
@@ -834,7 +834,7 @@ describe('self-damage: health_only', () => {
     // rocket is the same number. 100 halved is 50, and all 50 of it is health.
     expect(player.armor).toBe(SPAWN_ARMOR)
     expect(player.health).toBe(SPAWN_HEALTH - 50)
-    expect(player.velocity[2]).toBeCloseTo(500, 1)
+    expect(player.velocity[2]).toBeCloseTo(550, 1)
   })
 
   it('leaves the armour alone however many times you do it, and however small', () => {
@@ -889,7 +889,7 @@ describe('every mode', () => {
       return player.velocity[2]
     })
 
-    expect(launches).toEqual([500, 500, 500, 500])
+    expect(launches).toEqual([550, 550, 550, 550])
   })
 
   it('charges an enemy rocket the same 66/34 whichever one is in force', () => {

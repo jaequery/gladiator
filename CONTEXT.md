@@ -49,11 +49,11 @@ choice changes the skill ceiling and not just the numbers: `full` (Quake's
 halving), `armor_only` (the armour pays and the health remainder is discarded),
 `none`, and **`health_only`** (the default since GLAD-7Z7MMC: the armour is
 never consulted, so your own rocket cannot cost you any, and the halved figure
-comes off the health). The launch is 500 qu/s in all four, because knockback is
+comes off the health). The launch is 550 qu/s in all four, because knockback is
 derived before any of them apply. §7.2.
 
 **Rocket jump** — firing a rocket at your feet and riding the splash impulse.
-The reason self-damage exists. Worth 500 qu/s standing and 770 with a jump on
+The reason self-damage exists. Worth 550 qu/s standing and 820 with a jump on
 the same tick; what that measurably climbs to is `docs/physics-spec.md` §3.4.
 
 **Splash** — the damage an explosion does to everything near it, falling off
@@ -1000,8 +1000,8 @@ under it is walkable, and there is arena above it rather than sky. What a map is
 checked ledge by ledge for is *reachability*.
 
 **Climb** — how far up it is from one standable surface to the next. The
-movement makes exactly four: **18** stepped, **48** jumped, **166**
-rocket-jumped, **395** with a jump and a rocket. Every ledge in a map has to be
+movement makes exactly four: **18** stepped, **48** jumped, **201**
+rocket-jumped, **448** with a jump and a rocket. Every ledge in a map has to be
 within one of them of something below it. `docs/physics-spec.md` §5.4.
 
 **Reachability** — the bake-time question "can a player get to every ledge in

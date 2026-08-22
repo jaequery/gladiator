@@ -35,6 +35,61 @@ function heard(states: readonly PlayerNetState[], self = false) {
 
 const running: Vec3 = [320, 0, 0]
 
+/** A body that has just been killed: dead flag set, health at the floor. */
+const DEAD = { flags: EntityFlag.Dead, health: 0 } as const
+
+describe('a death', () => {
+  it('replaces the hit confirmation rather than doubling it up', () => {
+    // The killing blow is one event, so it gets one confirmation. Before R4 it
+    // rang the same `hit` as every blow before it and nothing else at all.
+    const { cues } = heard([net({ health: 40 }), net(DEAD)])
+    const sounds = cues.map((cue) => cue.sound)
+
+    expect(sounds).toContain(SoundId.Frag)
+    expect(sounds).toContain(SoundId.Death)
+    expect(sounds).not.toContain(SoundId.Hit)
+  })
+
+  it('puts the body on the world bus and the frag on feedback', () => {
+    // The two halves of the same moment, and the buses are the difference: you
+    // hear *where* they fell, and you hear *that you did it* from nowhere.
+    const { cues } = heard([net({ health: 40, origin: [300, -200, 0] }), net({ ...DEAD, origin: [300, -200, 0] })])
+
+    const death = cues.find((cue) => cue.sound === SoundId.Death)
+    const frag = cues.find((cue) => cue.sound === SoundId.Frag)
+    expect(death).toMatchObject({ bus: Bus.World, origin: [300, -200, 0] })
+    expect(frag).toMatchObject({ bus: Bus.Feedback, origin: null })
+  })
+
+  it('gives your own death no frag, and hears it as feedback', () => {
+    // You do not get a kill confirmation for dying.
+    const { cues } = heard([net({ health: 40 }), net(DEAD)], true)
+    const sounds = cues.map((cue) => cue.sound)
+
+    expect(sounds).toContain(SoundId.Death)
+    expect(sounds).not.toContain(SoundId.Frag)
+    expect(sounds).not.toContain(SoundId.Damage)
+    expect(cues.find((cue) => cue.sound === SoundId.Death)).toMatchObject({
+      bus: Bus.Feedback,
+      origin: null,
+    })
+  })
+
+  it('fires once, on the edge, and not for every frame of lying there', () => {
+    const { cues } = heard([net({ health: 40 }), net(DEAD), net(DEAD), net(DEAD)])
+
+    expect(cues.filter((cue) => cue.sound === SoundId.Death)).toHaveLength(1)
+    expect(cues.filter((cue) => cue.sound === SoundId.Frag)).toHaveLength(1)
+  })
+
+  it('says nothing when a round stands the same body back up', () => {
+    // Dead to alive is the respawn, and it is not an edge this fold reports.
+    const { cues } = heard([net(DEAD), net({ health: 100 })])
+
+    expect(cues.map((cue) => cue.sound)).not.toContain(SoundId.Death)
+  })
+})
+
 describe('the first sight of a player', () => {
   /**
    * The bug this stops: a player joining, or coming back from a round reset,

@@ -1,8 +1,11 @@
+import { DEFAULT_MATCH_RULES, SelfDamage, isSelfDamageMode, maxRoundsFor } from '@gladiator/sim'
 import { describe, expect, it } from 'vitest'
 
 import { FOV_RADIANS } from '../render/scene.ts'
 import {
   BOT_DIFFICULTIES,
+  SELF_DAMAGE_CHOICES,
+  rulesFromSettings,
   BOT_DIFFICULTY_SKILL,
   CM_PER_INCH,
   DEFAULT_SETTINGS,
@@ -103,6 +106,42 @@ describe('normalizeSettings', () => {
   it('falls back to medium for an absent or invalid bot difficulty', () => {
     expect(normalizeSettings({}).botDifficulty).toBe('medium')
     expect(normalizeSettings({ botDifficulty: 'nightmare' as never }).botDifficulty).toBe('medium')
+  })
+})
+
+describe('the match rules', () => {
+  it('default to exactly what the simulation ships', () => {
+    // Opening Settings for the first time must not change the game somebody
+    // was already playing.
+    expect(DEFAULT_SETTINGS.selfDamage).toBe(DEFAULT_MATCH_RULES.selfDamage)
+    expect(DEFAULT_SETTINGS.roundsToWin).toBe(DEFAULT_MATCH_RULES.roundsToWin)
+    expect(rulesFromSettings(DEFAULT_SETTINGS)).toEqual(DEFAULT_MATCH_RULES)
+  })
+
+  it('carries a chosen self-damage mode into MatchRules', () => {
+    const rules = rulesFromSettings({ ...DEFAULT_SETTINGS, selfDamage: SelfDamage.None })
+    expect(rules.selfDamage).toBe(SelfDamage.None)
+  })
+
+  it('re-derives the round cap, so a first-to-1 can actually end', () => {
+    // The trap `matchRules` exists to avoid: a first-to-1 whose cap was still
+    // the default nine is a match nobody can win.
+    const rules = rulesFromSettings({ ...DEFAULT_SETTINGS, roundsToWin: 1 })
+    expect(rules.roundsToWin).toBe(1)
+    expect(rules.maxRounds).toBe(maxRoundsFor(1))
+    expect(rules.maxRounds).toBeLessThan(DEFAULT_MATCH_RULES.maxRounds)
+  })
+
+  it('falls back to the defaults for junk out of storage', () => {
+    const junk = { selfDamage: 99, roundsToWin: 7 } as unknown as Partial<Settings>
+    const settings = normalizeSettings(junk)
+    expect(settings.selfDamage).toBe(DEFAULT_MATCH_RULES.selfDamage)
+    expect(settings.roundsToWin).toBe(DEFAULT_MATCH_RULES.roundsToWin)
+  })
+
+  it('offers only modes the simulation implements', () => {
+    for (const choice of SELF_DAMAGE_CHOICES) expect(isSelfDamageMode(choice.mode)).toBe(true)
+    expect(new Set(SELF_DAMAGE_CHOICES.map((c) => c.mode)).size).toBe(SELF_DAMAGE_CHOICES.length)
   })
 })
 

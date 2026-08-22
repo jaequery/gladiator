@@ -112,6 +112,7 @@ import {
   BOT_DIFFICULTY_SKILL,
   createSettingsStore,
   degreesPerCount,
+  rulesFromSettings,
   verticalFovRadians,
 } from './ui/settings.ts'
 import { bounceReason, createBouncePage, probeDevice } from './ui/unsupported.ts'
@@ -843,6 +844,10 @@ async function boot(): Promise<void> {
       map: CLIENT_MAP,
       build: BUILD,
       record: dev,
+      // The rules this player chose in Settings, read now rather than held:
+      // `MatchRules` is hashed and agreed at tick zero, so the moment a match
+      // is created is the only moment it can be decided.
+      rules: rulesFromSettings(settings.value),
       opponent: (room) =>
         createBotPeer({
           room,

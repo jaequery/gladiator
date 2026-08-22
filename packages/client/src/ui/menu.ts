@@ -35,6 +35,8 @@ import { type CopyEnv, copyMessage, copyText } from './clipboard.ts'
 import { formatRoomCode, readTypedCode } from './roomFlow.ts'
 import {
   BOT_DIFFICULTIES,
+  ROUNDS_TO_WIN_CHOICES,
+  SELF_DAMAGE_CHOICES,
   SETTINGS_BOUNDS,
   type Settings,
   type SettingsStore,
@@ -402,6 +404,54 @@ export function createMenu(parent: HTMLElement, hooks: MenuHooks): Menu {
     return [level, input] as const
   })
 
+  /* The match rules. `MatchRules` is hashed and agreed at tick zero, so these
+   * are read when the next match is *created* and never while one is running —
+   * the same contract the bot difficulty above already has. */
+  const selfDamage = document.createElement('fieldset')
+  selfDamage.className = 'menu-difficulty'
+  const selfDamageLegend = document.createElement('legend')
+  selfDamageLegend.className = 'menu-field-label'
+  selfDamageLegend.textContent = 'Self-damage'
+  selfDamage.append(selfDamageLegend)
+  const selfDamageInputs = SELF_DAMAGE_CHOICES.map((choiceSpec) => {
+    const choice = document.createElement('label')
+    choice.className = 'menu-choice'
+    choice.title = choiceSpec.hint
+    const input = document.createElement('input')
+    input.type = 'radio'
+    input.name = 'menu-self-damage'
+    input.value = String(choiceSpec.mode)
+    input.dataset['hud'] = `menu-self-damage-${String(choiceSpec.mode)}`
+    input.addEventListener('change', () => {
+      if (input.checked) hooks.settings.update({ selfDamage: choiceSpec.mode })
+    })
+    choice.append(input, document.createTextNode(choiceSpec.name))
+    selfDamage.append(choice)
+    return [choiceSpec.mode, input] as const
+  })
+
+  const rounds = document.createElement('fieldset')
+  rounds.className = 'menu-difficulty'
+  const roundsLegend = document.createElement('legend')
+  roundsLegend.className = 'menu-field-label'
+  roundsLegend.textContent = 'Rounds to win'
+  rounds.append(roundsLegend)
+  const roundsInputs = ROUNDS_TO_WIN_CHOICES.map((count) => {
+    const choice = document.createElement('label')
+    choice.className = 'menu-choice'
+    const input = document.createElement('input')
+    input.type = 'radio'
+    input.name = 'menu-rounds-to-win'
+    input.value = String(count)
+    input.dataset['hud'] = `menu-rounds-${String(count)}`
+    input.addEventListener('change', () => {
+      if (input.checked) hooks.settings.update({ roundsToWin: count })
+    })
+    choice.append(input, document.createTextNode(String(count)))
+    rounds.append(choice)
+    return [count, input] as const
+  })
+
   const derived = paragraph('', 'menu-hint')
   derived.dataset['hud'] = 'menu-derived'
 
@@ -436,6 +486,12 @@ export function createMenu(parent: HTMLElement, hooks: MenuHooks): Menu {
     fov.row,
     difficulty,
     paragraph('Changes the opponent in your next bot match.', 'menu-hint'),
+    selfDamage,
+    rounds,
+    paragraph(
+      'The rules your next match is created with. Self-damage is what a rocket jump costs you — the push is the same in all four.',
+      'menu-hint',
+    ),
     diagnostics,
     paragraph('Kept in this browser.', 'menu-hint'),
     button('Back', 'menu-settings-back', () => hooks.back()),
@@ -469,6 +525,8 @@ export function createMenu(parent: HTMLElement, hooks: MenuHooks): Menu {
     dpi.set(settings.dpi)
     fov.set(settings.fovDegrees)
     for (const [level, input] of difficultyInputs) input.checked = settings.botDifficulty === level
+    for (const [mode, input] of selfDamageInputs) input.checked = settings.selfDamage === mode
+    for (const [count, input] of roundsInputs) input.checked = settings.roundsToWin === count
     diagnosticsBox.checked = settings.diagnostics
     // The two derived numbers, because a player who knows their real figure can
     // check the DPI field against them in one look — and because "counts per

@@ -41,6 +41,7 @@ import {
   type Demo,
   type DemoRecorder,
   type LoadedMap,
+  type MatchRules,
   type Transport,
 } from '@gladiator/sim'
 import { systemClock, type Clock } from '@gladiator/server/clock'
@@ -56,6 +57,16 @@ export type ListenServerOptions = {
   readonly capacity?: number
   /** The code this room answers to. Cosmetic in a tab; there is no registry. */
   readonly id?: string
+  /**
+   * The rules this room's match plays under. The server's default when absent.
+   *
+   * Chosen by whoever *opens* the room and never proposed by a joiner, which is
+   * the same rule `AGENTS.md` states for everything else a stranger can ask
+   * for: a client that could talk the host into `selfDamage: none` mid-match is
+   * a client that could ask for other things. Two peers on different rules
+   * already fail loudly at tick zero, by design.
+   */
+  readonly rules?: MatchRules
   /**
    * Wall-clock, injected.
    *
@@ -174,6 +185,7 @@ export function createListenServer(options: ListenServerOptions): ListenServer {
     id,
     seed,
     ...(options.capacity === undefined ? {} : { capacity: options.capacity }),
+    ...(options.rules === undefined ? {} : { rules: options.rules }),
     peerId: (index) => `local-${index}`,
     ...(recorder === null ? {} : { recorder }),
   })
