@@ -43,6 +43,7 @@ import {
   type Transport,
   type Vec3,
 } from '@gladiator/sim'
+import { deriveSkill } from '@gladiator/bot'
 
 import {
   type AudioBufferLike,
@@ -108,6 +109,7 @@ import { matchIntent, roomUrl, shareLink } from './ui/roomFlow.ts'
 import {
   type Settings,
   browserStorage,
+  BOT_DIFFICULTY_SKILL,
   createSettingsStore,
   degreesPerCount,
   verticalFovRadians,
@@ -842,7 +844,13 @@ async function boot(): Promise<void> {
       build: BUILD,
       record: dev,
       opponent: (room) =>
-        createBotPeer({ room, map: CLIENT_MAP, nav: CLIENT_NAV, build: BUILD }),
+        createBotPeer({
+          room,
+          map: CLIENT_MAP,
+          nav: CLIENT_NAV,
+          build: BUILD,
+          skill: deriveSkill(BOT_DIFFICULTY_SKILL[settings.value.botDifficulty]),
+        }),
     })
     session = {
       listen,

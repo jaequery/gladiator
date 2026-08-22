@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 
 import { FOV_RADIANS } from '../render/scene.ts'
 import {
+  BOT_DIFFICULTIES,
+  BOT_DIFFICULTY_SKILL,
   CM_PER_INCH,
   DEFAULT_SETTINGS,
   QUAKE_DEGREES_PER_COUNT,
@@ -97,15 +99,31 @@ describe('normalizeSettings', () => {
     const junk = { cm360: Number.NaN, dpi: '800', fovDegrees: null, diagnostics: 'yes' }
     expect(normalizeSettings(junk as unknown as Partial<Settings>)).toEqual(DEFAULT_SETTINGS)
   })
+
+  it('falls back to medium for an absent or invalid bot difficulty', () => {
+    expect(normalizeSettings({}).botDifficulty).toBe('medium')
+    expect(normalizeSettings({ botDifficulty: 'nightmare' as never }).botDifficulty).toBe('medium')
+  })
+})
+
+describe('bot difficulty', () => {
+  it('maps the three labels to distinct, increasing points on the skill dial', () => {
+    expect(BOT_DIFFICULTIES).toEqual(['easy', 'medium', 'hard'])
+    expect(BOT_DIFFICULTIES.map((level) => BOT_DIFFICULTY_SKILL[level])).toEqual([
+      0.45,
+      0.635,
+      0.8,
+    ])
+  })
 })
 
 describe('storage', () => {
   it('round-trips through a store', () => {
     const storage = fakeStorage()
     const store = createSettingsStore(storage)
-    store.update({ cm360: 45, fovDegrees: 110 })
+    store.update({ cm360: 45, fovDegrees: 110, botDifficulty: 'hard' })
 
-    expect(loadSettings(storage)).toMatchObject({ cm360: 45, fovDegrees: 110 })
+    expect(loadSettings(storage)).toMatchObject({ cm360: 45, fovDegrees: 110, botDifficulty: 'hard' })
     expect(storage.map.has(SETTINGS_KEY)).toBe(true)
   })
 
