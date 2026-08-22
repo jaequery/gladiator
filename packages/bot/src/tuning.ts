@@ -24,8 +24,8 @@
  * the one that made it necessary:
  *
  * 1. Two bots in one process may be at two different skills. That is exactly
- *    what the band table's asymmetric rows are, and what a difficulty selector
- *    would be.
+ *    what the band table's asymmetric rows are, and what the client's
+ *    Easy/Medium/Hard selector uses.
  * 2. A sweep has to try a value **without restarting the process**. Module
  *    constants are read at import; a search that could only change them by
  *    editing a file and forking a new node would be a hundred times slower and
@@ -56,11 +56,10 @@
  * straight-line interpolation through the two rungs of the ladder — see
  * {@link SkillBand} for why it is anchored there rather than at the ends of the
  * dial, which is the one structural thing this ticket got wrong first. One dial,
- * because the ticket ships **one** difficulty: the ladder exists so that
- * the axis can be *proved monotone* — a bot at 0.45 loses to the shipped one and
- * a bot at 0.80 beats it, which is what makes `skill` wired to something real
- * rather than a number in a file — and so that a difficulty selector, if it is
- * ever wanted, is a constant rather than a project.
+ * so the axis can be *proved monotone*: a bot at 0.45 loses to the shipped one
+ * and a bot at 0.80 beats it. Those measured rungs are the client's Easy and
+ * Hard levels; the tuned shipped value between them is Medium. The selector is
+ * therefore three names for one proven mechanism rather than three bot modes.
  *
  * The ten on the axis were chosen because each is a thing a *person* is better
  * or worse at, and none of them is knowledge.
@@ -178,7 +177,7 @@ export type TuningAnchors = {
 
 /** The shape of `tuning.json`. */
 export type TuningSource = {
-  /** The `skill` the shipped bot plays at. The single difficulty this game has. */
+  /** The `skill` the shipped bot was tuned at, exposed to players as Medium. */
   readonly skill: number
   readonly anchors: TuningAnchors
   readonly axis: TuningAxis

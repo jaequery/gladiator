@@ -34,6 +34,7 @@ import type { RawInput } from '../input/pointerLock.ts'
 import { type CopyEnv, copyMessage, copyText } from './clipboard.ts'
 import { formatRoomCode, readTypedCode } from './roomFlow.ts'
 import {
+  BOT_DIFFICULTIES,
   SETTINGS_BOUNDS,
   type Settings,
   type SettingsStore,
@@ -378,6 +379,29 @@ export function createMenu(parent: HTMLElement, hooks: MenuHooks): Menu {
     hooks.settings.update({ fovDegrees: value })
   })
 
+  const difficulty = document.createElement('fieldset')
+  difficulty.className = 'menu-difficulty'
+  const difficultyLegend = document.createElement('legend')
+  difficultyLegend.className = 'menu-field-label'
+  difficultyLegend.textContent = 'Bot difficulty'
+  difficulty.append(difficultyLegend)
+  const difficultyInputs = BOT_DIFFICULTIES.map((level) => {
+    const choice = document.createElement('label')
+    choice.className = 'menu-choice'
+    const input = document.createElement('input')
+    input.type = 'radio'
+    input.name = 'menu-bot-difficulty'
+    input.value = level
+    input.dataset['hud'] = `menu-difficulty-${level}`
+    input.addEventListener('change', () => {
+      if (input.checked) hooks.settings.update({ botDifficulty: level })
+    })
+    const name = level[0]?.toUpperCase() + level.slice(1)
+    choice.append(input, document.createTextNode(name))
+    difficulty.append(choice)
+    return [level, input] as const
+  })
+
   const derived = paragraph('', 'menu-hint')
   derived.dataset['hud'] = 'menu-derived'
 
@@ -410,8 +434,10 @@ export function createMenu(parent: HTMLElement, hooks: MenuHooks): Menu {
     rawRow,
     rawWarning,
     fov.row,
+    difficulty,
+    paragraph('Changes the opponent in your next bot match.', 'menu-hint'),
     diagnostics,
-    paragraph('Kept in this browser, and never sent anywhere.', 'menu-hint'),
+    paragraph('Kept in this browser.', 'menu-hint'),
     button('Back', 'menu-settings-back', () => hooks.back()),
   )
 
@@ -442,6 +468,7 @@ export function createMenu(parent: HTMLElement, hooks: MenuHooks): Menu {
     sensitivity.set(settings.cm360)
     dpi.set(settings.dpi)
     fov.set(settings.fovDegrees)
+    for (const [level, input] of difficultyInputs) input.checked = settings.botDifficulty === level
     diagnosticsBox.checked = settings.diagnostics
     // The two derived numbers, because a player who knows their real figure can
     // check the DPI field against them in one look — and because "counts per

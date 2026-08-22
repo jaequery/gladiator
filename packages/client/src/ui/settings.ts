@@ -31,6 +31,7 @@
  * ask for a wider one. The whole file lives behind `localStorage` and the
  * simulation cannot see it.
  */
+import { TUNING } from '@gladiator/bot'
 
 /**
  * Centimetres of mouse movement per 360 degrees.
@@ -55,6 +56,30 @@ export const DEFAULT_DPI = 300
  * the same world squeezed.
  */
 export const DEFAULT_FOV_DEGREES = 90
+
+/** The three player-facing names on the bot's existing scalar skill axis. */
+export const BOT_DIFFICULTIES = ['easy', 'medium', 'hard'] as const
+export type BotDifficulty = (typeof BOT_DIFFICULTIES)[number]
+
+/** The middle rung is the shipped bot players already meet. */
+export const DEFAULT_BOT_DIFFICULTY: BotDifficulty = 'medium'
+
+/**
+ * Where each player-facing level sits on `@gladiator/bot`'s `[0, 1]` dial.
+ *
+ * Easy and Hard are the two measured ladder rungs. Medium is the tuned shipped
+ * bot, so adding names does not silently change the existing single-player
+ * game for somebody who has never opened Settings.
+ */
+export const BOT_DIFFICULTY_SKILL: Readonly<Record<BotDifficulty, number>> = {
+  easy: TUNING.anchors.novice,
+  medium: TUNING.skill,
+  hard: TUNING.anchors.expert,
+}
+
+export function isBotDifficulty(value: unknown): value is BotDifficulty {
+  return typeof value === 'string' && BOT_DIFFICULTIES.some((level) => level === value)
+}
 
 /** Centimetres in an inch. The whole of the unit conversion. */
 export const CM_PER_INCH = 2.54
@@ -81,6 +106,8 @@ export type Settings = {
   readonly dpi: number
   /** Horizontal FOV at 4:3, in degrees. Quake's `fov`. */
   readonly fovDegrees: number
+  /** The bot skill used when the next single-player match is created. */
+  readonly botDifficulty: BotDifficulty
   /**
    * Whether the diagnostics panel is on screen.
    *
@@ -96,6 +123,7 @@ export const DEFAULT_SETTINGS: Settings = {
   cm360: DEFAULT_CM_360,
   dpi: DEFAULT_DPI,
   fovDegrees: DEFAULT_FOV_DEGREES,
+  botDifficulty: DEFAULT_BOT_DIFFICULTY,
   diagnostics: true,
 }
 
@@ -175,6 +203,9 @@ export function normalizeSettings(raw: Partial<Settings> | null | undefined): Se
     cm360: number(raw?.cm360, DEFAULT_CM_360, SETTINGS_BOUNDS.cm360),
     dpi: number(raw?.dpi, DEFAULT_DPI, SETTINGS_BOUNDS.dpi),
     fovDegrees: number(raw?.fovDegrees, DEFAULT_FOV_DEGREES, SETTINGS_BOUNDS.fovDegrees),
+    botDifficulty: isBotDifficulty(raw?.botDifficulty)
+      ? raw.botDifficulty
+      : DEFAULT_BOT_DIFFICULTY,
     diagnostics: typeof raw?.diagnostics === 'boolean' ? raw.diagnostics : true,
   }
 }

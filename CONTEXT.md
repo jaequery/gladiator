@@ -872,6 +872,12 @@ that rides on the bot, so two bots in one process may be at two different ones.
 Ten values move with it; the rest are the same at every difficulty because
 being better at the game does not mean holding a different number for them.
 
+**Bot difficulty** — the three player-facing names for that dial: `Easy` is
+the measured novice rung (`0.45`), `Medium` is the tuned shipped skill, and
+`Hard` is the measured expert rung (`0.80`). Chosen in Settings, stored in the
+browser, and applied when the next bot peer is created. The names select one
+proven skill axis; they are not three implementations of the bot.
+
 **Skill band** — one tuned value at the two **rungs** — 0.45 and 0.80 — rather
 than at the ends of the dial. The rungs span 35% of the dial, so a band anchored
 on the ends could only ever make them 35% different, and the ladder would not
@@ -881,7 +887,8 @@ meaning anything.
 **Ladder** — `skill 0.45` and `skill 0.80`, the two variants the shipped bot is
 measured against. It exists to prove the difficulty axis is **monotone**, which
 is what makes `skill` wired to something real rather than a number in a file.
-One difficulty ships; the ladder is one constant away.
+They are exposed as Easy and Hard, with the tuned shipped skill between them as
+Medium.
 
 **Band table** — ten measurements with a floor *and* a ceiling, from
 GLAD-6BIYFQ, and all ten are inside since GLAD-KN4QRJ closed the last three.

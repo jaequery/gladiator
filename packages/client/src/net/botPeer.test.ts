@@ -28,6 +28,7 @@ import {
 } from '@gladiator/sim'
 import { manualClock } from '@gladiator/server/clock'
 import { settleLoopback } from '@gladiator/server/net/loopbackTransport'
+import { deriveSkill } from '@gladiator/bot'
 import { describe, expect, it } from 'vitest'
 
 import { CLIENT_MAP, CLIENT_MAP_HASH } from '../map.ts'
@@ -161,6 +162,20 @@ async function duel(): Promise<{
 }
 
 describe('the bot in the second seat', () => {
+  it('carries the requested skill into the seated bot', () => {
+    const listen = createListenServer({ map: CLIENT_MAP, build: 'bot-skill-test' })
+    const peer = createBotPeer({
+      room: listen.room,
+      map: CLIENT_MAP,
+      nav: CLIENT_NAV,
+      build: 'bot-skill-test',
+      skill: deriveSkill(0.45),
+    })
+
+    expect(peer.bot.skill.skill).toBe(0.45)
+    listen.stop()
+  })
+
   it('joins as a peer, plays a duel, and uses both weapons', async () => {
     const { host, peer, moved, weapons, fired, humanLow, decided, restarted } = await duel()
 
