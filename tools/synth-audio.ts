@@ -484,6 +484,57 @@ function roundEnd(): Signal {
   return declick(normalise(saturate(out, 1.05), 0.8), 0.08)
 }
 
+/**
+ * A player dying. Heard where it happened, so a kill you cannot see still
+ * reaches you — the one information gap in the old ten-sound set.
+ *
+ * Built to be recognisable *through* an explosion, because that is usually what
+ * it arrives under: a body-fall thud with a short pitch-collapsing tail, low
+ * enough not to compete with {@link hit} and long enough to read as final.
+ */
+function death(): Signal {
+  const seconds = 0.6
+  const count = samples(seconds)
+  const out = canvas(seconds)
+
+  // The impact: a filtered noise burst, the same family as `land` but heavier
+  // and with no attack transient — a body does not have boots.
+  const impact = shape(lowpass(noise(count, 0x5bd1e995), glide(count, 1400, 180, 0.09)), decay(count, 0.17, 0.004))
+  // The collapse: a tone falling out from under it. This is the part that
+  // survives being mixed under an explosion.
+  const collapse = shape(osc(glide(count, 300, 70, 0.13)), decay(count, 0.22, 0.008))
+
+  mixInto(out, impact, 1)
+  mixInto(out, collapse, 0.75)
+  return declick(normalise(saturate(out, 1.6), 0.85), 0.05)
+}
+
+/**
+ * The frag: you killed them. The only sound in the set that means *the round
+ * is over and you won it*.
+ *
+ * Deliberately {@link hit}'s two rising tones taken further — same vocabulary,
+ * so it reads as the end of an exchange rather than as a new noise, but a third
+ * step and a longer tail so the killing blow cannot be mistaken for the two
+ * that preceded it.
+ */
+function frag(): Signal {
+  const seconds = 0.42
+  const count = samples(seconds)
+  const out = canvas(seconds)
+
+  const step = samples(0.05)
+  const pitches = [1500, 2250, 3000]
+  for (const [index, hz] of pitches.entries()) {
+    const last = index === pitches.length - 1
+    const length = last ? count - step * index : samples(0.06)
+    const envelope = decay(length, last ? 0.14 : 0.03, 0.001)
+    mixInto(out, shape(tone(length, hz), envelope), last ? 1 : 0.9, step * index)
+    if (last) mixInto(out, shape(tone(length, hz * 1.5), envelope), 0.3, step * index)
+  }
+  return declick(normalise(saturate(out, 1.1), 0.85), 0.01)
+}
+
 /** Every sound this game ships, and the file each one is written to. */
 export const RECIPES: ReadonlyArray<{ readonly file: string; readonly render: () => Signal }> = [
   { file: 'rocket-fire.wav', render: rocketFire },
@@ -496,6 +547,8 @@ export const RECIPES: ReadonlyArray<{ readonly file: string; readonly render: ()
   { file: 'damage.wav', render: damage },
   { file: 'round-start.wav', render: roundStart },
   { file: 'round-end.wav', render: roundEnd },
+  { file: 'death.wav', render: death },
+  { file: 'frag.wav', render: frag },
 ]
 
 /* --------------------------------------------------------------------------

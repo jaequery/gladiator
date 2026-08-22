@@ -47,18 +47,42 @@ import { createTrace, traceRay } from './trace.ts'
  * The constants
  * ----------------------------------------------------------------------- */
 
-/** Quake 3's `g_knockback` cvar, at its default. */
-export const G_KNOCKBACK = 1000
+/**
+ * Quake 3's `g_knockback` cvar. **1100**, where Quake ships 1000.
+ *
+ * The one deliberate departure from Quake's numbers in this file, and a
+ * game-feel decision rather than a physics one: at the stock 1000 a rocket
+ * under your feet lifts you 166 units, which is a step on to a balcony rather
+ * than the thing the game is named after. At 1100 it is 201.
+ *
+ * It is raised on the shared cvar rather than as a self-only multiplier inside
+ * {@link knockbackSpeed}, because that function is *the* push formula and a
+ * branch on "was this your own rocket" would make every launch height in the
+ * game a function of who fired. The consequence is deliberate: an opponent's
+ * rocket pushes you 10% harder too, and so does a rail slug.
+ *
+ * ## Why not higher
+ *
+ * 1100 is a ceiling rather than a taste. §5.4's climbs are floors of the
+ * *closed form* `v^2 / (2 * 750)`, but a real rocket lands a jump-plus-rocket
+ * short of it — the jump has already spent a sub-step of gravity by the time
+ * the splash arrives (§3.4) — and the only thing covering the difference is
+ * the `STEP_SIZE` mantle a falling player gets at the ledge. That slack is 3.9
+ * units at 1000 and 1.8 at 1100; by 1150 it is negative, and the tallest climb
+ * becomes a bound `maps/` may author against and nobody can reach. Crucible's
+ * 512 ceiling says the same thing from the other end.
+ */
+export const G_KNOCKBACK = 1100
 
 /** A player's mass, in Quake's arbitrary units. Quake 3's bare `200`. */
 export const PLAYER_MASS = 200
 
 /**
- * How much velocity one point of damage is worth, in qu/s. **5**.
+ * How much velocity one point of damage is worth, in qu/s. **5.5**.
  *
  * `g_knockback / mass`, derived rather than typed, because it is the whole of
  * Quake's push formula and every launch height in the game falls out of it: a
- * 100-point splash under your feet is 500 qu/s, and that is the number
+ * 100-point splash under your feet is 550 qu/s, and that is the number
  * `map/reachability.ts` designs ledges around.
  */
 export const KNOCKBACK_PER_DAMAGE = G_KNOCKBACK / PLAYER_MASS
@@ -94,7 +118,7 @@ export const MAX_KNOCKBACK_TIME_MS = 200
  * The velocity a hit of `damage` points imparts, in qu/s.
  *
  * The one place the push formula is stated. `map/reachability.ts` builds the
- * rocket-jump climb out of this rather than out of a 500 written down twice.
+ * rocket-jump climb out of this rather than out of a 550 written down twice.
  */
 export function knockbackSpeed(damage: number): number {
   const capped = damage > KNOCKBACK_DAMAGE_CAP ? KNOCKBACK_DAMAGE_CAP : damage

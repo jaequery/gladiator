@@ -61,7 +61,7 @@
       "files": [
         "assets/textures/crucible_lightmap.png"
       ],
-      "note": "Sampled through the second UV set \u2014 see docs/assets.md \u00a73."
+      "note": "Sampled through the second UV set — see docs/assets.md §3."
     },
     {
       "id": "arena1-lightmap",
@@ -74,7 +74,7 @@
       "files": [
         "assets/textures/arena1_lightmap.png"
       ],
-      "note": "Traced from maps/baked/arena1.json by `pnpm lightmap:bake` \u2014 direct light with shadow rays, occluded sky, one bounce. Sampled through the second UV set; the atlas layout is packages/sim/src/map/lightmapUv.ts."
+      "note": "Traced from maps/baked/arena1.json by `pnpm lightmap:bake` — direct light with shadow rays, occluded sky, one bounce. Sampled through the second UV set; the atlas layout is packages/sim/src/map/lightmapUv.ts."
     },
     {
       "id": "testbed-lightmap",
@@ -87,7 +87,7 @@
       "files": [
         "assets/textures/testbed_lightmap.png"
       ],
-      "note": "Traced from maps/baked/testbed.json by `pnpm lightmap:bake` \u2014 direct light with shadow rays, occluded sky, one bounce. Sampled through the second UV set; the atlas layout is packages/sim/src/map/lightmapUv.ts."
+      "note": "Traced from maps/baked/testbed.json by `pnpm lightmap:bake` — direct light with shadow rays, occluded sky, one bounce. Sampled through the second UV set; the atlas layout is packages/sim/src/map/lightmapUv.ts."
     },
     {
       "id": "sound-rocket-fire",
@@ -99,7 +99,7 @@
       "files": [
         "packages/client/public/audio/rocket-fire.wav"
       ],
-      "note": "synthesised by `tools/synth-audio.ts` \u2192 `rocketFire()`, 22 050 Hz mono 16-bit PCM"
+      "note": "synthesised by `tools/synth-audio.ts` → `rocketFire()`, 22 050 Hz mono 16-bit PCM"
     },
     {
       "id": "sound-rail-fire",
@@ -111,7 +111,7 @@
       "files": [
         "packages/client/public/audio/rail-fire.wav"
       ],
-      "note": "synthesised by `tools/synth-audio.ts` \u2192 `railFire()`, 22 050 Hz mono 16-bit PCM"
+      "note": "synthesised by `tools/synth-audio.ts` → `railFire()`, 22 050 Hz mono 16-bit PCM"
     },
     {
       "id": "sound-explosion",
@@ -123,7 +123,7 @@
       "files": [
         "packages/client/public/audio/explosion.wav"
       ],
-      "note": "synthesised by `tools/synth-audio.ts` \u2192 `explosion()`, 22 050 Hz mono 16-bit PCM"
+      "note": "synthesised by `tools/synth-audio.ts` → `explosion()`, 22 050 Hz mono 16-bit PCM"
     },
     {
       "id": "sound-footstep-a",
@@ -135,7 +135,7 @@
       "files": [
         "packages/client/public/audio/footstep-a.wav"
       ],
-      "note": "synthesised by `tools/synth-audio.ts` \u2192 `footstep()`, 22 050 Hz mono 16-bit PCM"
+      "note": "synthesised by `tools/synth-audio.ts` → `footstep()`, 22 050 Hz mono 16-bit PCM"
     },
     {
       "id": "sound-footstep-b",
@@ -147,7 +147,7 @@
       "files": [
         "packages/client/public/audio/footstep-b.wav"
       ],
-      "note": "synthesised by `tools/synth-audio.ts` \u2192 `footstep()`, 22 050 Hz mono 16-bit PCM"
+      "note": "synthesised by `tools/synth-audio.ts` → `footstep()`, 22 050 Hz mono 16-bit PCM"
     },
     {
       "id": "sound-land",
@@ -159,7 +159,7 @@
       "files": [
         "packages/client/public/audio/land.wav"
       ],
-      "note": "synthesised by `tools/synth-audio.ts` \u2192 `land()`, 22 050 Hz mono 16-bit PCM"
+      "note": "synthesised by `tools/synth-audio.ts` → `land()`, 22 050 Hz mono 16-bit PCM"
     },
     {
       "id": "sound-hit",
@@ -171,7 +171,7 @@
       "files": [
         "packages/client/public/audio/hit.wav"
       ],
-      "note": "synthesised by `tools/synth-audio.ts` \u2192 `hit()`, 22 050 Hz mono 16-bit PCM"
+      "note": "synthesised by `tools/synth-audio.ts` → `hit()`, 22 050 Hz mono 16-bit PCM"
     },
     {
       "id": "sound-damage",
@@ -183,7 +183,7 @@
       "files": [
         "packages/client/public/audio/damage.wav"
       ],
-      "note": "synthesised by `tools/synth-audio.ts` \u2192 `damage()`, 22 050 Hz mono 16-bit PCM"
+      "note": "synthesised by `tools/synth-audio.ts` → `damage()`, 22 050 Hz mono 16-bit PCM"
     },
     {
       "id": "sound-round-start",
@@ -195,7 +195,7 @@
       "files": [
         "packages/client/public/audio/round-start.wav"
       ],
-      "note": "synthesised by `tools/synth-audio.ts` \u2192 `roundStart()`, 22 050 Hz mono 16-bit PCM"
+      "note": "synthesised by `tools/synth-audio.ts` → `roundStart()`, 22 050 Hz mono 16-bit PCM"
     },
     {
       "id": "sound-round-end",
@@ -207,7 +207,31 @@
       "files": [
         "packages/client/public/audio/round-end.wav"
       ],
-      "note": "synthesised by `tools/synth-audio.ts` \u2192 `roundEnd()`, 22 050 Hz mono 16-bit PCM"
+      "note": "synthesised by `tools/synth-audio.ts` → `roundEnd()`, 22 050 Hz mono 16-bit PCM"
+    },
+    {
+      "id": "sound-death",
+      "title": "A player dying",
+      "author": "Gladiator contributors",
+      "source": "https://github.com/jaequery/gladiator/blob/main/tools/synth-audio.ts",
+      "licence": "CC0-1.0",
+      "kind": "audio",
+      "files": [
+        "packages/client/public/audio/death.wav"
+      ],
+      "note": "synthesised by `tools/synth-audio.ts` → `death()`, 22 050 Hz mono 16-bit PCM"
+    },
+    {
+      "id": "sound-frag",
+      "title": "The frag confirmation",
+      "author": "Gladiator contributors",
+      "source": "https://github.com/jaequery/gladiator/blob/main/tools/synth-audio.ts",
+      "licence": "CC0-1.0",
+      "kind": "audio",
+      "files": [
+        "packages/client/public/audio/frag.wav"
+      ],
+      "note": "synthesised by `tools/synth-audio.ts` → `frag()`, 22 050 Hz mono 16-bit PCM"
     },
     {
       "id": "babylon-ktx2-transcoders",
@@ -229,7 +253,7 @@
         "packages/client/public/ktx2/zstddec.wasm",
         "packages/client/public/ktx2/LICENSE"
       ],
-      "note": "Served from our own origin rather than cdn.babylonjs.com. See docs/assets.md \u00a75. The Basis transcoders inside are Binomial LLC's, also Apache-2.0."
+      "note": "Served from our own origin rather than cdn.babylonjs.com. See docs/assets.md §5. The Basis transcoders inside are Binomial LLC's, also Apache-2.0."
     },
     {
       "id": "meshopt-decoder",

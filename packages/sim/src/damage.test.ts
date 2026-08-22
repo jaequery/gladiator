@@ -54,10 +54,10 @@ describe('distanceToBox', () => {
 })
 
 describe('the knockback formula', () => {
-  it('is five units of speed per point of damage', () => {
-    expect(KNOCKBACK_PER_DAMAGE).toBe(5)
-    expect(knockbackSpeed(100)).toBe(500)
-    expect(knockbackSpeed(72)).toBe(360)
+  it('is five and a half units of speed per point of damage', () => {
+    expect(KNOCKBACK_PER_DAMAGE).toBe(5.5)
+    expect(knockbackSpeed(100)).toBe(550)
+    expect(knockbackSpeed(72)).toBe(396)
   })
 
   it('stops growing at the damage cap', () => {
@@ -78,14 +78,14 @@ describe('applyDamage', () => {
     applyDamage(state, player, NO_ENTITY, [0, 0, 1], 100)
 
     // A jump you fire a rocket into keeps the jump. This is the whole of
-    // `jump + rocket = 770`.
-    expect(player.velocity[2]).toBe(770)
+    // `jump + rocket = 820`.
+    expect(player.velocity[2]).toBe(820)
   })
 
   it('normalises the direction it is handed', () => {
     const { state, player } = worldWithPlayer()
     applyDamage(state, player, NO_ENTITY, [0, 0, 9999], 100)
-    expect(player.velocity[2]).toBe(500)
+    expect(player.velocity[2]).toBe(550)
   })
 
   it('halves self-damage in health but not in knockback', () => {
@@ -97,7 +97,7 @@ describe('applyDamage', () => {
 
     applyDamage(state, player, player.id, [0, 0, 1], 100, SelfDamage.Full)
 
-    expect(player.velocity[2]).toBe(500)
+    expect(player.velocity[2]).toBe(550)
     expect(player.health).toBe(100 - 100 * SELF_DAMAGE_SCALE)
   })
 
@@ -125,10 +125,10 @@ describe('applyDamage', () => {
 })
 
 describe('radiusDamage', () => {
-  it('deals 72 and 360 at 48 units, directed 45 degrees up and away', () => {
+  it('deals 72 and 396 at 48 units, directed 45 degrees up and away', () => {
     // The acceptance check, and every number in it is a consequence of a
     // different Quake detail: 33 rather than 48 because distance is to the box,
-    // 72 rather than 72.5 because damage truncates, 360 because knockback is
+    // 72 rather than 72.5 because damage truncates, 396 because knockback is
     // derived from the truncated figure, and 45 degrees because the direction
     // is measured from 24 above the feet and then biased 24 further up.
     const { state, player } = worldWithPlayer()
@@ -136,10 +136,10 @@ describe('radiusDamage', () => {
     radiusDamage(state, OPEN, [48, 0, 0], ROCKET.splashDamage, ROCKET.splashRadius, 99, NO_ENTITY)
 
     expect(player.health).toBe(100 - 72)
-    expect(lengthVec3(player.velocity)).toBeCloseTo(360, 9)
-    expect(player.velocity[0]).toBeCloseTo(-360 / Math.SQRT2, 9)
+    expect(lengthVec3(player.velocity)).toBeCloseTo(396, 9)
+    expect(player.velocity[0]).toBeCloseTo(-396 / Math.SQRT2, 9)
     expect(player.velocity[1]).toBe(0)
-    expect(player.velocity[2]).toBeCloseTo(360 / Math.SQRT2, 9)
+    expect(player.velocity[2]).toBeCloseTo(396 / Math.SQRT2, 9)
   })
 
   it('deals its full damage and a straight-up push at your feet', () => {
@@ -148,7 +148,7 @@ describe('radiusDamage', () => {
     radiusDamage(state, OPEN, [0, 0, 0], ROCKET.splashDamage, ROCKET.splashRadius, 99, NO_ENTITY)
 
     expect(player.health).toBe(0)
-    expect(player.velocity).toEqual([0, 0, 500])
+    expect(player.velocity).toEqual([0, 0, 550])
   })
 
   it('reaches nobody outside the radius', () => {

@@ -32,6 +32,8 @@
  * simulation cannot see it.
  */
 import { TUNING } from '@gladiator/bot'
+import { DEFAULT_MATCH_RULES, SelfDamage, isSelfDamageMode, matchRules } from '@gladiator/sim'
+import type { MatchRules, SelfDamageMode } from '@gladiator/sim'
 
 /**
  * Centimetres of mouse movement per 360 degrees.
@@ -81,6 +83,69 @@ export function isBotDifficulty(value: unknown): value is BotDifficulty {
   return typeof value === 'string' && BOT_DIFFICULTIES.some((level) => level === value)
 }
 
+/* --------------------------------------------------------------------------
+ * The match rules a player is allowed to choose
+ *
+ * `MatchRules` is the simulation's, hashed with the rest of the state and
+ * agreed by both peers at tick zero (`sim/match/match.ts`). Two of its four
+ * fields are *game* choices rather than tuning, and until now neither was
+ * reachable from anywhere: the game shipped one of four implemented
+ * self-damage rules and hid the other three behind a default.
+ *
+ * These live in Settings beside {@link BOT_DIFFICULTY_SKILL}, and for the same
+ * stated reason — they are read when the *next* match is created, never
+ * mid-match, because a rule that changed under a running match is a rule the
+ * two peers no longer agree about.
+ * ----------------------------------------------------------------------- */
+
+/** The self-damage rules, in the order the settings screen offers them. */
+export const SELF_DAMAGE_CHOICES = [
+  {
+    mode: SelfDamage.HealthOnly,
+    name: 'Health only',
+    hint: 'The default. A rocket jump costs health and never armour, so height is cheap.',
+  },
+  {
+    mode: SelfDamage.Full,
+    name: 'Full',
+    hint: 'Quake 3’s rule: halved, and armour absorbs its share. Every jump is a real bet.',
+  },
+  {
+    mode: SelfDamage.ArmorOnly,
+    name: 'Armour only',
+    hint: 'The mirror of the default: free once the armour is gone.',
+  },
+  {
+    mode: SelfDamage.None,
+    name: 'None',
+    hint: 'Rocket Arena 3’s rule. The push is unchanged; the damage is not there.',
+  },
+] as const
+
+export function isSelfDamageChoice(value: unknown): value is SelfDamageMode {
+  return typeof value === 'number' && isSelfDamageMode(value)
+}
+
+/**
+ * The simulation's rules for a match created with these settings.
+ *
+ * The one place the settings screen's vocabulary is turned back into
+ * `MatchRules`. `matchRules` fills in the fields nobody chose and re-derives
+ * `maxRounds` from `roundsToWin`, which is the reason to go through it rather
+ * than spreading over `DEFAULT_MATCH_RULES` here: a first-to-1 whose round cap
+ * was still nine would be a match that could not end.
+ */
+export function rulesFromSettings(settings: Settings): MatchRules {
+  return matchRules({ selfDamage: settings.selfDamage, roundsToWin: settings.roundsToWin })
+}
+
+/** The match lengths on offer: a single round, the shipped best-of-five, a long one. */
+export const ROUNDS_TO_WIN_CHOICES = [1, 3, 5] as const
+
+export function isRoundsToWin(value: unknown): value is number {
+  return typeof value === 'number' && ROUNDS_TO_WIN_CHOICES.some((n) => n === value)
+}
+
 /** Centimetres in an inch. The whole of the unit conversion. */
 export const CM_PER_INCH = 2.54
 
@@ -108,6 +173,10 @@ export type Settings = {
   readonly fovDegrees: number
   /** The bot skill used when the next single-player match is created. */
   readonly botDifficulty: BotDifficulty
+  /** Which of the four self-damage rules the next match is created with. */
+  readonly selfDamage: SelfDamageMode
+  /** How many rounds win the next match. `MatchRules.roundsToWin`. */
+  readonly roundsToWin: number
   /**
    * Whether the diagnostics panel is on screen.
    *
@@ -124,6 +193,10 @@ export const DEFAULT_SETTINGS: Settings = {
   dpi: DEFAULT_DPI,
   fovDegrees: DEFAULT_FOV_DEGREES,
   botDifficulty: DEFAULT_BOT_DIFFICULTY,
+  // Exactly what the simulation ships, so opening Settings for the first time
+  // changes nothing about the game somebody was already playing.
+  selfDamage: DEFAULT_MATCH_RULES.selfDamage,
+  roundsToWin: DEFAULT_MATCH_RULES.roundsToWin,
   diagnostics: true,
 }
 
@@ -206,6 +279,12 @@ export function normalizeSettings(raw: Partial<Settings> | null | undefined): Se
     botDifficulty: isBotDifficulty(raw?.botDifficulty)
       ? raw.botDifficulty
       : DEFAULT_BOT_DIFFICULTY,
+    selfDamage: isSelfDamageChoice(raw?.selfDamage)
+      ? raw.selfDamage
+      : DEFAULT_MATCH_RULES.selfDamage,
+    roundsToWin: isRoundsToWin(raw?.roundsToWin)
+      ? raw.roundsToWin
+      : DEFAULT_MATCH_RULES.roundsToWin,
     diagnostics: typeof raw?.diagnostics === 'boolean' ? raw.diagnostics : true,
   }
 }

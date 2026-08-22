@@ -60,9 +60,19 @@ export const HIT_TICKS = 45
 export const DAMAGE_TICKS = 100
 
 /**
+ * How long the frag marker is on screen, in sub-steps. 125 = one second.
+ *
+ * Nearly three times {@link HIT_TICKS}, and the asymmetry is the point: a hit
+ * marker has to clear in time for the next one, and a frag has no next one —
+ * the round is over. It is still tick-clocked rather than wall-clocked, so it
+ * lasts the same length of round on a machine dropping frames.
+ */
+export const FRAG_TICKS = 125
+
+/**
  * Horizontal knockback below which the arc points nowhere, in qu/s.
  *
- * A hit's knockback is five units of speed per point of damage, so even a
+ * A hit's knockback is 5.5 units of speed per point of damage, so even a
  * glancing 12-point splash clears this comfortably. What it excludes is the
  * case with no horizontal information in it at all — a rocket straight down at
  * your own feet, whose push is almost entirely vertical — where an arc would
@@ -81,9 +91,12 @@ export type FeedbackMemory = {
   readonly opponentHealth: number
   /** Your own health plus armour last frame. A drop in it is damage taken. */
   readonly selfReserve: number
+  /** Whether the opponent was alive last frame. Going dead is the frag edge. */
+  readonly opponentAlive: boolean
   /** Your own horizontal velocity last frame, for the knockback difference. */
   readonly selfVelocity: readonly [number, number]
   readonly hitSince: number
+  readonly fragSince: number
   readonly damageSince: number
   /**
    * Where the last hit came from, as a **world** yaw in radians, or `null` if
@@ -95,9 +108,11 @@ export type FeedbackMemory = {
 export const INITIAL_FEEDBACK: FeedbackMemory = {
   seen: false,
   opponentHealth: 0,
+  opponentAlive: false,
   selfReserve: 0,
   selfVelocity: [0, 0],
   hitSince: NEVER,
+  fragSince: NEVER,
   damageSince: NEVER,
   sourceWorldAngle: null,
 }
@@ -106,6 +121,14 @@ export const INITIAL_FEEDBACK: FeedbackMemory = {
 export type FeedbackState = {
   /** Hit confirmation, 1 on the frame it lands and fading to 0. */
   readonly hit: number
+  /**
+   * Frag confirmation — you killed them — on the same 1-to-0 shape.
+   *
+   * A separate channel rather than a flag on {@link hit}, because the two are
+   * drawn differently and overlap for exactly one frame: the killing blow
+   * raises this one and, deliberately, not the hit marker.
+   */
+  readonly frag: number
   /** Damage taken, same shape. Drives the hurt flash. */
   readonly damage: number
   /**
@@ -115,7 +138,7 @@ export type FeedbackState = {
   readonly damageAngle: number | null
 }
 
-export const NO_FEEDBACK: FeedbackState = { hit: 0, damage: 0, damageAngle: null }
+export const NO_FEEDBACK: FeedbackState = { hit: 0, frag: 0, damage: 0, damageAngle: null }
 
 export type FeedbackResult = {
   readonly memory: FeedbackMemory
@@ -182,9 +205,11 @@ export function advanceFeedback(memory: FeedbackMemory, model: HudModel): Feedba
       memory: {
         seen: true,
         opponentHealth: opponent.health,
+        opponentAlive: opponent.alive,
         selfReserve: reserve,
         selfVelocity: velocity,
         hitSince: NEVER,
+        fragSince: NEVER,
         damageSince: NEVER,
         sourceWorldAngle: null,
       },
@@ -195,8 +220,14 @@ export function advanceFeedback(memory: FeedbackMemory, model: HudModel): Feedba
   // --- you hit them ---------------------------------------------------------
   // Only while they are actually in the world: a slot emptying is a player
   // leaving, and a departure is not a hit.
-  const landed = opponent.present && opponent.health < memory.opponentHealth
+  //
+  // The killing blow raises the frag instead of the hit marker, the same way
+  // `audio/cues.ts` swaps the confirmation sound: the round-winning shot has
+  // its own punctuation, and drawing both would say the same thing twice.
+  const killed = opponent.present && memory.opponentAlive && !opponent.alive
+  const landed = opponent.present && opponent.health < memory.opponentHealth && !killed
   const hitSince = landed ? tick : memory.hitSince
+  const fragSince = killed ? tick : memory.fragSince
 
   // --- they hit you ---------------------------------------------------------
   // Health *plus* armour, because armour absorbs 66% of every hit and a rocket
@@ -214,14 +245,17 @@ export function advanceFeedback(memory: FeedbackMemory, model: HudModel): Feedba
     memory: {
       seen: true,
       opponentHealth: opponent.health,
+      opponentAlive: opponent.alive,
       selfReserve: reserve,
       selfVelocity: velocity,
       hitSince,
+      fragSince,
       damageSince,
       sourceWorldAngle,
     },
     state: {
       hit: decay(hitSince, tick, HIT_TICKS),
+      frag: decay(fragSince, tick, FRAG_TICKS),
       damage,
       // Re-projected against where the player is looking *now*, so the arc
       // follows the attacker round the screen as they turn to face them. Yaw
