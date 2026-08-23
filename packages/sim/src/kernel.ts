@@ -333,6 +333,7 @@ function loadBody(body: PmoveBody, entity: EntityState): void {
   copyVec3(body.velocity, entity.velocity)
   body.knockbackTicks = entity.knockbackTicks
   body.jumpHeld = (entity.flags & EntityFlag.JumpHeld) !== 0
+  body.dashHeld = (entity.flags & EntityFlag.DashHeld) !== 0
 
   // Recomputed by `pmove`'s own ground trace before anything reads them; reset
   // here so one player cannot inherit the previous player's ground plane.
@@ -356,6 +357,9 @@ function storeBody(entity: EntityState, body: PmoveBody): void {
 
   if (body.jumpHeld) entity.flags |= EntityFlag.JumpHeld
   else entity.flags &= ~EntityFlag.JumpHeld
+
+  if (body.dashHeld) entity.flags |= EntityFlag.DashHeld
+  else entity.flags &= ~EntityFlag.DashHeld
 }
 
 /**

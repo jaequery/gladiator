@@ -42,7 +42,7 @@ export const MAX_PITCH_UNITS = 16202
  */
 export const MAX_MOVE = 1
 
-/** Button bits. Crouch arrives with its ticket. */
+/** Button bits. Crouch still arrives with its ticket. */
 export const BUTTON_JUMP = 1
 
 /**
@@ -51,6 +51,14 @@ export const BUTTON_JUMP = 1
  * and holding the button empties nothing.
  */
 export const BUTTON_ATTACK = 2
+
+/** One-shot movement skills, recognized at the human-input boundary. */
+export const BUTTON_DASH_LEFT = 4
+export const BUTTON_DASH_RIGHT = 8
+export const BUTTON_LONG_JUMP = 16
+
+/** Either dash direction. Both together are invalid and produce no dash. */
+export const BUTTON_DASH_MASK = BUTTON_DASH_LEFT | BUTTON_DASH_RIGHT
 
 /**
  * Every button bit that means something.
@@ -62,7 +70,8 @@ export const BUTTON_ATTACK = 2
  * from clients that were sending noise. Adding a button means adding it here,
  * which is one edit rather than a hunt.
  */
-export const BUTTON_MASK = BUTTON_JUMP | BUTTON_ATTACK
+export const BUTTON_MASK =
+  BUTTON_JUMP | BUTTON_ATTACK | BUTTON_DASH_MASK | BUTTON_LONG_JUMP
 
 export type UserCmd = {
   /** -1 back, 0, +1 forward. */

@@ -58,7 +58,13 @@ import {
 } from '../slidemove.ts'
 import type { MoveBody } from '../slidemove.ts'
 import { TICK_DT } from '../tick.ts'
-import { BUTTON_JUMP } from '../usercmd.ts'
+import {
+  BUTTON_DASH_LEFT,
+  BUTTON_DASH_MASK,
+  BUTTON_DASH_RIGHT,
+  BUTTON_JUMP,
+  BUTTON_LONG_JUMP,
+} from '../usercmd.ts'
 import type { UserCmd } from '../usercmd.ts'
 import { PM_ACCELERATE, PM_AIR_ACCELERATE, accelerate, airAccelerationFor } from './accelerate.ts'
 import { cmdScale } from './cmdscale.ts'
@@ -104,6 +110,16 @@ export const FELT_GRAVITY = Math.round(GRAVITY * TICK_DT) / TICK_DT
 export const RUN_SPEED = 320
 
 /**
+ * Horizontal launch speed shared by the two explicit movement skills.
+ *
+ * Twice the ordinary run speed: a long jump therefore covers twice the flat
+ * distance of a run jump over the unchanged arc, and a dash reads as a burst
+ * rather than as one more ground-acceleration tick. One value for both skills
+ * keeps "twice normal" from becoming two numbers that can drift apart.
+ */
+export const SKILL_SPEED = RUN_SPEED * 2
+
+/**
  * The vertical velocity a jump *sets*, in qu/s. Quake 3's `JUMP_VELOCITY`.
  *
  * Assigned, never added — see the note at the top of this file. Against the
@@ -114,9 +130,10 @@ export const JUMP_VELOCITY = 270
 /**
  * A player the movement code can move.
  *
- * Everything except `jumpHeld` is `MoveBody` from the collision layer, which is
- * also what `slideMove` and `stepSlideMove` take — so there is one shape, and
- * the movement code cannot end up with a private idea of where the ground is.
+ * Everything except the two input latches is `MoveBody` from the collision
+ * layer, which is also what `slideMove` and `stepSlideMove` take — so there is
+ * one shape, and the movement code cannot end up with a private idea of where
+ * the ground is.
  */
 export type PmoveBody = MoveBody & {
   /**
@@ -124,16 +141,22 @@ export type PmoveBody = MoveBody & {
    *
    * The latch is why holding space does not auto-hop: a jump costs a *press*,
    * and the press has to land on the tick you touch down. That is the timing
-   * window bunny hopping is a skill because of, and it is the one piece of
+   * window bunny hopping is a skill because of, and it is one piece of
    * movement state that has to survive between sub-steps — `walking`,
    * `groundPlane` and `groundNormal` are all recomputed by the ground trace.
    */
   jumpHeld: boolean
+  /** Dash action has been held since it last launched. */
+  dashHeld: boolean
 }
 
 /** A player-shaped body at rest, in mid-air, with jump unlatched. */
 export function createPmoveBody(mins: Vec3, maxs: Vec3): PmoveBody {
-  return { ...createMoveBody(mins, maxs), jumpHeld: false }
+  return {
+    ...createMoveBody(mins, maxs),
+    jumpHeld: false,
+    dashHeld: false,
+  }
 }
 
 /* --------------------------------------------------------------------------
@@ -180,6 +203,12 @@ export function pmove(
   // still re-arms the next hop.
   if ((cmd.buttons & BUTTON_JUMP) === 0) body.jumpHeld = false
 
+  // A browser samples once per frame and may send that command for several
+  // sub-steps. Treat a dash bit as an edge so one gesture launches once.
+  const dashButtons = cmd.buttons & BUTTON_DASH_MASK
+  const dashPressed = dashButtons !== 0 && !body.dashHeld
+  body.dashHeld = dashButtons !== 0
+
   if (body.knockbackTicks > 0) body.knockbackTicks -= 1
 
   // The safety rail. Before the ground trace, because a body arriving at
@@ -192,7 +221,16 @@ export function pmove(
 
   groundTrace(world, body)
 
-  if (body.walking) walkMove(world, body, cmd, dt)
+  const dashDirection =
+    dashPressed && body.walking
+      ? dashButtons === BUTTON_DASH_LEFT
+        ? -1
+        : dashButtons === BUTTON_DASH_RIGHT
+          ? 1
+          : 0
+      : 0
+
+  if (body.walking) walkMove(world, body, cmd, dashDirection, dt)
   else airMove(world, body, cmd, dt)
 
   // Traced again after the move, so what the rest of the tick reads — the
@@ -224,14 +262,49 @@ function checkJump(body: PmoveBody, cmd: UserCmd): boolean {
   body.groundPlane = false
   body.walking = false
   body.velocity[2] = JUMP_VELOCITY
+
+  // Forward plus either side is the long-jump chord. The vertical arc stays
+  // the ordinary one; only the flat launch doubles, so the skill changes
+  // distance rather than quietly changing which ledges a jump can climb. It is
+  // a floor, not a cap: speed already earned through strafe-jumping survives.
+  if (
+    (cmd.buttons & BUTTON_LONG_JUMP) !== 0 &&
+    cmd.forwardMove > 0 &&
+    cmd.sideMove !== 0
+  ) {
+    const flatSpeed = Math.sqrt(
+      body.velocity[0] * body.velocity[0] + body.velocity[1] * body.velocity[1],
+    )
+    if (flatSpeed < SKILL_SPEED) {
+      wishDirection(body, cmd, false)
+      normalizeVec3(wishdir, wishvel)
+      body.velocity[0] = wishdir[0] * SKILL_SPEED
+      body.velocity[1] = wishdir[1] * SKILL_SPEED
+    }
+  }
   return true
+}
+
+/** Set the requested lateral component to the skill speed, preserving the rest. */
+function applyDash(body: PmoveBody, cmd: UserCmd, direction: number): void {
+  angleVectors(0, cmd.yaw, 0, forward, right, null)
+  const current = body.velocity[0] * right[0] + body.velocity[1] * right[1]
+  const change = direction * SKILL_SPEED - current
+  body.velocity[0] += right[0] * change
+  body.velocity[1] += right[1] * change
 }
 
 /* --------------------------------------------------------------------------
  * PM_WalkMove
  * ----------------------------------------------------------------------- */
 
-function walkMove(world: CollisionWorld, body: PmoveBody, cmd: UserCmd, dt: number): void {
+function walkMove(
+  world: CollisionWorld,
+  body: PmoveBody,
+  cmd: UserCmd,
+  dashDirection: number,
+  dt: number,
+): void {
   // The ordering the whole movement rests on. See the header.
   if (checkJump(body, cmd)) {
     airMove(world, body, cmd, dt)
@@ -239,6 +312,8 @@ function walkMove(world: CollisionWorld, body: PmoveBody, cmd: UserCmd, dt: numb
   }
 
   friction(body, dt)
+
+  if (dashDirection !== 0) applyDash(body, cmd, dashDirection)
 
   const scale = cmdScale(cmd.forwardMove, cmd.sideMove, RUN_SPEED)
   wishDirection(body, cmd, true)

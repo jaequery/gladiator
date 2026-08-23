@@ -118,7 +118,9 @@ describe('sanitizeUserCmd', () => {
     // already set from clients that had been sending noise.
     expect(sanitizeUserCmd({ buttons: 0xffff }).buttons).toBe(BUTTON_MASK)
     expect(sanitizeUserCmd({ buttons: BUTTON_JUMP | 0x40 }).buttons).toBe(BUTTON_JUMP)
-    expect(sanitizeUserCmd({ buttons: BUTTON_JUMP | BUTTON_ATTACK }).buttons).toBe(BUTTON_MASK)
+    expect(sanitizeUserCmd({ buttons: BUTTON_JUMP | BUTTON_ATTACK }).buttons).toBe(
+      BUTTON_JUMP | BUTTON_ATTACK,
+    )
   })
 
   it('does not turn a negative button field into every button at once', () => {

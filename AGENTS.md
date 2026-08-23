@@ -290,7 +290,7 @@ there is no second, smaller state hash either.
 
 `packages/sim/src/pmove/` is Quake's `bg_pmove.c`: `cmdscale.ts`,
 `friction.ts`, `accelerate.ts`, `snap.ts`, and the `PmoveSingle` ordering in
-`index.ts`. It moves a `PmoveBody` — a `MoveBody` plus the jump latch — through
+`index.ts`. It moves a `PmoveBody` — a `MoveBody` plus the jump and dash latches — through
 a `CollisionWorld`, and it knows nothing about `GameState`; the kernel copies an
 entity in and the result back out. That seam is deliberate: the bot
 (GLAD-TSED8V) and client prediction (GLAD-6RT64L) both need to run the real

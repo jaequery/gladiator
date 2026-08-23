@@ -10,8 +10,7 @@
 import {
   ANGLE_UNITS,
   ANGLE_UNITS_PER_DEGREE,
-  BUTTON_ATTACK,
-  BUTTON_JUMP,
+  BUTTON_MASK,
   MAX_CMDS_PER_BATCH,
   MAX_MOVE,
   MAX_PITCH_UNITS,
@@ -230,7 +229,7 @@ describe('command fields, clamped server-side', () => {
 
   it('masks buttons nobody has defined', () => {
     const cmd = throughTheDoor([0, 0, 0, 0, 0xffff, 0])
-    expect(cmd.buttons).toBe(BUTTON_JUMP | BUTTON_ATTACK)
+    expect(cmd.buttons).toBe(BUTTON_MASK)
   })
 
   it('does not turn a negative button field into every button at once', () => {

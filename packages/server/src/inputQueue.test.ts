@@ -12,6 +12,7 @@
  */
 import {
   BUTTON_ATTACK,
+  BUTTON_DASH_LEFT,
   BUTTON_JUMP,
   EntityKind,
   SURFACE_CLIP_EPSILON,
@@ -119,6 +120,16 @@ describe('a command that never arrives', () => {
     expect(missing.cmd?.buttons).toBe(BUTTON_JUMP)
     expect((missing.cmd?.buttons ?? 0) & BUTTON_ATTACK).toBe(0)
     expect(missing.cmd?.forwardMove).toBe(1)
+  })
+
+  it('never repeats a dash action', () => {
+    const queue = createInputQueue()
+    queue.offer(1, cmdWith({ sideMove: -1, buttons: BUTTON_DASH_LEFT }), 0)
+    queue.take()
+
+    const missing = queue.take()
+    expect(missing.cmd?.sideMove).toBe(-1)
+    expect((missing.cmd?.buttons ?? 0) & BUTTON_DASH_LEFT).toBe(0)
   })
 
   it('gives up after half a second, so a dead connection does not keep running', () => {
