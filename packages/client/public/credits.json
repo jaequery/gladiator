@@ -137,6 +137,22 @@
       "kind": "audio"
     },
     {
+      "id": "sound-death",
+      "title": "A player dying",
+      "author": "Gladiator contributors",
+      "source": "https://github.com/jaequery/gladiator/blob/main/tools/synth-audio.ts",
+      "licence": "CC0-1.0",
+      "kind": "audio"
+    },
+    {
+      "id": "sound-frag",
+      "title": "The frag confirmation",
+      "author": "Gladiator contributors",
+      "source": "https://github.com/jaequery/gladiator/blob/main/tools/synth-audio.ts",
+      "licence": "CC0-1.0",
+      "kind": "audio"
+    },
+    {
       "id": "babylon-ktx2-transcoders",
       "title": "Babylon.js KTX2 decoder and Basis transcoders",
       "author": "Microsoft and the Babylon.js contributors",

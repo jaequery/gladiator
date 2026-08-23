@@ -374,7 +374,7 @@ only maps that went through the baker.
 
 The biggest of those rules is **reachability**: every surface a player can stand
 on has to be one they can get to from a spawn, by walking or by one of the four
-climbs the movement makes — 18 stepped, 48 jumped, 166 rocket-jumped, 395 with a
+climbs the movement makes — 18 stepped, 48 jumped, 201 rocket-jumped, 448 with a
 jump and a rocket. `map/reachability.ts` samples the map with the real player
 box and the real trace and works out which; `docs/physics-spec.md` §5 is where
 the numbers come from and what the analysis does and does not prove. Two things

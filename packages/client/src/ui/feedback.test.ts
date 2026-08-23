@@ -14,6 +14,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   DAMAGE_TICKS,
+  FRAG_TICKS,
   HIT_TICKS,
   INITIAL_FEEDBACK,
   MIN_SHOVE,
@@ -92,10 +93,52 @@ function run(frames: readonly HudModel[]) {
   })
 }
 
+describe('the frag', () => {
+  it('fires instead of the hit marker on the blow that kills them', () => {
+    // The whole of R4 in one assertion. Two rockets: the first is a hit, the
+    // second ends the round — and the second must not look like the first.
+    const states = run([
+      frame({ tick: 0, opponentHealth: 100 }),
+      frame({ tick: 1, opponentHealth: 40 }),
+      frame({ tick: 2, opponentHealth: 0 }),
+    ])
+
+    expect(states[1]).toMatchObject({ hit: 1, frag: 0 })
+    expect(states[2]).toMatchObject({ frag: 1, hit: expect.any(Number) })
+    // Not both at once: the killing blow raises the frag and leaves the hit
+    // marker to keep decaying from the hit before it.
+    expect(states[2]?.hit).toBeLessThan(1)
+  })
+
+  it('stays up nearly three times as long as a hit, because nothing follows it', () => {
+    const states = run([
+      frame({ tick: 0, opponentHealth: 100 }),
+      frame({ tick: 1, opponentHealth: 0 }),
+      frame({ tick: 1 + HIT_TICKS, opponentHealth: 0 }),
+      frame({ tick: 1 + FRAG_TICKS, opponentHealth: 0 }),
+    ])
+
+    expect(states[1]?.frag).toBe(1)
+    // Still on screen at the tick a hit marker would already have cleared.
+    expect(states[2]?.frag).toBeGreaterThan(0)
+    expect(states[3]?.frag).toBe(0)
+  })
+
+  it('does not fire for an opponent who simply left', () => {
+    // A slot emptying is a departure, not a kill, and `present` is the guard.
+    const states = run([
+      frame({ tick: 0, opponentHealth: 100 }),
+      frame({ tick: 1, opponentPresent: false }),
+    ])
+
+    expect(states[1]).toMatchObject({ hit: 0, frag: 0 })
+  })
+})
+
 describe('first sight', () => {
   it('emits nothing at all, so a spawn does not ring every bell', () => {
     const [first] = run([frame({ health: 20, armor: 0, opponentHealth: 10 })])
-    expect(first).toEqual({ hit: 0, damage: 0, damageAngle: null })
+    expect(first).toEqual({ hit: 0, frag: 0, damage: 0, damageAngle: null })
   })
 })
 

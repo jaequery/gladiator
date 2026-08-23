@@ -37,6 +37,8 @@ export const SoundId = {
   Damage: 'damage',
   RoundStart: 'round-start',
   RoundEnd: 'round-end',
+  Death: 'death',
+  Frag: 'frag',
 } as const
 
 export type SoundId = (typeof SoundId)[keyof typeof SoundId]
@@ -174,6 +176,39 @@ export const SOUNDS: Readonly<Record<SoundId, SoundSpec>> = {
     id: SoundId.RoundEnd,
     file: 'round-end.wav',
     gain: 0.7,
+    buses: FEEDBACK_ONLY,
+    distance: UNUSED,
+  },
+  /**
+   * Somebody died. On both buses, and for the usual reason: your own death is
+   * feedback, and theirs is the most useful positional sound in the game —
+   * it is the only way to learn where a kill happened when you did not see it.
+   *
+   * Carried further than a footstep and not as far as an explosion: a duel is
+   * two people, so a death anywhere in the arena is worth hearing, but it
+   * should not arrive at the same volume from across the map as from behind
+   * you.
+   */
+  [SoundId.Death]: {
+    id: SoundId.Death,
+    file: 'death.wav',
+    gain: 0.85,
+    buses: BOTH,
+    distance: LOUD,
+  },
+  /**
+   * You killed them. Feedback-only for the same reason the hit confirmation
+   * is: it is a statement about you, and a kill you had to strain to hear
+   * would be a kill the game failed to tell you about.
+   *
+   * Louder than {@link SoundId.Hit} on purpose. The two are deliberately the
+   * same vocabulary — this is the only moment in a round that is worth more
+   * than the hit before it, and it has to sound like it.
+   */
+  [SoundId.Frag]: {
+    id: SoundId.Frag,
+    file: 'frag.wav',
+    gain: 0.9,
     buses: FEEDBACK_ONLY,
     distance: UNUSED,
   },

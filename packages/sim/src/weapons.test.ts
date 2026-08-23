@@ -148,20 +148,20 @@ describe('the muzzle', () => {
 })
 
 describe('the rocket jump', () => {
-  it('launches a standing player at 500 qu/s and about 166 units up', () => {
+  it('launches a standing player at 550 qu/s and about 201 units up', () => {
     const { state, player } = standing()
 
     const apex = apexOver(state, player, 240, (at) =>
       cmd({ pitch: DOWN, buttons: at === 0 ? BUTTON_ATTACK : 0 }),
     )
 
-    // 500^2 / (2 * 750) = 166.67, and the movement reaches 166.66 of it: the
+    // 550^2 / (2 * 750) = 201.67, and the movement reaches 201.52 of it: the
     // felt gravity is 750 rather than 800 because of velocity snapping, and the
     // apex lands between two whole ticks. `docs/physics-spec.md` §5.4 rounds
-    // this *down* to 166 for map design, deliberately.
-    expect(apex).toBeGreaterThan(162)
-    expect(apex).toBeLessThan(172)
-    expect(apex).toBeCloseTo(166.5, 1)
+    // this *down* to 201 for map design, deliberately.
+    expect(apex).toBeGreaterThan(197)
+    expect(apex).toBeLessThan(207)
+    expect(apex).toBeCloseTo(201.5, 1)
   })
 
   it('adds the jump to the rocket rather than replacing it', () => {
@@ -176,26 +176,29 @@ describe('the rocket jump', () => {
     // makes fragile and the phase order protects.
     expect(apex).toBeGreaterThan(apexOf(JUMP_VELOCITY) + apexOf(ROCKET_JUMP_LAUNCH))
 
-    // And it lands 3.6% under the closed form §5.4 designs to, for two reasons
+    // And it lands 3.7% under the closed form §5.4 designs to, for two reasons
     // that are both the price of the splash being a *real rocket* rather than
     // an assigned velocity. By the time the explosion lands, the jump has
     // already spent one sub-step of gravity (270 becomes 264), and the same
     // sub-step has lifted the player's feet 2.1 units off the floor the rocket
-    // detonates against — which costs two points of splash and ten qu/s of
-    // push. 264 + 490 = 754, and 754^2 / 1500 = 379.
-    expect(apex).toBeCloseTo(380.9, 1)
-    expect(apexOf(JUMP_VELOCITY + ROCKET_JUMP_LAUNCH) - apex).toBeCloseTo(14.3, 1)
+    // detonates against — which costs two points of splash and nine qu/s of
+    // push. 264 + 541 = 805, and 805^2 / 1500 = 432.
+    //
+    // This shortfall is what caps `G_KNOCKBACK` at 1100: the mantle in the
+    // next test is 18 units, and it has to cover it.
+    expect(apex).toBeCloseTo(431.8, 1)
+    expect(apexOf(JUMP_VELOCITY + ROCKET_JUMP_LAUNCH) - apex).toBeCloseTo(16.5, 1)
   })
 
-  it('still gets a running player on to the 395-unit ledge §5.4 designs to', () => {
-    // The apex above is 14 units under the design bound, and the bound is still
-    // right — because of the slack §5.5 already names. `StepSlideMove` refuses
+  it('still gets a running player on to the 448-unit ledge §5.4 designs to', () => {
+    // The apex above is 16.5 units under the design bound, and the bound is
+    // still right — because of the slack §5.5 already names. `StepSlideMove` refuses
     // to step while rising and steps happily while falling, so a player
     // arriving at a ledge face on the way down mantles up to STEP_SIZE above
     // their apex. This is the assertion that keeps `maps/` honest: it drives a
     // real player with a real rocket at a ledge of exactly the height the map
     // validator promises is reachable.
-    const height = 395
+    const height = 448
     const lip = 512
     const world = createCollisionWorld([
       boxBrush([-4096, -4096, -64], [4096, 4096, 0]),
@@ -232,7 +235,7 @@ describe('the rocket jump', () => {
   })
 
   it('is the launch `map/reachability.ts` designs ledges around', () => {
-    expect(ROCKET_JUMP_LAUNCH).toBe(500)
+    expect(ROCKET_JUMP_LAUNCH).toBe(550)
   })
 
   it('costs half your health and none of your armour', () => {
@@ -246,17 +249,17 @@ describe('the rocket jump', () => {
     // unchanged and is the same in all four modes.
     expect(player.armor).toBe(100)
     expect(player.health).toBe(50)
-    // Not exactly 500: the pitch clamp is 89 degrees rather than 90, so the
+    // Not exactly 550: the pitch clamp is 89 degrees rather than 90, so the
     // rocket drifts 0.8 units sideways over its first 45 and the push tilts by
     // a hair. Quake clamps the pitch for the same reason and pays the same
     // fraction of a unit.
-    expect(player.velocity[2]).toBeCloseTo(500, 1)
+    expect(player.velocity[2]).toBeCloseTo(550, 1)
     expect(player.knockbackTicks).toBe(25)
   })
 })
 
 describe('the railgun', () => {
-  it('imparts 500 qu/s along the shooter aim', () => {
+  it('imparts 550 qu/s along the shooter aim', () => {
     const { state } = standing(0, 0)
     const target = spawnEntity(state, {
       kind: EntityKind.Player,
@@ -268,10 +271,10 @@ describe('the railgun', () => {
     tick(state, [cmd({ buttons: BUTTON_ATTACK, weapon: Weapon.Railgun })], WORLD)
 
     expect(target.health).toBe(0)
-    expect(lengthVec3(target.velocity)).toBeCloseTo(500, 6)
+    expect(lengthVec3(target.velocity)).toBeCloseTo(550, 6)
     // Fired down +x, so the push is down +x — not towards wherever on the box
     // the shot happened to land.
-    expect(target.velocity[0]).toBeCloseTo(500, 6)
+    expect(target.velocity[0]).toBeCloseTo(550, 6)
     expect(target.velocity[1]).toBeCloseTo(0, 9)
     expect(target.velocity[2]).toBeCloseTo(0, 9)
     expect(target.knockbackTicks).toBe(25)
@@ -293,8 +296,8 @@ describe('the railgun', () => {
     tick(state, [cmd({ pitch, buttons: BUTTON_ATTACK, weapon: Weapon.Railgun })], WORLD)
 
     expect(target.health).toBe(0)
-    expect(lengthVec3(target.velocity)).toBeCloseTo(500, 6)
-    expect(target.velocity[2]).toBeLessThan(-80)
+    expect(lengthVec3(target.velocity)).toBeCloseTo(550, 6)
+    expect(target.velocity[2]).toBeLessThan(-88)
     // And the shooter feels nothing. A railgun has recoil in no Quake.
     expect(player.velocity).toEqual([0, 0, 0])
   })

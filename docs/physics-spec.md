@@ -819,17 +819,17 @@ hold a player up indefinitely.
 
 ### §3.4 What a rocket jump actually reaches
 
-§5.4 designs ledges around **166** for a standing rocket jump and **395** for a
-jump-plus-rocket, both floors of `v^2 / (2 * 750)` for launches of 500 and 770.
+§5.4 designs ledges around **201** for a standing rocket jump and **448** for a
+jump-plus-rocket, both floors of `v^2 / (2 * 750)` for launches of 550 and 820.
 Measured against a real rocket rather than an assigned velocity
 (`weapons.test.ts`):
 
 | | closed form | measured apex |
 | --- | --- | --- |
-| standing rocket jump | 166.67 | **166.53** |
-| jump plus rocket | 395.27 | **380.94** |
+| standing rocket jump | 201.67 | **201.52** |
+| jump plus rocket | 448.27 | **431.79** |
 
-The standing figure lands where §5.4 says. The jump-plus-rocket is **3.6%
+The standing figure lands where §5.4 says. The jump-plus-rocket is **3.7%
 short**, and both reasons are the price of the splash being a rocket rather than
 a number:
 
@@ -837,17 +837,37 @@ a number:
   lands — 270 becomes 264 — because firing happens *after* the movement phase,
   and it has to (see §3.5);
 - that same sub-step lifts the player's feet 2.1 units off the floor the rocket
-  detonates against, which costs two points of splash and ten qu/s of push.
+  detonates against, which costs two points of splash and nine qu/s of push.
 
-`264 + 490 = 754`, and `754^2 / 1500 = 379`.
+`264 + 541 = 805`, and `805^2 / 1500 = 432`.
 
-**The 395 design bound is still right**, and §5.5 already says why: step-up
+**The 448 design bound is still right**, and §5.5 already says why: step-up
 applies on the way *down*, so a player arriving at a ledge face while falling
 mantles up to `STEP_SIZE` above their apex. `weapons.test.ts` drives a real
-player with a real rocket at a ledge of exactly 395 and asserts they get on to
-it. What is *not* true is the reading that a jump-plus-rocket peaks at 395 in
-open air; it peaks at 381, and a map that needs the last 14 units of that is
+player with a real rocket at a ledge of exactly 448 and asserts they get on to
+it. What is *not* true is the reading that a jump-plus-rocket peaks at 448 in
+open air; it peaks at 432, and a map that needs the last 16 units of that is
 relying on the mantle.
+
+### §3.4.1 Why `G_KNOCKBACK` stops at 1100
+
+That mantle is also the ceiling on the knockback cvar, and the numbers are
+worth writing down because the failure mode is silent. The gap between the
+closed form and a real jump-plus-rocket widens with the launch, while the
+mantle covering it stays `STEP_SIZE`:
+
+| `G_KNOCKBACK` | launch | design bound | real apex | + mantle | slack |
+| --- | --- | --- | --- | --- | --- |
+| 1000 | 500 | 395 | 380.94 | 398.94 | **+3.94** |
+| 1050 | 525 | 421 | 405.45 | 423.45 | **+2.45** |
+| 1100 | 550 | 448 | 431.79 | 449.79 | **+1.79** |
+| 1150 | 575 | 476 | 457.87 | 475.87 | **−0.13** |
+| 1200 | 600 | 504 | 485.84 | 503.84 | **−0.16** |
+
+At 1150 the tallest climb becomes a number `maps/` may author a ledge against
+and no player can reach, and the bake keeps passing because the bake checks the
+closed form. Crucible's 512 ceiling says the same thing from the other end: a
+504-unit climb in a 512-unit room is not a climb.
 
 ### §3.5 Firing happens after moving, and rockets move after both
 
@@ -1076,10 +1096,10 @@ formula, and `reachability.test.ts` asserts them.
 Quake 3's arithmetic, transcribed. `G_Damage` pushes the victim by
 `g_knockback * knockback / mass` — `1000 * knockback / 200` — and a rocket that
 lands under your own feet does its full 100 points of splash, so the push is
-`100 * 5 = 500` qu/s straight up.
+`100 * 5.5 = 550` qu/s straight up.
 
 A jump *assigns* `velocity[2] = 270` (§1.5), it does not add, so a jump and a
-rocket on the same tick compose to `270 + 500 = 770` rather than to 500.
+rocket on the same tick compose to `270 + 550 = 820` rather than to 550.
 
 `ROCKET_JUMP_LAUNCH` is now **derived** in `weapons.ts` — the splash damage in
 the weapon table, through the knockback formula (§3.3) — and re-exported by
@@ -1089,7 +1109,7 @@ is re-checked, which is the point of the indirection.
 
 What a real rocket measurably reaches, as opposed to what the closed form
 predicts, is §3.4. The standing number lands; the jump-plus-rocket apex comes in
-3.6% under, and the 395 climb survives on the step-up slack §5.5 describes.
+3.7% under, and the 448 climb survives on the step-up slack §5.5 describes.
 
 ### §5.4 The four climbs
 
@@ -1097,17 +1117,17 @@ predicts, is §3.4. The standing number lands; the jump-plus-rocket apex comes i
 | ----- | --------- | ------ | --------------------------- |
 | **18** | a step | — | `STEP_SIZE`. `StepSlideMove` lifts a blocked move by this and retries (§2.5) |
 | **48** | a jump | 270 | `⌊270² / 1500⌋` = ⌊48.6⌋ |
-| **166** | a standing rocket jump | 500 | `⌊500² / 1500⌋` = ⌊166.67⌋ |
-| **395** | a jump-plus-rocket | 770 | `⌊770² / 1500⌋` = ⌊395.27⌋ |
+| **201** | a standing rocket jump | 550 | `⌊550² / 1500⌋` = ⌊201.67⌋ |
+| **448** | a jump-plus-rocket | 820 | `⌊820² / 1500⌋` = ⌊448.27⌋ |
 
 `reachability.test.ts` measures every one of them against the real `pmove`
 rather than against this table: it launches a body, records the highest its feet
 get, and asserts the floor of the measurement is the number above. It then puts
 a ledge of exactly that height in a world and drives a running player at it.
 
-> The rocket-jump number is **166**, not the 167 you get by rounding 166.67 to
-> nearest. The apex the simulation actually reaches is 166.657, so a ledge at
-> 167 is one unit too tall. Rounding a reachability bound up is how a map ships
+> The rocket-jump number is **201**, not the 202 you get by rounding 201.67 to
+> nearest. The apex the simulation actually reaches is 201.52, so a ledge at
+> 202 is one unit too tall. Rounding a reachability bound up is how a map ships
 > with a ledge that is reachable in the spreadsheet and not in the game.
 
 Two notes on the last row. It assumes the splash lands on the **same tick** as

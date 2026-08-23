@@ -69,6 +69,8 @@ export type CueMemory = {
   readonly lastFireTick: number
   readonly airborne: boolean
   readonly health: number
+  /** Whether they were dead last frame. The death cue is the *edge* into it. */
+  readonly dead: boolean
   readonly origin: Vec3
   /** Ground travel since the last footstep, in Quake units. */
   readonly stride: number
@@ -82,6 +84,7 @@ export const INITIAL_MEMORY: CueMemory = {
   lastFireTick: NEVER_FIRED,
   airborne: false,
   health: 0,
+  dead: false,
   origin: [0, 0, 0],
   stride: 0,
   step: 0,
@@ -120,6 +123,7 @@ export type CueResult = {
  */
 export function advanceCues(memory: CueMemory, net: PlayerNetState, self: boolean): CueResult {
   const airborne = (net.flags & EntityFlag.OnGround) === 0
+  const dead = (net.flags & EntityFlag.Dead) !== 0
   const origin: Vec3 = [net.origin[0], net.origin[1], net.origin[2]]
 
   if (!memory.seen) {
@@ -131,6 +135,7 @@ export function advanceCues(memory: CueMemory, net: PlayerNetState, self: boolea
         lastFireTick: net.lastFireTick,
         airborne,
         health: net.health,
+        dead,
         origin,
         stride: 0,
         step: 0,
@@ -168,13 +173,37 @@ export function advanceCues(memory: CueMemory, net: PlayerNetState, self: boolea
   // the health, so an opponent who rocket-jumps rings the hit confirmation.
   // Damage events with an owner are GLAD-0QWRYK's and GLAD-5QGO11's; when they
   // land, this rule reads their attribution instead of inferring one.
-  if (net.health < memory.health) {
+  //
+  // The killing blow is the exception, and it is the whole of GLAD-KOSA8U's R4:
+  // the hit that ends a round used to sound exactly like the two before it, so
+  // the moment the round was *for* had no punctuation. A death edge takes over
+  // from the hit rule rather than firing alongside it — two confirmations for
+  // one event is a worse answer than one that is unmistakable.
+  const died = dead && !memory.dead
+  if (net.health < memory.health && !died) {
     cues.push({
       sound: self ? SoundId.Damage : SoundId.Hit,
       bus: Bus.Feedback,
       origin: null,
       gain: 1,
     })
+  }
+
+  // --- somebody died --------------------------------------------------------
+  // Two sounds for one event, and they are not the same statement. The body is
+  // heard *where it fell*, on the world bus, so a kill out of sight is still a
+  // kill you heard; the frag is feedback, and only for the player who is not
+  // the one who died.
+  if (died) {
+    cues.push({
+      sound: SoundId.Death,
+      bus,
+      origin: self ? null : origin,
+      gain: 1,
+    })
+    if (!self) {
+      cues.push({ sound: SoundId.Frag, bus: Bus.Feedback, origin: null, gain: 1 })
+    }
   }
 
   // --- footsteps ------------------------------------------------------------
@@ -212,6 +241,7 @@ export function advanceCues(memory: CueMemory, net: PlayerNetState, self: boolea
       lastFireTick: net.lastFireTick,
       airborne,
       health: net.health,
+      dead,
       origin,
       stride,
       step,

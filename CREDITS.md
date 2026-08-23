@@ -81,6 +81,8 @@ The pipeline that produces the shipped form of all of this is
 | `packages/client/public/audio/damage.wav` | Damage taken — synthesised by `tools/synth-audio.ts` → `damage()`, 22 050 Hz mono 16-bit PCM | Gladiator contributors | <https://github.com/jaequery/gladiator/blob/main/tools/synth-audio.ts> | [CC0-1.0](https://creativecommons.org/publicdomain/zero/1.0/) |
 | `packages/client/public/audio/round-start.wav` | Round starting — synthesised by `tools/synth-audio.ts` → `roundStart()`, 22 050 Hz mono 16-bit PCM | Gladiator contributors | <https://github.com/jaequery/gladiator/blob/main/tools/synth-audio.ts> | [CC0-1.0](https://creativecommons.org/publicdomain/zero/1.0/) |
 | `packages/client/public/audio/round-end.wav` | Round ending — synthesised by `tools/synth-audio.ts` → `roundEnd()`, 22 050 Hz mono 16-bit PCM | Gladiator contributors | <https://github.com/jaequery/gladiator/blob/main/tools/synth-audio.ts> | [CC0-1.0](https://creativecommons.org/publicdomain/zero/1.0/) |
+| `packages/client/public/audio/death.wav` | A player dying — synthesised by `tools/synth-audio.ts` → `death()`, 22 050 Hz mono 16-bit PCM | Gladiator contributors | <https://github.com/jaequery/gladiator/blob/main/tools/synth-audio.ts> | [CC0-1.0](https://creativecommons.org/publicdomain/zero/1.0/) |
+| `packages/client/public/audio/frag.wav` | The frag confirmation — synthesised by `tools/synth-audio.ts` → `frag()`, 22 050 Hz mono 16-bit PCM | Gladiator contributors | <https://github.com/jaequery/gladiator/blob/main/tools/synth-audio.ts> | [CC0-1.0](https://creativecommons.org/publicdomain/zero/1.0/) |
 
 
 ---

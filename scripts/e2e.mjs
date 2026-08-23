@@ -589,14 +589,32 @@ try {
   check('space jumps', peak > 20, `peak height ${peak.toFixed(1)} qu`)
 
   // --- the tick rate ------------------------------------------------------
+  // Measured over ten seconds, against the clock that actually elapsed.
+  //
+  // Both halves of that are corrections to a measurement that reported 144
+  // ticks/s for an accumulator running at 125. The denominator was a hardcoded
+  // `2` while `waitForTimeout(2000)` is a floor and not a promise — it returns
+  // late, and more so under load. And two seconds is too short a window to be
+  // a *rate* on a machine that hitches: the accumulator answers a 400 ms stall
+  // by catching the backlog up over the frames after it, so a short window that
+  // happens to contain a catch-up reads high — 141 ticks/s in one run here,
+  // against 128, 129 and 121 for three neighbouring windows in another.
+  //
+  // Simulated time cannot outrun the clock for long, so the average converges
+  // on 125 as the window grows. Ten seconds is long enough for that and short
+  // enough to stay a smoke test. The 118-132 band is unchanged: this measures
+  // the same property, correctly.
+  const RATE_SECONDS = 10
   const rateStart = await tab.evaluate(() => window.__gladiator?.snapshot().tick)
-  await tab.waitForTimeout(2000)
+  const rateAtMs = Date.now()
+  await tab.waitForTimeout(RATE_SECONDS * 1000)
   const rateEnd = await tab.evaluate(() => window.__gladiator?.snapshot().tick)
-  const rate = (rateEnd - rateStart) / 2
+  const rateSeconds = (Date.now() - rateAtMs) / 1000
+  const rate = (rateEnd - rateStart) / rateSeconds
   check(
     'the accumulator runs the simulation at 125 Hz',
     rate > 118 && rate < 132,
-    `measured ${rate.toFixed(1)} ticks/s`,
+    `measured ${rate.toFixed(1)} ticks/s over ${rateSeconds.toFixed(2)}s`,
   )
 
   // --- frame pacing --------------------------------------------------------
@@ -1078,11 +1096,19 @@ try {
     friend.evaluate(() => window.__gladiator?.snapshot().settings.cm360 === 40),
   )
   const derived = await friend.locator('[data-hud="menu-derived"]').textContent()
+  // Counts per 360 is `cm360 / 2.54 * dpi`, and the DPI is whatever this build
+  // defaults to — read off the page rather than written down here. The figure
+  // used to be hardcoded at 12598, which was 40 cm at 800 CPI, and it went
+  // stale the moment `cfe766f` tuned the default DPI to 300: the readout was
+  // right and the check was wrong. What matters is that the number beside the
+  // slider is the arithmetic of the settings actually in force, so that is what
+  // is asserted.
+  const dpi = await friend.evaluate(() => window.__gladiator?.snapshot().settings.dpi)
+  const expectedCounts = Math.round((40 / 2.54) * Number(dpi))
   check(
     'sensitivity is set in cm/360, and the counts it comes to are shown beside it',
-    // 40 cm at the default 800 CPI is 40/2.54 x 800 = 12598 counts per 360.
-    set && (derived ?? '').includes('12598 counts per 360'),
-    `${JSON.stringify(derived)}`,
+    set && (derived ?? '').includes(`${expectedCounts} counts per 360`),
+    `${JSON.stringify(derived)} at ${String(dpi)} CPI, expected ${expectedCounts} counts`,
   )
   const rawLine = await friend.locator('[data-hud="menu-raw"]').textContent()
   const warned = await friend.evaluate(() => {

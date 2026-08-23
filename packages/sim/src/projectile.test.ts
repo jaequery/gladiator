@@ -166,7 +166,7 @@ describe('a rocket in flight', () => {
     // 100, not 200: Quake's splash deliberately skips whoever was hit directly.
     expect(target.health).toBe(100)
     // Pushed the way the rocket was flying, at five units of speed per point.
-    expect(target.velocity[0]).toBeCloseTo(500, 6)
+    expect(target.velocity[0]).toBeCloseTo(550, 6)
     expect(player.health).toBe(100)
   })
 
