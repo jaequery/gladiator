@@ -23,7 +23,14 @@ import type { MutVec3 } from '../math.ts'
 import { MAX_MOVE_SPEED } from '../slidemove.ts'
 import { SURFACE_CLIP_EPSILON } from '../trace.ts'
 import { TICK_DT, TICK_INTERVAL_MS } from '../tick.ts'
-import { BUTTON_JUMP, NULL_CMD, yawUnitsFromDegrees } from '../usercmd.ts'
+import {
+  BUTTON_DASH_LEFT,
+  BUTTON_DASH_RIGHT,
+  BUTTON_JUMP,
+  BUTTON_LONG_JUMP,
+  NULL_CMD,
+  yawUnitsFromDegrees,
+} from '../usercmd.ts'
 import type { UserCmd } from '../usercmd.ts'
 import { PM_AIR_ACCELERATE, accelerate } from './accelerate.ts'
 import { cmdScale } from './cmdscale.ts'
@@ -32,6 +39,7 @@ import {
   GRAVITY,
   JUMP_VELOCITY,
   RUN_SPEED,
+  SKILL_SPEED,
   createPmoveBody,
   onSpeedClamp,
   pmove,
@@ -129,6 +137,112 @@ describe('the jump', () => {
     pmove(FLAT, body, held)
     expect(body.walking).toBe(true)
     expect(body.velocity[2]).toBe(0)
+  })
+
+  it('travels twice as far when forward, a side and jump are pressed together', () => {
+    const normal = standing()
+    const long = standing()
+    const run = cmd({ forwardMove: 1 })
+
+    for (let i = 0; i < 125; i += 1) {
+      pmove(FLAT, normal, run)
+      pmove(FLAT, long, run)
+    }
+
+    const normalStart = normal.origin[0]
+    const longStart = [long.origin[0], long.origin[1]] as const
+    pmove(FLAT, normal, cmd({ forwardMove: 1, buttons: BUTTON_JUMP }))
+    pmove(
+      FLAT,
+      long,
+      cmd({
+        forwardMove: 1,
+        sideMove: -1,
+        buttons: BUTTON_JUMP | BUTTON_LONG_JUMP,
+      }),
+    )
+
+    while (!normal.walking) pmove(FLAT, normal, run)
+    while (!long.walking) pmove(FLAT, long, cmd({ forwardMove: 1, sideMove: -1 }))
+
+    const normalDistance = normal.origin[0] - normalStart
+    const longX = long.origin[0] - longStart[0]
+    const longY = long.origin[1] - longStart[1]
+    const longDistance = Math.sqrt(longX * longX + longY * longY)
+
+    expect(SKILL_SPEED).toBe(RUN_SPEED * 2)
+    expect(longDistance).toBeGreaterThan(normalDistance * 2 - 2)
+    expect(longDistance).toBeLessThan(normalDistance * 2 + 2)
+  })
+
+  it('leaves a jump without the forward-and-side chord unchanged', () => {
+    const alone = standing()
+    const forwardOnly = standing()
+    for (let i = 0; i < 125; i += 1) pmove(FLAT, forwardOnly, cmd({ forwardMove: 1 }))
+
+    pmove(FLAT, alone, cmd({ buttons: BUTTON_JUMP }))
+    pmove(FLAT, forwardOnly, cmd({ forwardMove: 1, buttons: BUTTON_JUMP }))
+
+    expect(speedOf(alone)).toBe(0)
+    expect(speedOf(forwardOnly)).toBe(RUN_SPEED)
+    expect(alone.velocity[2]).toBe(JUMP_VELOCITY - 6)
+    expect(forwardOnly.velocity[2]).toBe(JUMP_VELOCITY - 6)
+  })
+})
+
+/* --------------------------------------------------------------------------
+ * Movement skills — the double-tap dash
+ * ----------------------------------------------------------------------- */
+
+describe('the double-tap dash', () => {
+  function dash(sideMove: -1 | 1): PmoveBody {
+    const body = standing()
+    pmove(
+      FLAT,
+      body,
+      cmd({
+        sideMove,
+        buttons: sideMove < 0 ? BUTTON_DASH_LEFT : BUTTON_DASH_RIGHT,
+      }),
+    )
+    return body
+  }
+
+  it('launches left on a quick left-left tap', () => {
+    const body = dash(-1)
+
+    expect(body.velocity[1]).toBe(SKILL_SPEED)
+    expect(speedOf(body)).toBe(SKILL_SPEED)
+  })
+
+  it('launches right on a quick right-right tap', () => {
+    const body = dash(1)
+
+    expect(body.velocity[1]).toBe(-SKILL_SPEED)
+    expect(speedOf(body)).toBe(SKILL_SPEED)
+  })
+
+  it('does not dash on a single tap or repeat one sampled dash command', () => {
+    const single = standing()
+    const right = cmd({ sideMove: 1 })
+    const heldDash = cmd({ sideMove: 1, buttons: BUTTON_DASH_RIGHT })
+
+    pmove(FLAT, single, right)
+    const repeated = standing()
+    pmove(FLAT, repeated, heldDash)
+    pmove(FLAT, repeated, heldDash)
+
+    expect(speedOf(single)).toBeLessThan(SKILL_SPEED)
+    expect(speedOf(repeated)).toBeLessThan(SKILL_SPEED)
+  })
+
+  it('does not dash when the second tap is airborne', () => {
+    const body = standing()
+    pmove(FLAT, body, cmd({ buttons: BUTTON_JUMP }))
+    pmove(FLAT, body, cmd({ sideMove: -1, buttons: BUTTON_DASH_LEFT }))
+
+    expect(body.walking).toBe(false)
+    expect(speedOf(body)).toBeLessThan(SKILL_SPEED)
   })
 })
 
@@ -644,6 +758,7 @@ describe('pmove as a function', () => {
     expect(first.velocity).toEqual(second.velocity)
     expect(first.walking).toBe(second.walking)
     expect(first.jumpHeld).toBe(second.jumpHeld)
+    expect(first.dashHeld).toBe(second.dashHeld)
   })
 
   it('never lets a player leave the world through the floor', () => {

@@ -94,8 +94,13 @@ import { sanitizeUserCmd, type UserCmd } from './usercmd.ts'
  * is not handed a shape it cannot parse — it simply keeps guessing, which is
  * exactly why the number has to move: the failure is silent, and a silent
  * failure is the kind a version check exists to turn into a loud one.
+ *
+ * Version 11 gives three previously-unused command button bits movement-skill
+ * meaning (GLAD-ZG93N6): dash left, dash right and long jump. The six-number
+ * command tuple is unchanged, but an older peer masks those bits away and
+ * simulates ordinary movement, so the meaning changed and the version moves.
  */
-export const PROTOCOL_VERSION = 10
+export const PROTOCOL_VERSION = 11
 
 /**
  * The most commands one frame may carry. The client's accumulator clamps a

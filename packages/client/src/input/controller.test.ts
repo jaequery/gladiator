@@ -1,6 +1,9 @@
 import {
   BUTTON_ATTACK,
+  BUTTON_DASH_LEFT,
+  BUTTON_DASH_RIGHT,
   BUTTON_JUMP,
+  BUTTON_LONG_JUMP,
   MAX_PITCH_UNITS,
   Weapon,
   pitchUnitsFromDegrees,
@@ -14,7 +17,13 @@ import {
   degreesPerCount,
   normalizeSettings,
 } from '../ui/settings.ts'
-import { DEFAULT_DEGREES_PER_COUNT, applyMouseDelta, commandFrom } from './controller.ts'
+import {
+  DASH_DOUBLE_TAP_MS,
+  DEFAULT_DEGREES_PER_COUNT,
+  applyMouseDelta,
+  commandFrom,
+  dashButtonForTap,
+} from './controller.ts'
 
 const LEVEL = { yawDegrees: 0, pitchDegrees: 0 }
 
@@ -29,6 +38,17 @@ describe('commandFrom', () => {
   it('maps space onto the jump button', () => {
     expect(commandFrom(new Set(['Space']), LEVEL).buttons).toBe(BUTTON_JUMP)
     expect(commandFrom(new Set(), LEVEL).buttons).toBe(0)
+  })
+
+  it('marks forward plus either side plus jump as a long jump', () => {
+    expect(commandFrom(new Set(['KeyW', 'KeyA', 'Space']), LEVEL).buttons).toBe(
+      BUTTON_JUMP | BUTTON_LONG_JUMP,
+    )
+    expect(commandFrom(new Set(['KeyW', 'KeyD', 'Space']), LEVEL).buttons).toBe(
+      BUTTON_JUMP | BUTTON_LONG_JUMP,
+    )
+    expect(commandFrom(new Set(['KeyW', 'Space']), LEVEL).buttons).toBe(BUTTON_JUMP)
+    expect(commandFrom(new Set(['Space']), LEVEL).buttons).toBe(BUTTON_JUMP)
   })
 
   it('maps the left mouse button onto attack, and 1 and 2 onto the weapons', () => {
@@ -73,6 +93,27 @@ describe('commandFrom', () => {
     const cmd = commandFrom(new Set(), { yawDegrees: 725, pitchDegrees: 0 })
     expect(cmd.yaw).toBeGreaterThanOrEqual(0)
     expect(cmd.yaw).toBeLessThan(65536)
+  })
+})
+
+describe('the double-tap gesture', () => {
+  it('emits the matching dash at exactly 300 ms', () => {
+    const firstLeft = dashButtonForTap(null, -1, 1000)
+    const secondLeft = dashButtonForTap(firstLeft.tap, -1, 1000 + DASH_DOUBLE_TAP_MS)
+    const firstRight = dashButtonForTap(null, 1, 2000)
+    const secondRight = dashButtonForTap(firstRight.tap, 1, 2000 + DASH_DOUBLE_TAP_MS)
+
+    expect(firstLeft.button).toBe(0)
+    expect(secondLeft.button).toBe(BUTTON_DASH_LEFT)
+    expect(firstRight.button).toBe(0)
+    expect(secondRight.button).toBe(BUTTON_DASH_RIGHT)
+  })
+
+  it('rejects a late second tap and a tap in the other direction', () => {
+    const first = dashButtonForTap(null, -1, 1000)
+
+    expect(dashButtonForTap(first.tap, -1, 1000 + DASH_DOUBLE_TAP_MS + 1).button).toBe(0)
+    expect(dashButtonForTap(first.tap, 1, 1100).button).toBe(0)
   })
 })
 

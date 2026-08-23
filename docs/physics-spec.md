@@ -266,6 +266,7 @@ in §1.7 is a reading taken off the running code rather than an identity.
 | -------- | ----- | ------------ | ------ |
 | `GRAVITY` | 800 qu/s² | `g_gravity` | `pmove/index.ts` |
 | `RUN_SPEED` | 320 qu/s | `g_speed`, `ps->speed` | |
+| `SKILL_SPEED` | 640 qu/s | two times `RUN_SPEED`; dash and long-jump launch | `pmove/index.ts` |
 | `JUMP_VELOCITY` | 270 qu/s | `JUMP_VELOCITY` | |
 | `PM_ACCELERATE` | 10 | `pm_accelerate` | `pmove/accelerate.ts` |
 | `PM_AIR_ACCELERATE` | 1 | `pm_airaccelerate` | |
@@ -378,10 +379,36 @@ Two more things in here are deliberate:
   QuakeWorld's additive form lets a player stack a jump onto rising velocity —
   off a ramp, out of an explosion — and stack it again.
 - **Jump must be released before it fires again** (Quake 3's `PMF_JUMP_HELD`),
-  which is the only piece of movement state that survives between sub-steps. It
-  is carried as an `EntityFlag`, so it is hashed and encoded like everything
-  else: a client whose reconciliation restored everything *except* that bit
-  would re-jump on a tick the server did not.
+  which is one of two movement latches that survives between sub-steps. The
+  other prevents a dash action sampled across several sub-steps from launching
+  several times. Both are carried as `EntityFlag`s, so they are hashed and
+  encoded like everything else: a client whose reconciliation restored
+  everything *except* a latch would repeat an action the server did not.
+
+### §1.5.1 Explicit movement skills
+
+Two deliberate gestures sit on top of `pmove` without changing the ordinary
+axes a bot or replay already emits:
+
+- **Dash.** A release-separated second press of the same left or right key
+  within **300 ms** emits a one-shot dash button. `input/controller.ts`
+  recognizes that browser gesture from event timestamps; the command stream is
+  the deterministic record of the result. On the ground, `pmove` sets the
+  requested lateral velocity component to `SKILL_SPEED` (**640 qu/s**) and
+  preserves the orthogonal component. In the air the action is consumed and
+  does nothing. A dash bit repeated across a multi-tick browser frame launches
+  once because `EntityFlag.DashHeld` is a latch, and the server's missing-input
+  fallback clears dash bits rather than inventing another action.
+- **Long jump.** A fresh jump sampled while forward and exactly one side are
+  held carries `BUTTON_LONG_JUMP`. `PM_CheckJump` keeps the ordinary 270 qu/s
+  vertical launch and raises horizontal speed to a **640 qu/s floor** along the
+  chord's wish direction. Speed already earned above 640 through
+  strafe-jumping is preserved. Forward-only jump, jump alone, and bot commands
+  without the explicit bit retain the ordinary path.
+
+The button bits are intent, not a second movement implementation. Client
+prediction, the authoritative host, reconciliation and replay all execute the
+same `pmove` branch from the same `UserCmd`.
 
 ### §1.6 Velocity snapping
 

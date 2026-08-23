@@ -81,6 +81,16 @@ round start: a refire interval is a cost inside a round, never across one.
 mid-air, exploiting how Quake's `pmove` projects acceleration onto velocity.
 Along with rocket-jumping, the skill ceiling of the movement.
 
+**Dash** — a ground-only lateral burst produced by pressing the same left or
+right direction twice, with a release between, within 300 ms. The browser
+recognizes the gesture and emits one action bit; authoritative `pmove` launches
+the requested lateral component at 640 qu/s once.
+
+**Long jump** — a jump pressed while forward and exactly one side are held.
+Keeps the ordinary 270 qu/s vertical arc and launches horizontally at a floor
+of 640 qu/s, so an ordinary run jump travels half as far while faster
+strafe-jump speed is never erased.
+
 **Telefrag** — spawning inside another player and killing them by arrival. The
 policy is Quake's: the arrival lives and the occupant dies, so that camping a
 spawn pad is the worst idea in the arena. `docs/physics-spec.md` §6.4.

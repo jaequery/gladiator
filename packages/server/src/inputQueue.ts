@@ -64,8 +64,8 @@
  *   still rather than continuing to turn; only the movement axes and the
  *   buttons carry over, which is precisely the intent that was continuous.
  *
- * So: **repeat the last command, with {@link BUTTON_ATTACK} cleared, for at
- * most {@link MAX_REPEAT_TICKS} consecutive ticks; after that a command that
+ * So: **repeat the last command, with one-shot attack and dash bits cleared,
+ * for at most {@link MAX_REPEAT_TICKS} consecutive ticks; after that a command that
  * holds the angles and the weapon and zeroes everything else.**
  *
  * Two things in that sentence are the whole decision:
@@ -122,7 +122,7 @@
  * `room.isomorphic.test.ts` fails the build on a `Date.now()` that appears
  * anywhere reachable from `room.ts`.
  */
-import { BUTTON_ATTACK, TICK_RATE, type UserCmd } from '@gladiator/sim'
+import { BUTTON_ATTACK, BUTTON_DASH_MASK, TICK_RATE, type UserCmd } from '@gladiator/sim'
 
 import { createTokenBucket } from './rateLimit.ts'
 
@@ -295,7 +295,8 @@ export function mergeCommands(older: UserCmd, newer: UserCmd): UserCmd {
  * was in, which is the point.
  */
 export function repeatCommand(last: UserCmd): UserCmd {
-  return last.buttons === 0 ? last : { ...last, buttons: last.buttons & ~BUTTON_ATTACK }
+  const repeatedButtons = last.buttons & ~(BUTTON_ATTACK | BUTTON_DASH_MASK)
+  return repeatedButtons === last.buttons ? last : { ...last, buttons: repeatedButtons }
 }
 
 /**

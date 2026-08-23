@@ -11,7 +11,10 @@
  */
 import {
   BUTTON_ATTACK,
+  BUTTON_DASH_LEFT,
+  BUTTON_DASH_RIGHT,
   BUTTON_JUMP,
+  BUTTON_LONG_JUMP,
   type UserCmd,
   Weapon,
   pitchUnitsFromDegrees,
@@ -48,6 +51,36 @@ const BACK_KEYS = ['KeyS', 'ArrowDown']
 const LEFT_KEYS = ['KeyA', 'ArrowLeft']
 const RIGHT_KEYS = ['KeyD', 'ArrowRight']
 const JUMP_KEYS = ['Space']
+
+/** Exact browser-event window for a release-separated same-side double tap. */
+export const DASH_DOUBLE_TAP_MS = 300
+
+export type SideTap = {
+  readonly direction: -1 | 1
+  readonly atMs: number
+}
+
+/** Fold one side-key press into the browser gesture recognizer. */
+export function dashButtonForTap(
+  previous: SideTap | null,
+  direction: -1 | 1,
+  atMs: number,
+): { readonly tap: SideTap; readonly button: number } {
+  const elapsed = previous === null ? -1 : atMs - previous.atMs
+  const doubleTap =
+    previous !== null &&
+    previous.direction === direction &&
+    elapsed >= 0 &&
+    elapsed <= DASH_DOUBLE_TAP_MS
+  return {
+    tap: { direction, atMs },
+    button: doubleTap
+      ? direction < 0
+        ? BUTTON_DASH_LEFT
+        : BUTTON_DASH_RIGHT
+      : 0,
+  }
+}
 
 /**
  * Fire. A mouse button rather than a key, so it is spelled as a code that no
@@ -118,6 +151,7 @@ export function commandFrom(
   held: ReadonlySet<string>,
   angles: ViewAngles,
   weapon: Weapon = Weapon.RocketLauncher,
+  skillButtons = 0,
 ): UserCmd {
   const forward = FORWARD_KEYS.some((key) => held.has(key)) ? 1 : 0
   const back = BACK_KEYS.some((key) => held.has(key)) ? 1 : 0
@@ -135,7 +169,11 @@ export function commandFrom(
     // down. Convert once at the input boundary so every command producer and
     // both peers keep the simulation's convention.
     pitch: pitchUnitsFromDegrees(-angles.pitchDegrees),
-    buttons: (jump ? BUTTON_JUMP : 0) | (attack ? BUTTON_ATTACK : 0),
+    buttons:
+      (jump ? BUTTON_JUMP : 0) |
+      (attack ? BUTTON_ATTACK : 0) |
+      (jump && forward > back && left !== right ? BUTTON_LONG_JUMP : 0) |
+      skillButtons,
     weapon,
   }
 }
@@ -178,11 +216,32 @@ export function createInputController(
   const angles: ViewAngles = { yawDegrees: 0, pitchDegrees: 0 }
   const pointer = createPointerLock(canvas)
   let weapon: Weapon = Weapon.RocketLauncher
+  let lastSideTap: SideTap | null = null
+  let pendingSkillButtons = 0
+
+  const sideDirection = (code: string): -1 | 0 | 1 =>
+    LEFT_KEYS.includes(code) ? -1 : RIGHT_KEYS.includes(code) ? 1 : 0
+
+  const sideHeld = (direction: -1 | 1): boolean =>
+    (direction < 0 ? LEFT_KEYS : RIGHT_KEYS).some((key) => held.has(key))
+
+  const clearHeld = () => {
+    held.clear()
+    lastSideTap = null
+    pendingSkillButtons = 0
+  }
 
   const onKeyDown = (event: KeyboardEvent) => {
     if (!TRACKED_KEYS.has(event.code)) return
     const selected = WEAPON_KEYS.find(([code]) => code === event.code)
     if (selected !== undefined) weapon = selected[1]
+
+    const direction = sideDirection(event.code)
+    if (direction !== 0 && !event.repeat && !sideHeld(direction)) {
+      const result = dashButtonForTap(lastSideTap, direction, event.timeStamp)
+      lastSideTap = result.tap
+      pendingSkillButtons |= result.button
+    }
     held.add(event.code)
     // Space scrolls the page otherwise, which is a jump that also moves the
     // viewport — an unmistakable "this is a document, not a game" tell.
@@ -213,12 +272,12 @@ export function createInputController(
     held.delete('Mouse0')
   }
 
-  const onBlur = () => held.clear()
+  const onBlur = clearHeld
 
   // Keys held when the lock is released would otherwise stay held forever, and
   // the player returns to find themselves sprinting into a wall.
   pointer.onChange((locked) => {
-    if (!locked) held.clear()
+    if (!locked) clearHeld()
   })
 
   window.addEventListener('keydown', onKeyDown)
@@ -248,7 +307,16 @@ export function createInputController(
     // button, is also a command: the player walks off a ledge while reading
     // their own room code. `ui/menu.ts` swallows the keys that land inside the
     // menu; this covers every other key on the board.
-    sample: () => commandFrom(pointer.locked ? held : NO_KEYS, angles, weapon),
+    sample: () => {
+      const command = commandFrom(
+        pointer.locked ? held : NO_KEYS,
+        angles,
+        weapon,
+        pointer.locked ? pendingSkillButtons : 0,
+      )
+      pendingSkillButtons = 0
+      return command
+    },
     requestLock: () => pointer.request(),
     onLockChange: (listener) => pointer.onChange(listener),
     onLockDenied: (listener) => pointer.onDenied(listener),

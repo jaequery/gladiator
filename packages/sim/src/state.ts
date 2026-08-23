@@ -40,12 +40,15 @@ export const EntityFlag = {
    * Jump has been held since it last fired. Quake 3's `PMF_JUMP_HELD`.
    *
    * A flag rather than a field because it is one bit and `flags` is already
-   * hashed and encoded — and it *must* be both. It is the only piece of
-   * movement state that survives between sub-steps, so a client whose
+   * hashed and encoded — and it *must* be both. It is one piece of movement
+   * state that survives between sub-steps, so a client whose
    * reconciliation restored everything except this one bit would re-jump on a
-   * tick the server did not, and diverge from a keypress.
+   * tick the server did not, and diverge from a keypress. `DashHeld` below is
+   * the same latch for a one-shot dash sampled over several sub-steps.
    */
   JumpHeld: 1 << 3,
+  /** A dash command has been held since its one launch. */
+  DashHeld: 1 << 4,
 } as const
 
 export type EntityFlag = (typeof EntityFlag)[keyof typeof EntityFlag]
