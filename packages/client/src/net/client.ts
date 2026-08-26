@@ -417,6 +417,22 @@ export type NetOptions = {
    * caller that wants to *say* something about a deploy, not to survive one.
    */
   readonly onDrain?: (notice: ServerDrain) => void
+
+  /**
+   * Called with the seat this session was given, every time the host names one.
+   *
+   * The room and the proof of a seat in it, which together are what a *new*
+   * page has to present to be let back into a match this one was already in —
+   * a reload, which is a fresh peer id and an empty memory arriving at a seat
+   * that is being held for it (`server/lifecycle.ts`: the seat is Vacant for
+   * the grace window, and only an Open one is handed to a stranger).
+   *
+   * A callback rather than storage in here, and still deliberately out of
+   * {@link NetSnapshot}: the token is a bearer credential, this module has no
+   * business deciding where a credential is kept, and the snapshot is a
+   * diagnostics object that gets printed. `main.ts` owns that decision.
+   */
+  readonly onSeat?: (room: string, token: string) => void
 }
 
 /** What a redial needs to know to reach the same seat again. */
@@ -729,6 +745,10 @@ export function createNetClient(options: NetOptions): NetClient {
       // client that dropped its token on the way back in would have exactly one
       // reconnect in it.
       token = parsed.token
+      // Handed out so the page can be reloaded back into this seat. Only with
+      // both halves: a token names a seat in a room, and one without the other
+      // opens nothing.
+      if (room !== null && token !== null && token !== '') options.onSeat?.(room, token)
       // Which body this tab is steering. Read on the frame loop's next pass and
       // acted on there (`main.ts`), because everything that depends on it —
       // prediction, interpolation, the HUD — is built out of it rather than

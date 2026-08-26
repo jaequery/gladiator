@@ -71,7 +71,7 @@
  * snap and let the frame lurch, because there is no smooth path from there —
  * {@link shouldSnap} is where that line is drawn, once.
  */
-import { TICK_INTERVAL_MS, UNKNOWN_RTT, type ServerPing } from '@gladiator/sim'
+import { MAX_COMMAND_SLEW, TICK_INTERVAL_MS, UNKNOWN_RTT, type ServerPing } from '@gladiator/sim'
 import { JITTER_BUFFER_TICKS } from '@gladiator/server/inputQueue'
 
 /**
@@ -92,8 +92,13 @@ export const SAMPLE_WINDOW = 12
  * about 190 ms, during which the world runs 12.5% fast. That is far below what
  * anyone can see in a first-person view, and far above what it would take to
  * chase ordinary jitter.
+ *
+ * The number itself is `sim/src/protocol.ts`'s, because the server sizes the
+ * command budget that has to admit this slew by the same one — see
+ * {@link MAX_COMMAND_SLEW}. Re-exported here because this is the file that
+ * *spends* it, and the name a reader of the frame loop is looking for.
  */
-export const MAX_SLEW = 0.125
+export const MAX_SLEW = MAX_COMMAND_SLEW
 
 /**
  * Past this much error, stop slewing and jump.
