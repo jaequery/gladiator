@@ -89,18 +89,48 @@ export const MAX_PIXEL_RATIO = 2
  *
  * Descending, and coarse on purpose: a continuous dial would spend its life
  * hunting, and every change reallocates the framebuffer.
+ *
+ * The bottom three are ugly and they are supposed to be. A machine that cannot
+ * hold the budget at half resolution — a software rasteriser, an old integrated
+ * part, a CI runner — used to stop there and play the rest of the match at 20
+ * frames a second, which in a duel is not playing. Quarter resolution is a
+ * blurry picture; 20 fps is a lost round, and the HUD is DOM and stays sharp
+ * either way. This file's header states the trade and these rungs are it.
  */
-export const PIXEL_RATIO_LADDER: readonly number[] = [2, 1.5, 1.25, 1, 0.85, 0.75, 0.6, 0.5]
+export const PIXEL_RATIO_LADDER: readonly number[] = [
+  2, 1.5, 1.25, 1, 0.85, 0.75, 0.6, 0.5, 0.4, 0.33, 0.25,
+]
 
 /**
- * How far under budget the typical frame has to sit before quality is
- * stepped back up.
+ * The share of a window that may miss the budget before quality steps down.
  *
- * 0.7 — a 30% margin. Stepping up the moment there is room would put the
- * renderer straight back into the state that made it step down, once per
- * evaluation window, forever.
+ * A fifth. Under vsync a missed budget is a *doubled* interval — the frame
+ * waits for the next refresh — so this counts whole dropped refreshes, and a
+ * fifth of them is a picture that visibly stutters rather than one that is
+ * merely not perfect.
  */
-export const RECOVER_FRACTION = 0.7
+export const STEP_DOWN_SHARE = 0.2
+
+/**
+ * The share it has to fall to before quality steps back up.
+ *
+ * A twentieth, and the gap to {@link STEP_DOWN_SHARE} is the hysteresis:
+ * stepping up the moment there is room would put the renderer straight back
+ * into the state that made it step down, once per window, forever.
+ */
+export const STEP_UP_SHARE = 0.05
+
+/**
+ * The share past which the dial takes two rungs instead of one.
+ *
+ * Half the window. One rung per window is the right *shape* — it settles
+ * without hunting — and the wrong *speed* for a machine that is nowhere near
+ * the budget: at 20 fps a window is a couple of seconds and the ladder is
+ * eleven rungs long, so a match could be half over before the dial arrives.
+ * Missing more than half the frames is not a near miss, and the rungs below are
+ * coarse enough that overshooting one costs a window to climb back.
+ */
+export const LEAP_SHARE = 0.5
 
 /**
  * The GPU features the KTX2 decoder may transcode a 2D texture into.
@@ -129,7 +159,7 @@ export function createWebGPUOptions(): WebGPUEngineOptions {
 }
 
 /**
- * How far over budget the typical frame has to be before the dial reacts.
+ * How far over budget a frame has to be before it counts as having missed it.
  *
  * 1.15, and it is not a fudge factor — it is the difference between a frame
  * that *missed* its budget and one that was quantised past it. A 60 Hz display
@@ -157,33 +187,44 @@ export function ladderRung(ratio: number): number {
 /**
  * One evaluation of the quality dial: what the pixel ratio should be next.
  *
- * Pure, so the hysteresis is testable without a GPU. Steps down one rung when
- * the typical frame misses the budget, up one rung when it is comfortably
- * inside it, and otherwise leaves well alone.
+ * Pure, so the hysteresis is testable without a GPU. Steps down when too much
+ * of the window missed the budget, up when almost none of it did, and
+ * otherwise leaves well alone.
  *
- * `costMs` is the **median** frame interval, not the 99th percentile, and the
- * distinction is the whole design of this function. A percentile measures
- * *smoothness* and a median measures *cost*, and only one of them is something
- * fewer pixels can fix: a tail of stalls caused by the operating system
- * descheduling the tab does not get better at half the resolution, so a dial
- * driven by p99 would walk the image down to nothing chasing a number it has no
- * influence over. A scene that is genuinely too expensive moves the median on
- * the very first window.
+ * `missShare` is the fraction of the window's frames that came in over
+ * `budgetMs * QUALITY_TOLERANCE`, and choosing *that* over a summary statistic
+ * is the whole design of this function.
+ *
+ * It used to be the **median** interval, on the reasoning that a percentile
+ * measures smoothness and a median measures cost, and only cost is something
+ * fewer pixels can fix. The reasoning is right and the statistic does not
+ * survive vsync. A display hands out its refresh interval or a multiple of it,
+ * so a renderer taking 15 ms a frame and one taking 16.6 ms both read as a
+ * median of 16.7 — and so does one taking 20 ms, right up until *half* its
+ * frames miss. The median is pinned to the monitor, not to the scene, and a
+ * dial reading it is blind between "comfortable" and "dropping every third
+ * frame". Measured on the browser smoke test's runner: a median of 16.7 ms
+ * with a mean of 21.3, which is a quarter of the frames missing a refresh, and
+ * a controller that sat at 0.85 through all of it.
+ *
+ * What vsync leaves visible is *how many* frames missed, and that is a measure
+ * of cost rather than of smoothness: fewer pixels move it directly. It also
+ * keeps the property the median was chosen for — a tail of stalls from the
+ * operating system descheduling the tab is a handful of frames out of hundreds,
+ * which is nowhere near {@link STEP_DOWN_SHARE} and correctly changes nothing.
  */
-export function nextPixelRatio(
-  current: number,
-  costMs: number,
-  budgetMs: number,
-  ceiling: number,
-): number {
+export function nextPixelRatio(current: number, missShare: number, ceiling: number): number {
   const rungs = PIXEL_RATIO_LADDER
   const index = rungs.indexOf(current)
   // A ratio that is not on the ladder was set by hand — leave it alone rather
   // than snapping the image size out from under whoever chose it.
   if (index === -1) return current
 
-  if (costMs > budgetMs * QUALITY_TOLERANCE) return rungs[index + 1] ?? current
-  if (costMs > 0 && costMs < budgetMs * RECOVER_FRACTION) {
+  if (missShare > STEP_DOWN_SHARE) {
+    const leap = missShare > LEAP_SHARE ? 2 : 1
+    return rungs[index + leap] ?? rungs[rungs.length - 1] ?? current
+  }
+  if (missShare < STEP_UP_SHARE) {
     const up = rungs[index - 1]
     return up !== undefined && up <= ceiling ? up : current
   }

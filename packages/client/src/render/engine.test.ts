@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  LEAP_SHARE,
   MAX_PIXEL_RATIO,
   PIXEL_RATIO_LADDER,
-  RECOVER_FRACTION,
+  QUALITY_TOLERANCE,
+  STEP_DOWN_SHARE,
+  STEP_UP_SHARE,
   WEBGPU_TEXTURE_FEATURES,
   clampPixelRatio,
   createWebGPUOptions,
@@ -13,7 +16,7 @@ import {
   nextPixelRatio,
   renderFrame,
 } from './engine.ts'
-import { FRAME_BUDGET_MS, summarise } from './frameStats.ts'
+import { FRAME_BUDGET_MS, createFrameMeter, summarise } from './frameStats.ts'
 
 describe('clampPixelRatio', () => {
   it('caps what a very dense display asks for', () => {
@@ -54,35 +57,43 @@ describe('ladderRung', () => {
 
 describe('nextPixelRatio', () => {
   const budget = FRAME_BUDGET_MS
-  const over = budget * 2
-  const comfortable = budget * RECOVER_FRACTION * 0.5
+  /** The share a window has to miss before the dial reacts, and then some. */
+  const missing = STEP_DOWN_SHARE + 0.1
+  const clean = 0
 
-  it('steps down when the typical frame misses the budget', () => {
-    expect(nextPixelRatio(2, over, budget, 2)).toBe(1.5)
-    expect(nextPixelRatio(1, over, budget, 2)).toBe(0.85)
+  it('steps down when too much of the window missed the budget', () => {
+    expect(nextPixelRatio(2, missing, 2)).toBe(1.5)
+    expect(nextPixelRatio(1, missing, 2)).toBe(0.85)
+  })
+
+  it('takes two rungs when it is nowhere near, and one when it is close', () => {
+    // Eleven rungs and a two-second window: one rung at a time is the right
+    // shape and the wrong speed for a machine at the top of the ladder that
+    // belongs at the bottom.
+    expect(nextPixelRatio(1, LEAP_SHARE + 0.1, 2)).toBe(0.75)
+    expect(nextPixelRatio(1, LEAP_SHARE - 0.1, 2)).toBe(0.85)
   })
 
   it('stops at the bottom rung rather than rendering nothing', () => {
-    const floor = PIXEL_RATIO_LADDER[PIXEL_RATIO_LADDER.length - 1] ?? 0.5
-    expect(nextPixelRatio(floor, over, budget, 2)).toBe(floor)
+    const floor = PIXEL_RATIO_LADDER[PIXEL_RATIO_LADDER.length - 1] ?? 0.25
+    expect(nextPixelRatio(floor, missing, 2)).toBe(floor)
+    // Including when it would have leapt past it.
+    expect(nextPixelRatio(floor, 1, 2)).toBe(floor)
+    const above = PIXEL_RATIO_LADDER[PIXEL_RATIO_LADDER.length - 2] ?? 0.33
+    expect(nextPixelRatio(above, 1, 2)).toBe(floor)
   })
 
-  it('steps back up when there is room, and no further than the ceiling', () => {
-    expect(nextPixelRatio(1, comfortable, budget, 2)).toBe(1.25)
-    expect(nextPixelRatio(1, comfortable, budget, 1)).toBe(1)
+  it('steps back up when the window is clean, and no further than the ceiling', () => {
+    expect(nextPixelRatio(1, clean, 2)).toBe(1.25)
+    expect(nextPixelRatio(1, clean, 1)).toBe(1)
   })
 
   it('holds still in the band between, so it does not hunt', () => {
-    const inBand = budget * 0.9
-    expect(nextPixelRatio(1, inBand, budget, 2)).toBe(1)
+    expect(nextPixelRatio(1, (STEP_UP_SHARE + STEP_DOWN_SHARE) / 2, 2)).toBe(1)
   })
 
   it('leaves a ratio that was set by hand alone', () => {
-    expect(nextPixelRatio(1.13, over, budget, 2)).toBe(1.13)
-  })
-
-  it('does nothing before there is anything to judge', () => {
-    expect(nextPixelRatio(1, 0, budget, 2)).toBe(1)
+    expect(nextPixelRatio(1.13, missing, 2)).toBe(1.13)
   })
 
   it('leaves a display that is keeping perfect time alone', () => {
@@ -90,24 +101,38 @@ describe('nextPixelRatio', () => {
     // budget is 1000/60 = 16.667. Without a tolerance, every 60 Hz machine
     // reads as permanently over budget and walks its own image down to the
     // bottom rung while hitting every single frame.
-    expect(nextPixelRatio(1, 16.7, budget, 2)).toBe(1)
-    expect(nextPixelRatio(1, 16.8, budget, 2)).toBe(1)
+    const meter = createFrameMeter()
+    for (let i = 0; i < 600; i += 1) meter.record(i % 2 === 0 ? 16.7 : 16.8)
+    expect(meter.missShare(budget * QUALITY_TOLERANCE)).toBe(0)
+    expect(nextPixelRatio(1, meter.missShare(budget * QUALITY_TOLERANCE), 1)).toBe(1)
   })
 
-  it('is driven by the median, so a tail of stalls does not soften the image', () => {
+  it('does not chase a tail of stalls it has no influence over', () => {
     // The window this stands for: a loop keeping the 60 Hz cadence exactly,
-    // with a handful of frames descheduled by the operating system. Its p99 is
-    // 250 ms and its median is 16.7, and fewer pixels would not have helped
-    // with either. A dial fed the percentile would walk the image down to the
-    // bottom rung chasing a number it has no influence over.
-    const window = [
-      ...Array.from({ length: 588 }, () => 1000 / 60),
-      ...Array.from({ length: 12 }, () => 250),
-    ]
-    const stalling = summarise(window)
-    expect(stalling.p99Ms).toBeGreaterThan(budget)
-    expect(nextPixelRatio(1, stalling.medianMs, budget, 2)).toBe(1)
-    expect(nextPixelRatio(1, stalling.p99Ms, budget, 2)).toBe(0.85)
+    // with a handful of frames descheduled by the operating system. Fewer
+    // pixels would not have helped with any of them, and a dial that reacted
+    // would walk the image down chasing a number it does not control.
+    const meter = createFrameMeter()
+    for (let i = 0; i < 588; i += 1) meter.record(1000 / 60)
+    for (let i = 0; i < 12; i += 1) meter.record(250)
+    const share = meter.missShare(budget * QUALITY_TOLERANCE)
+    expect(share).toBeLessThan(STEP_UP_SHARE)
+    expect(nextPixelRatio(1, share, 1)).toBe(1)
+  })
+
+  it('sees a cost that vsync has hidden from every summary statistic', () => {
+    // The window measured on the browser smoke test's runner, which is what
+    // this function was rewritten for: a median of 16.7 ms — the refresh
+    // interval, and therefore the monitor's number rather than the scene's —
+    // with a quarter of the frames waiting for a second refresh. The dial read
+    // the median, saw 16.7, and sat where it was through the whole run.
+    const meter = createFrameMeter()
+    for (let i = 0; i < 450; i += 1) meter.record(1000 / 60)
+    for (let i = 0; i < 150; i += 1) meter.record(2000 / 60)
+    const window = summarise(meter.intervals())
+    expect(window.medianMs).toBeCloseTo(1000 / 60, 5)
+    expect(window.medianMs).toBeLessThan(budget * QUALITY_TOLERANCE)
+    expect(nextPixelRatio(1, meter.missShare(budget * QUALITY_TOLERANCE), 2)).toBe(0.85)
   })
 })
 

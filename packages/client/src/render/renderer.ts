@@ -38,6 +38,7 @@ import { type AnimFrame, INITIAL_ANIM, type PlayerNetState, advanceAnim } from '
 import {
   type Backend,
   type RenderEngine,
+  QUALITY_TOLERANCE,
   clampPixelRatio,
   createEngine,
   hardwareScalingFor,
@@ -63,13 +64,31 @@ import { type RenderView, cameraPose } from './view.ts'
 import { type Viewmodel, createViewmodel } from './viewmodel.ts'
 
 /**
- * How many frames the quality controller watches before it decides anything.
+ * How long the quality controller watches before it decides anything.
  *
- * 240 — four seconds at 60 fps. Long enough that one slow frame does not soften
- * the whole image, short enough that a player who alt-tabs back into a heavy
- * scene is not left at 20 fps for a minute.
+ * Two seconds of wall clock, not a frame count. A count is the obvious unit and
+ * it is the wrong one: 240 frames is four seconds at 60 fps and *twelve* at 20,
+ * so the dial deliberates longest exactly where it is needed soonest, and a
+ * machine several rungs from where it belongs can spend most of a match getting
+ * there. Time is the same two seconds for everybody.
+ *
+ * Long enough that one slow frame does not soften the whole image, short enough
+ * that a player who alt-tabs back into a heavy scene is not left there.
  */
-export const QUALITY_WINDOW_FRAMES = 240
+export const QUALITY_WINDOW_MS = 2000
+
+/**
+ * The fewest frames a decision may be made on.
+ *
+ * A window is a *share* ({@link nextPixelRatio}), and a share of four frames is
+ * noise. Twelve is two seconds' worth at the frame rate the dial is trying to
+ * rescue a player from, so a machine that slow still gets a decision every
+ * window rather than being starved of them by its own slowness.
+ */
+export const QUALITY_WINDOW_MIN_FRAMES = 12
+
+/** Ring capacity for the window above: two seconds at 240 fps, with room. */
+export const QUALITY_WINDOW_CAPACITY = 512
 
 export type RendererOptions = {
   readonly canvas: HTMLCanvasElement
@@ -248,8 +267,9 @@ export async function createRenderer(options: RendererOptions): Promise<Renderer
   const meter = createFrameMeter()
   // A second, short meter, so a step-down is judged on the frames since the
   // last decision rather than on a minute of history it has already reacted to.
-  const recent = createFrameMeter(QUALITY_WINDOW_FRAMES)
-  let sinceDecision = 0
+  const recent = createFrameMeter(QUALITY_WINDOW_CAPACITY)
+  let sinceDecisionMs = 0
+  let sinceDecisionFrames = 0
   let pixelRatio = ceiling
   let frames = 0
 
@@ -321,11 +341,20 @@ export async function createRenderer(options: RendererOptions): Promise<Renderer
       frames += 1
 
       if (options.adaptQuality === false) return
-      sinceDecision += 1
-      if (sinceDecision < QUALITY_WINDOW_FRAMES) return
-      sinceDecision = 0
-      // The median, not the tail. See `nextPixelRatio`.
-      const next = nextPixelRatio(pixelRatio, recent.stats().medianMs, budgetMs, ceiling)
+      sinceDecisionMs += intervalMs
+      sinceDecisionFrames += 1
+      if (sinceDecisionMs < QUALITY_WINDOW_MS) return
+      if (sinceDecisionFrames < QUALITY_WINDOW_MIN_FRAMES) return
+      sinceDecisionMs = 0
+      sinceDecisionFrames = 0
+      // How many frames missed, not what the typical one cost: under vsync the
+      // second number is the monitor's and not the scene's. See
+      // `nextPixelRatio`.
+      const next = nextPixelRatio(
+        pixelRatio,
+        recent.missShare(budgetMs * QUALITY_TOLERANCE),
+        ceiling,
+      )
       recent.reset()
       if (next === pixelRatio) return
       pixelRatio = next

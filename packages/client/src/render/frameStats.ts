@@ -103,6 +103,17 @@ export type FrameMeter = {
    * business knowing what a budget is.
    */
   intervals(): readonly number[]
+  /**
+   * The share of the window that came in over `thresholdMs`, in `[0, 1]`.
+   *
+   * Counted rather than derived, because it is not derivable: under vsync every
+   * interval is a multiple of the refresh, so the mean and the median of a
+   * window say nothing about how many frames missed. `render/engine.ts`
+   * argues why that is the number the quality dial has to read. Allocates
+   * nothing — it is a walk of the ring — because the dial calls it on a live
+   * frame.
+   */
+  missShare(thresholdMs: number): number
   /** Forget everything measured so far. */
   reset(): void
 }
@@ -233,6 +244,14 @@ export function createFrameMeter(capacity: number = DEFAULT_CAPACITY): FrameMete
       const out: number[] = new Array(used)
       for (let i = 0; i < used; i += 1) out[i] = intervals[i] ?? 0
       return out
+    },
+
+    missShare(thresholdMs) {
+      const used = size()
+      if (used === 0) return 0
+      let missed = 0
+      for (let i = 0; i < used; i += 1) if ((intervals[i] ?? 0) > thresholdMs) missed += 1
+      return missed / used
     },
 
     reset() {
