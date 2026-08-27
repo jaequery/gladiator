@@ -40,7 +40,14 @@ import { MAX_BUFFERED_COMMANDS } from './inputQueue.ts'
 import { SERVER_MAP, SERVER_MAP_HASH, SERVER_PLAN } from './map.ts'
 import { createLoopbackPair, settleLoopback, type LoopbackPair } from './net/loopbackTransport.ts'
 import { CLOSE_ROOM_FULL } from './session.ts'
-import { createRoom, DEFAULT_IDLE_TIMEOUT_MS, type Room } from './room.ts'
+import { CommandFill } from './inputQueue.ts'
+import {
+  createRoom,
+  DEFAULT_IDLE_TIMEOUT_MS,
+  describeFills,
+  describeOffers,
+  type Room,
+} from './room.ts'
 
 function helloFrame(over: Record<string, unknown> = {}): string {
   return JSON.stringify({
@@ -513,6 +520,40 @@ describe('two peers in one world', () => {
     room.advance(60)
     expect(room.tick).toBe(60)
     expect(room.snapshot().starved).toBeGreaterThan(0)
+  })
+
+  it('says where every sub-step got its command, so a red hash check has an answer', async () => {
+    // The browser smoke test's hash check is a direct readout of this tally,
+    // and for two investigations there was nothing in a CI log that said so.
+    // `fresh` high means the buffer is being fed and the disagreement is
+    // somebody else's; `repeat` and `merged` high mean it is not.
+    const { pair, room } = hosted()
+    room.join(pair.server)
+    pair.client.send(helloFrame())
+    await settleLoopback(pair)
+
+    room.advance(10)
+    const silent = room.fills
+    // One peer that has never sent anything: every sub-step is `empty`, and
+    // the tally accounts for all of them rather than for some of them.
+    expect(silent[CommandFill.Empty]).toBe(10)
+    expect(silent[CommandFill.Fresh]).toBe(0)
+    expect(Object.values(silent).reduce((sum, count) => sum + count, 0)).toBe(10)
+
+    expect(describeFills([room.fills])).toContain('over 10 sub-steps')
+    expect(describeFills([room.fills])).toContain('empty 10 (100.0%)')
+    // Summed over rooms, and readable when there are none.
+    expect(describeFills([])).toBe('input buffer: no sub-steps taken')
+    expect(describeFills([room.fills, room.fills])).toContain('over 20 sub-steps')
+  })
+
+  it('says what became of the commands it was offered', async () => {
+    const { pair, room } = hosted()
+    room.join(pair.server)
+    pair.client.send(helloFrame())
+    await settleLoopback(pair)
+    expect(describeOffers([room.offers])).toContain('accepted 0')
+    expect(describeOffers([room.offers])).toContain('late 0')
   })
 })
 
