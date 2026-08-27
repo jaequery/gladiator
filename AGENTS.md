@@ -1055,6 +1055,17 @@ missing-command fallback. So the trigger is the trough: a clump touches the
 target on its way down every frame and never qualifies, a fast clock never
 touches it and qualifies within 64 ms.
 
+**Read the tally before you theorise about any of this.** The host says what
+every sub-step's command came from — `input.report`, beside `scheduler.report`
+and again in the shutdown line: `fresh / merged / repeat / idle / empty`, plus
+what became of every command offered. The browser smoke test's hash check is a
+direct readout of it, so `fresh` at 99% means the buffer is being fed properly
+and a red hash check is somebody else's bug. It usually is: the client only
+samples input inside `requestAnimationFrame`, so a client whose *frames* stall
+hands the host a clump and then nothing, and that reads here as merges and
+starvation at once. Measured that way, the standing failure everyone kept
+attributing to netcode was the renderer (`docs/renderer.md` §4).
+
 **The rate limit is the actual anti-speedhack**, and it is in the only unit that
 matters: commands per **wall-clock second**, on the server's clock,
 `COMMAND_BUDGET` of them with a 32-command burst for a batch that arrived in a
