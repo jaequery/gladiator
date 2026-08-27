@@ -15,6 +15,7 @@ import { generateResumeSecret } from './resume.ts'
 import { MAX_ROOMS } from './rooms.ts'
 import { HOST_FRAME_MS } from './scheduler.ts'
 import { startServer } from './server.ts'
+import { describeFills, describeOffers } from './room.ts'
 import { drainServer, installSignalHandlers } from './shutdown.ts'
 import { BYTE_BUDGET_PER_SECOND, FRAME_BUDGET_PER_SECOND } from './validate.ts'
 
@@ -113,6 +114,18 @@ if (server.resume.enabled) {
   })
 }
 
+/**
+ * Every live room's fill tally.
+ *
+ * Live only: a reaped room takes its counters with it, which is the right
+ * trade for a diagnostic that must not hold a room's memory open to be read.
+ */
+const liveRooms = () =>
+  server.rooms.codes().flatMap((code) => {
+    const entry = server.rooms.get(code)
+    return entry === null ? [] : [entry.room]
+  })
+
 // The number that matters is the one measured on the machine class actually
 // serving players, so it is measured there and logged there. `/healthz` carries
 // the live version; this is the one that ends up in the deploy log.
@@ -124,6 +137,11 @@ if (server.resume.enabled) {
 const report = setTimeout(() => {
   log('jitter.bare_timer', { detail: jitter.describe() })
   log('scheduler.report', { detail: server.scheduler.describe() })
+  const rooms = liveRooms()
+  log('input.report', {
+    detail: describeFills(rooms.map((room) => room.fills)),
+    offered: describeOffers(rooms.map((room) => room.offers)),
+  })
 }, JITTER_REPORT_MS)
 report.unref()
 
@@ -143,6 +161,8 @@ installSignalHandlers({
       speedClamps: counters.speedClamps,
       selfSplashes: counters.selfSplashes,
       scheduler: server.scheduler.describe(),
+      input: describeFills(liveRooms().map((room) => room.fills)),
+      offered: describeOffers(liveRooms().map((room) => room.offers)),
     })
     const drained = await drainServer({ server, resume: server.resume, clock: systemClock(), log })
     log('server.drained', {

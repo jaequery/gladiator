@@ -680,6 +680,15 @@ try {
 
   // --- hash agreement, for real, for a minute ------------------------------
   console.log(`  ...  moving for ${seconds}s and comparing hashes`)
+  // The window's own pacing, because the two checks below are downstream of it
+  // and are read as netcode when they go red. A client whose frames stall
+  // hands the host its commands in clumps, and a clump is a stretch of
+  // sub-steps the host had nothing for followed by a stretch it had too much
+  // for — which is what a mismatched hash *is*. This runs at the full viewport
+  // rather than the pacing check's 320x200, so it is a different measurement of
+  // a different workload, and the server's own `input.report` line is the other
+  // half of it.
+  await tab.evaluate(() => window.__gladiator?.resetFrameStats())
   const deadline = Date.now() + seconds * 1000
   const keys = ['w', 'a', 's', 'd']
   let keyIndex = 0
@@ -696,6 +705,10 @@ try {
   }
 
   const final = await tab.evaluate(() => window.__gladiator?.snapshot())
+  const movingStats = final.render
+  console.log(
+    `  ...  frames while moving at ${VIEWPORT.width}x${VIEWPORT.height}: p99 ${movingStats.p99Ms.toFixed(1)} ms, median ${movingStats.medianMs.toFixed(1)} ms, mean ${movingStats.meanMs.toFixed(1)} ms, worst ${movingStats.worstMs.toFixed(1)} ms, ${movingStats.pixelRatio}x`,
+  )
   // Not "mismatched === 0", and the reason is the jitter buffer in front of the
   // host's tick scheduler. A hash frame says what the *host* simulated; the
   // client's ring says what it predicted, and those differ on any sub-step the
