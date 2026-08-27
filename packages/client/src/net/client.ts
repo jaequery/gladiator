@@ -83,6 +83,17 @@ import { createReconnectPolicy, type ReconnectOptions } from './reconnect.ts'
 const HASH_HISTORY = 4096
 
 /**
+ * How many hashes the *recent* agreement window holds.
+ *
+ * 512, which at the rate a host reports them is about eight seconds. Long
+ * enough to be a rate rather than a coin toss — the tolerance it is read
+ * against is 2%, so a clean window still holds ten disagreements before it
+ * turns — and short enough that a light which went red clears within a few
+ * seconds of the link coming right. See {@link NetSnapshot.recentCompared}.
+ */
+export const RECENT_HASHES = 512
+
+/**
  * The window the snapshot rate is measured over, in milliseconds.
  *
  * One second, because that is the unit the number is quoted in and a rate
@@ -216,6 +227,23 @@ export type NetSnapshot = {
   readonly agree: boolean | null
   readonly compared: number
   readonly mismatched: number
+  /**
+   * The same two counts over the most recent {@link RECENT_HASHES} hashes.
+   *
+   * What a *light* has to be judged on. The totals above run from page load,
+   * so a session that spent a bad minute somewhere — a backgrounded tab
+   * predicting nothing while the host simulated on, a stretch where the
+   * renderer could not keep up and the commands went out in clumps — carries
+   * that minute in its ratio for as long as it lasts, and an indicator reading
+   * it says MISMATCH over a link that has been agreeing perfectly for an hour.
+   * That is the same failure as a light that goes red on one late packet, at
+   * the other end of the time axis: `hud.ts` argues it once for both.
+   *
+   * The totals stay, and stay on screen — "how much has this session ever
+   * disagreed" is a real question, and it is the one a *counter* answers.
+   */
+  readonly recentCompared: number
+  readonly recentMismatched: number
   /**
    * Commands the client simulated and then failed to send.
    *
@@ -583,6 +611,8 @@ export const NO_SESSION: NetSnapshot = {
   agree: null,
   compared: 0,
   mismatched: 0,
+  recentCompared: 0,
+  recentMismatched: 0,
   dropped: 0,
   rttMs: null,
   serverTickEstimate: null,
@@ -640,6 +670,12 @@ export function createNetClient(options: NetOptions): NetClient {
   let agree: boolean | null = null
   let compared = 0
   let mismatched = 0
+  // A ring of the last {@link RECENT_HASHES} verdicts, and the count of the
+  // disagreements in it. One byte per hash and no allocation per comparison.
+  const recent = new Uint8Array(RECENT_HASHES)
+  let recentAt = 0
+  let recentCount = 0
+  let recentMismatched = 0
   let dropped = 0
   let drain: ServerDrain | null = null
   // The last thing the host said about the queue, and when it said it. The two
@@ -859,6 +895,13 @@ export function createNetClient(options: NetOptions): NetClient {
     compared += 1
     agree = clientHash === parsed.hash >>> 0
     if (!agree) mismatched += 1
+
+    // Roll the oldest verdict out of the window before the newest goes in.
+    if (recentCount === RECENT_HASHES) recentMismatched -= recent[recentAt] ?? 0
+    else recentCount += 1
+    recent[recentAt] = agree ? 0 : 1
+    if (!agree) recentMismatched += 1
+    recentAt = (recentAt + 1) % RECENT_HASHES
   }
 
   /** Milliseconds left on the countdown the host last sent, or `null`. */
@@ -1037,6 +1080,8 @@ export function createNetClient(options: NetOptions): NetClient {
       agree,
       compared,
       mismatched,
+      recentCompared: recentCount,
+      recentMismatched,
       dropped,
       rttMs: clock.rttMs === UNKNOWN_RTT ? null : clock.rttMs,
       serverTickEstimate: clock.serverTick(now()),

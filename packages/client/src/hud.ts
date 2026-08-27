@@ -98,6 +98,15 @@ export type HudModel = {
  * 80 ms) and far below what a real desync looks like, which is every hash after
  * the first bad one. A light that went red on one late packet is a light nobody
  * reads.
+ *
+ * And it judges the rate over the **recent** hashes rather than over the
+ * session, for the same reason at the other end of the time axis: a totals
+ * ratio carries one bad minute — a backgrounded tab, a stretch the renderer
+ * could not keep up with — for as long as the session lasts, so the light
+ * stays red over a link that has been agreeing perfectly ever since. A light
+ * that cannot go back to green is also a light nobody reads. The counters on
+ * the row stay session totals, because "how much has this ever disagreed" is a
+ * real question and a counter is what answers it.
  */
 export const MISPREDICTION_TOLERANCE = 0.02
 
@@ -247,7 +256,11 @@ export function createHud(root: HTMLElement): Hud {
         setText(agreementValue, '—')
         setState(agreementValue, 'unknown')
       } else {
-        const rate = net.compared === 0 ? 0 : net.mismatched / net.compared
+        // The recent window, not the session. A light says whether the link is
+        // agreeing *now*; the counters beside it say what it has ever done.
+        // `net/client.ts` argues the window's length.
+        const rate =
+          net.recentCompared === 0 ? 0 : net.recentMismatched / net.recentCompared
         setText(
           agreementValue,
           `${model.duelling ? 'n/a while duelling' : net.agree ? 'MATCH' : 'MISMATCH'} · ${net.compared} compared, ${net.mismatched} mismatched` +
