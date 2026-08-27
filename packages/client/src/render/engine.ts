@@ -114,11 +114,25 @@ export const STEP_DOWN_SHARE = 0.2
 /**
  * The share it has to fall to before quality steps back up.
  *
- * A twentieth, and the gap to {@link STEP_DOWN_SHARE} is the hysteresis:
- * stepping up the moment there is room would put the renderer straight back
- * into the state that made it step down, once per window, forever.
+ * A twentieth, and the gap to {@link STEP_DOWN_SHARE} is one half of the
+ * hysteresis: stepping up the moment there is room would put the renderer
+ * straight back into the state that made it step down.
  */
 export const STEP_UP_SHARE = 0.05
+
+/**
+ * How many clean windows in a row it takes to step back up.
+ *
+ * Three — six seconds — and it is the other half of the hysteresis, because a
+ * share threshold on its own cannot supply it. The rungs are coarse, so two
+ * neighbours can straddle the budget: at 0.85 a quarter of the frames miss and
+ * at 0.75 none do, and a dial with no memory then alternates between them for
+ * as long as the scene is that size. Going down on one window and up only on
+ * three makes the wrong rung a quarter of the time rather than half, and a
+ * scene that genuinely got cheaper — a player who walked out of the busy room
+ * — waits six seconds for a sharper picture, which nobody notices.
+ */
+export const RECOVER_WINDOWS = 3
 
 /**
  * The share past which the dial takes two rungs instead of one.
@@ -213,7 +227,12 @@ export function ladderRung(ratio: number): number {
  * operating system descheduling the tab is a handful of frames out of hundreds,
  * which is nowhere near {@link STEP_DOWN_SHARE} and correctly changes nothing.
  */
-export function nextPixelRatio(current: number, missShare: number, ceiling: number): number {
+export function nextPixelRatio(
+  current: number,
+  missShare: number,
+  ceiling: number,
+  cleanWindows = RECOVER_WINDOWS,
+): number {
   const rungs = PIXEL_RATIO_LADDER
   const index = rungs.indexOf(current)
   // A ratio that is not on the ladder was set by hand — leave it alone rather
@@ -224,7 +243,7 @@ export function nextPixelRatio(current: number, missShare: number, ceiling: numb
     const leap = missShare > LEAP_SHARE ? 2 : 1
     return rungs[index + leap] ?? rungs[rungs.length - 1] ?? current
   }
-  if (missShare < STEP_UP_SHARE) {
+  if (missShare < STEP_UP_SHARE && cleanWindows >= RECOVER_WINDOWS) {
     const up = rungs[index - 1]
     return up !== undefined && up <= ceiling ? up : current
   }

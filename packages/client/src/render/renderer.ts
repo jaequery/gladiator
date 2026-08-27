@@ -39,6 +39,7 @@ import {
   type Backend,
   type RenderEngine,
   QUALITY_TOLERANCE,
+  STEP_UP_SHARE,
   clampPixelRatio,
   createEngine,
   hardwareScalingFor,
@@ -270,6 +271,8 @@ export async function createRenderer(options: RendererOptions): Promise<Renderer
   const recent = createFrameMeter(QUALITY_WINDOW_CAPACITY)
   let sinceDecisionMs = 0
   let sinceDecisionFrames = 0
+  /** Consecutive windows that missed almost nothing. See `nextPixelRatio`. */
+  let cleanWindows = 0
   let pixelRatio = ceiling
   let frames = 0
 
@@ -350,13 +353,14 @@ export async function createRenderer(options: RendererOptions): Promise<Renderer
       // How many frames missed, not what the typical one cost: under vsync the
       // second number is the monitor's and not the scene's. See
       // `nextPixelRatio`.
-      const next = nextPixelRatio(
-        pixelRatio,
-        recent.missShare(budgetMs * QUALITY_TOLERANCE),
-        ceiling,
-      )
+      const missShare = recent.missShare(budgetMs * QUALITY_TOLERANCE)
+      cleanWindows = missShare < STEP_UP_SHARE ? cleanWindows + 1 : 0
+      const next = nextPixelRatio(pixelRatio, missShare, ceiling, cleanWindows)
       recent.reset()
       if (next === pixelRatio) return
+      // A rung change invalidates the streak either way: the frames that earned
+      // it were drawn at a size that is no longer the one being judged.
+      cleanWindows = 0
       pixelRatio = next
       engine.setHardwareScalingLevel(hardwareScalingFor(next))
     },

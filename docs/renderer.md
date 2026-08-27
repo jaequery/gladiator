@@ -217,26 +217,43 @@ number of pixels is the knob with the most travel.
 - **Clamped on the way in** to `MAX_PIXEL_RATIO = 2`. A 3× phone display asks
   for nine times the fragments of a 1× one for a difference nobody can see at
   arm's length.
-- **Stepped down under load**, one rung at a time along a coarse ladder, when
-  the **median** frame misses the budget; stepped back up when it is
-  comfortably inside it. The hysteresis is a pure function (`nextPixelRatio`)
-  so it can be tested without a GPU.
+- **Stepped down under load** along a coarse ladder when too much of a window
+  missed the budget, and back up after a run of windows that missed almost
+  none. The hysteresis is a pure function (`nextPixelRatio`) so it can be
+  tested without a GPU.
 
   With a 15% tolerance over the budget, because the measured interval on a
   60 Hz display is 16.7 ms and one 60 Hz frame is 16.667: without it, every
   60 Hz machine reads as permanently over budget and softens its own image
   while hitting every single frame.
 
-  The median rather than the percentile, deliberately: a percentile measures
-  smoothness and a median measures cost, and only one of them is something
-  fewer pixels can fix. A tail of stalls caused by the operating system
-  descheduling the tab does not improve at half the resolution, so a dial
-  driven by p99 would walk the image down to nothing chasing a number it has no
-  influence over.
+  **The share of frames that missed, not a summary statistic**, and the reason
+  is vsync. The dial used to read the median, on the argument that a percentile
+  measures smoothness where a median measures cost and only cost is something
+  fewer pixels can fix. The argument is right; the median does not survive a
+  display that hands out its refresh interval or a multiple of it. A renderer
+  taking 15 ms a frame and one taking 16.6 ms both read as a median of 16.7,
+  and so does one taking 20 ms right up until *half* its frames miss — the
+  median is pinned to the monitor rather than to the scene. Measured on the
+  browser smoke test's runner: a median of 16.7 ms with a mean of 21.3, which
+  is a quarter of the frames waiting for a second refresh, and a dial that sat
+  where it was through the whole run.
+
+  Counting missed frames keeps what the median was chosen for. A tail of stalls
+  caused by the operating system descheduling the tab is a handful of frames
+  out of hundreds, nowhere near the threshold, and correctly changes nothing —
+  while a scene that is genuinely too expensive misses a fifth of the window on
+  the first one.
+
+- **Judged over two seconds of wall clock**, not over a frame count. A count is
+  four seconds at 60 fps and twelve at 20, so it deliberates longest exactly
+  where it is needed soonest.
 
 Softening the image slightly at a steady frame rate beats a crisp one that
-hitches. Everything else — the geometry, the lighting, the texture filtering —
-is sacrificed only after this.
+hitches, and the ladder runs down to a quarter of a device pixel because of it:
+a machine that cannot hold the budget at half resolution used to stop there and
+play the rest of the match at 20 frames a second. Everything else — the
+geometry, the lighting, the texture filtering — is sacrificed only after this.
 
 ---
 

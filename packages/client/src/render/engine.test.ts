@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   LEAP_SHARE,
   MAX_PIXEL_RATIO,
+  RECOVER_WINDOWS,
   PIXEL_RATIO_LADDER,
   QUALITY_TOLERANCE,
   STEP_DOWN_SHARE,
@@ -84,8 +85,19 @@ describe('nextPixelRatio', () => {
   })
 
   it('steps back up when the window is clean, and no further than the ceiling', () => {
-    expect(nextPixelRatio(1, clean, 2)).toBe(1.25)
-    expect(nextPixelRatio(1, clean, 1)).toBe(1)
+    expect(nextPixelRatio(1, clean, 2, RECOVER_WINDOWS)).toBe(1.25)
+    expect(nextPixelRatio(1, clean, 1, RECOVER_WINDOWS)).toBe(1)
+  })
+
+  it('waits for a run of clean windows before stepping up, so it does not hunt', () => {
+    // Two neighbouring rungs can straddle the budget, and a dial with no memory
+    // then alternates between them forever. Down on one window, up on three.
+    for (let windows = 0; windows < RECOVER_WINDOWS; windows += 1) {
+      expect(nextPixelRatio(1, clean, 2, windows)).toBe(1)
+    }
+    expect(nextPixelRatio(1, clean, 2, RECOVER_WINDOWS)).toBe(1.25)
+    // A window that missed still steps down on its own, whatever the streak.
+    expect(nextPixelRatio(1, missing, 2, 0)).toBe(0.85)
   })
 
   it('holds still in the band between, so it does not hunt', () => {
@@ -104,7 +116,7 @@ describe('nextPixelRatio', () => {
     const meter = createFrameMeter()
     for (let i = 0; i < 600; i += 1) meter.record(i % 2 === 0 ? 16.7 : 16.8)
     expect(meter.missShare(budget * QUALITY_TOLERANCE)).toBe(0)
-    expect(nextPixelRatio(1, meter.missShare(budget * QUALITY_TOLERANCE), 1)).toBe(1)
+    expect(nextPixelRatio(1, meter.missShare(budget * QUALITY_TOLERANCE), 1, RECOVER_WINDOWS)).toBe(1)
   })
 
   it('does not chase a tail of stalls it has no influence over', () => {
@@ -117,7 +129,7 @@ describe('nextPixelRatio', () => {
     for (let i = 0; i < 12; i += 1) meter.record(250)
     const share = meter.missShare(budget * QUALITY_TOLERANCE)
     expect(share).toBeLessThan(STEP_UP_SHARE)
-    expect(nextPixelRatio(1, share, 1)).toBe(1)
+    expect(nextPixelRatio(1, share, 1, RECOVER_WINDOWS)).toBe(1)
   })
 
   it('sees a cost that vsync has hidden from every summary statistic', () => {
