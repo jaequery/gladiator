@@ -107,7 +107,12 @@ import {
 
 import type { Clock } from './clock.ts'
 import { createClockSync, type ServerClockSync } from './clockSync.ts'
-import { createInputQueue, type InputQueue } from './inputQueue.ts'
+import {
+  CommandFill,
+  createInputQueue,
+  type InputQueue,
+  type InputQueueStats,
+} from './inputQueue.ts'
 import { createLagCompensation, type LagCompStats } from './lagcomp.ts'
 import { NO_LOG, scopeToRoom, type Log } from './log.ts'
 import {
@@ -275,6 +280,66 @@ export type RoomPeer = {
   close(code?: number, reason?: string): void
 }
 
+/** Every counter at zero, to sum live peers' queues into. */
+const EMPTY_QUEUE_STATS: Record<keyof InputQueueStats, number> = {
+  accepted: 0,
+  duplicate: 0,
+  late: 0,
+  overflow: 0,
+  rateLimited: 0,
+  executed: 0,
+  merged: 0,
+  overTarget: 0,
+  starved: 0,
+  reordered: 0,
+}
+
+/** One counter per {@link CommandFill}, over a room's life. */
+export type CommandFillTally = Readonly<Record<CommandFill, number>>
+
+/**
+ * A room's fill tally, as one line.
+ *
+ * Written for the log rather than for a parser, and percentages rather than
+ * counts because the only question anyone asks of it is a proportion: a host
+ * running `fresh` at 99% is being fed properly, whatever else is wrong that
+ * afternoon.
+ */
+export function describeOffers(all: Iterable<InputQueueStats>): string {
+  const total = { ...EMPTY_QUEUE_STATS }
+  for (const stats of all) {
+    for (const key of Object.keys(total) as (keyof InputQueueStats)[]) total[key] += stats[key]
+  }
+  return (
+    `commands offered: accepted ${total.accepted}, duplicate ${total.duplicate}, ` +
+    `late ${total.late}, overflow ${total.overflow}, rate-limited ${total.rateLimited}, ` +
+    `reordered ${total.reordered}`
+  )
+}
+
+export function describeFills(tallies: Iterable<CommandFillTally>): string {
+  const total: Record<CommandFill, number> = {
+    [CommandFill.Fresh]: 0,
+    [CommandFill.Merged]: 0,
+    [CommandFill.Repeat]: 0,
+    [CommandFill.Idle]: 0,
+    [CommandFill.Empty]: 0,
+  }
+  for (const tally of tallies) {
+    for (const fill of Object.keys(total) as CommandFill[]) total[fill] += tally[fill]
+  }
+  const taken = Object.values(total).reduce((sum, count) => sum + count, 0)
+  if (taken === 0) return 'input buffer: no sub-steps taken'
+  const share = (fill: CommandFill): string =>
+    `${fill} ${total[fill]} (${((total[fill] / taken) * 100).toFixed(1)}%)`
+  return (
+    `input buffer over ${taken} sub-steps: ` +
+    ([CommandFill.Fresh, CommandFill.Merged, CommandFill.Repeat, CommandFill.Idle, CommandFill.Empty] as const)
+      .map(share)
+      .join(', ')
+  )
+}
+
 export type RoomSnapshot = {
   readonly id: string
   readonly tick: number
@@ -288,6 +353,15 @@ export type RoomSnapshot = {
   readonly gaps: number
   /** Sub-steps in which some peer's buffer was empty and the fallback ran. */
   readonly starved: number
+  /**
+   * Where every sub-step's command came from, tallied.
+   *
+   * The one measurement that tells a netcode complaint apart from a rendering
+   * one: the browser smoke test's hash check is a direct readout of this, so a
+   * mismatch rate with `fresh` at 99% is not the input buffer's doing and
+   * chasing it in here wastes the afternoon. `inputQueue.ts` names the fills.
+   */
+  readonly fills: CommandFillTally
   /** Frames turned away at the door: binary, oversized, or too fast. */
   readonly refused: number
   /** Seats being held for a peer that might come back. `lifecycle.ts`. */
@@ -317,6 +391,24 @@ export type Room = {
    * here. `queue.ts` is that caller.
    */
   readonly ended: boolean
+  /**
+   * Where every sub-step's command came from, tallied over this room's life.
+   *
+   * The same counters {@link RoomSnapshot.fills} carries, reachable without
+   * building a snapshot — that one hashes the whole world, and a periodic
+   * diagnostic has no business paying for a hash. See the snapshot field for
+   * what the tally is *for*.
+   */
+  readonly fills: CommandFillTally
+  /**
+   * What became of the commands the live peers offered, summed.
+   *
+   * The other half of {@link Room.fills}: that one says what the host executed,
+   * this one says what it was given to execute with. A host starving while the
+   * door turns commands away is a different bug from a host starving because
+   * nothing arrived, and only these two lines together tell them apart.
+   */
+  readonly offers: InputQueueStats
   /**
    * Seat a peer.
    *
@@ -446,6 +538,13 @@ export function createRoom(options: RoomOptions): Room {
   const peers: PeerRecord[] = []
   let joined = 0
   let starved = 0
+  const fills: Record<CommandFill, number> = {
+    [CommandFill.Fresh]: 0,
+    [CommandFill.Merged]: 0,
+    [CommandFill.Repeat]: 0,
+    [CommandFill.Idle]: 0,
+    [CommandFill.Empty]: 0,
+  }
   /**
    * Matches this room has started. One, for most of a room's life.
    *
@@ -981,6 +1080,7 @@ export function createRoom(options: RoomOptions): Room {
           if (!playing(record)) continue
           const taken = record.queue.take()
           if (taken.consumed === 0) starved += 1
+          fills[taken.fill] += 1
           inputs[record.slot] = taken.cmd
         }
         // Before the sub-step, with the world it is about to run on: a demo is
@@ -1054,6 +1154,20 @@ export function createRoom(options: RoomOptions): Room {
       return lifecycle.ended
     },
 
+    get fills() {
+      return { ...fills }
+    },
+
+    get offers() {
+      const total = { ...EMPTY_QUEUE_STATS }
+      for (const record of peers) {
+        for (const key of Object.keys(total) as (keyof InputQueueStats)[]) {
+          total[key] += record.queue.stats[key]
+        }
+      }
+      return total
+    },
+
     snapshot: () => ({
       id,
       tick: state.tick,
@@ -1065,6 +1179,7 @@ export function createRoom(options: RoomOptions): Room {
       commands: peers.reduce((total, peer) => total + peer.session.commands, 0),
       gaps: peers.reduce((total, peer) => total + peer.session.gaps, 0),
       starved,
+      fills: { ...fills },
       refused: refused + peers.reduce((total, peer) => total + peer.guard.stats.refused, 0),
       held: lifecycle.held,
       ended: lifecycle.ended,

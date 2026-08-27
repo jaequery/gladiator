@@ -13,6 +13,7 @@ import { JITTER_BUFFER_TICKS } from '@gladiator/server/inputQueue'
 import { describe, expect, it } from 'vitest'
 
 import {
+  RECENT_HASHES,
   createNetClient,
   joinUrl,
   mustHoldStill,
@@ -311,6 +312,46 @@ describe('net client', () => {
     expect(snapshot.compared).toBe(2)
     expect(snapshot.mismatched).toBe(1)
     expect(snapshot.agree).toBe(true) // the most recent one agreed
+  })
+
+  it('forgets a bad patch once it is out of the recent window', () => {
+    // The session ratio is what a *counter* answers and the recent one is what
+    // a *light* answers. A tab that spent a stretch backgrounded — predicting
+    // nothing while the host simulated on — disagrees on every hash of it, and
+    // an indicator reading the totals stays red for the rest of the session
+    // over a link that came right immediately. `hud.ts` argues it.
+    const { transport, client } = connected()
+    let tick = 10
+    const feed = (agrees: boolean): void => {
+      client.record(tick, 1)
+      transport.deliver({ t: 'hash', tick, hash: agrees ? 1 : 999 })
+      tick += 1
+    }
+
+    for (let i = 0; i < 200; i += 1) feed(false)
+    const bad = client.snapshot()
+    expect(bad.mismatched).toBe(200)
+    expect(bad.recentMismatched).toBe(200)
+
+    // A whole window of agreement on top of it.
+    for (let i = 0; i < RECENT_HASHES; i += 1) feed(true)
+    const good = client.snapshot()
+    // The session remembers every one of them...
+    expect(good.mismatched).toBe(200)
+    expect(good.compared).toBe(200 + RECENT_HASHES)
+    // ...and the window has rolled clean.
+    expect(good.recentMismatched).toBe(0)
+    expect(good.recentCompared).toBe(RECENT_HASHES)
+  })
+
+  it('counts the recent window over what it holds, not over what it has seen', () => {
+    const { transport, client } = connected()
+    client.record(10, 1)
+    transport.deliver({ t: 'hash', tick: 10, hash: 999 })
+    const snapshot = client.snapshot()
+    // One hash in, one disagreement: a rate of 1, not of 1/512.
+    expect(snapshot.recentCompared).toBe(1)
+    expect(snapshot.recentMismatched).toBe(1)
   })
 
   it('ignores a hash for a tick that has aged out, rather than calling it a desync', () => {

@@ -680,6 +680,27 @@ try {
 
   // --- hash agreement, for real, for a minute ------------------------------
   console.log(`  ...  moving for ${seconds}s and comparing hashes`)
+  // The window's own pacing, because the two checks below are downstream of it
+  // and are read as netcode when they go red. A client whose frames stall
+  // hands the host its commands in clumps, and a clump is a stretch of
+  // sub-steps the host had nothing for followed by a stretch it had too much
+  // for — which is what a mismatched hash *is*. This runs at the full viewport
+  // rather than the pacing check's 320x200, so it is a different measurement of
+  // a different workload, and the server's own `input.report` line is the other
+  // half of it.
+  await tab.evaluate(() => window.__gladiator?.resetFrameStats())
+  // The counters as they stand *before* the movement, so what is judged below
+  // is this window and not the session.
+  //
+  // `net.compared` and `net.mismatched` run from page load, and the minute
+  // before this one is not a minute of play: the client spends five seconds of
+  // it backgrounded behind the pacing baseline's tab, where a page gets no
+  // animation frames at all and therefore predicts nothing the host is
+  // meanwhile simulating, and another thirty at a viewport a twentieth the size
+  // of this one. Reading the totals made a check named "after 60s of movement"
+  // answer for both — with the deliberately frozen tab in there, which is the
+  // one stretch of the run guaranteed to disagree.
+  const hashesBefore = await tab.evaluate(() => window.__gladiator?.snapshot().net)
   const deadline = Date.now() + seconds * 1000
   const keys = ['w', 'a', 's', 'd']
   let keyIndex = 0
@@ -696,6 +717,10 @@ try {
   }
 
   const final = await tab.evaluate(() => window.__gladiator?.snapshot())
+  const movingStats = final.render
+  console.log(
+    `  ...  frames while moving at ${VIEWPORT.width}x${VIEWPORT.height}: p99 ${movingStats.p99Ms.toFixed(1)} ms, median ${movingStats.medianMs.toFixed(1)} ms, mean ${movingStats.meanMs.toFixed(1)} ms, worst ${movingStats.worstMs.toFixed(1)} ms, ${movingStats.pixelRatio}x`,
+  )
   // Not "mismatched === 0", and the reason is the jitter buffer in front of the
   // host's tick scheduler. A hash frame says what the *host* simulated; the
   // client's ring says what it predicted, and those differ on any sub-step the
@@ -705,12 +730,15 @@ try {
   // handful of times a minute. A real desync is every hash after the first bad
   // one, which is nowhere near this bound — the same 2% the HUD's own indicator
   // judges on (`client/src/hud.ts`, MISPREDICTION_TOLERANCE).
-  const mispredictionRate = final.net.compared === 0 ? 1 : final.net.mismatched / final.net.compared
+  const compared = final.net.compared - hashesBefore.compared
+  const mismatched = final.net.mismatched - hashesBefore.mismatched
+  const mispredictionRate = compared === 0 ? 1 : mismatched / compared
   check(
     `the client and server hashes agree after ${seconds}s of movement`,
-    final.net.compared > 50 && mispredictionRate <= 0.02,
-    `compared ${final.net.compared}, mismatched ${final.net.mismatched} ` +
-      `(${(mispredictionRate * 100).toFixed(2)}%), last agree ${String(final.net.agree)}`,
+    compared > 50 && mispredictionRate <= 0.02,
+    `compared ${compared}, mismatched ${mismatched} ` +
+      `(${(mispredictionRate * 100).toFixed(2)}%), last agree ${String(final.net.agree)}` +
+      ` — over the whole session, ${final.net.mismatched}/${final.net.compared}`,
   )
   check(
     'the authoritative world reached this client, whole',

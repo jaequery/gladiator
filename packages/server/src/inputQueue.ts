@@ -90,15 +90,24 @@
  *
  * A client whose clock runs fast delivers more than one command per server
  * tick, and the buffer grows. Left alone it would grow without bound and every
- * command in it would be added latency. So when the buffer is deeper than
- * {@link JITTER_BUFFER_TICKS} after a take, the take **consumes two commands
- * and applies one**, merged: the newer command's angles and axes, with the
- * buttons of both OR'd together.
+ * command in it would be added latency. So when the buffer has been deeper than
+ * {@link JITTER_BUFFER_TICKS} for {@link DRIFT_WINDOW_TICKS} takes running, the
+ * take **consumes two commands and applies one**, merged: the newer command's
+ * angles and axes, with the buttons of both OR'd together.
  *
  * Consumed, not applied. Applying both would advance that player through two
  * ticks of movement in one tick of the world, which is the speedhack. Merging
  * rather than discarding is what keeps a jump or a shot in the dropped command
  * from being lost — a button press survives, at worst 8 ms early.
+ *
+ * **"Has been", not "is".** Depth on its own does not mean a fast clock. A
+ * browser ships a whole frame's worth of commands at once — two at 60 fps, four
+ * at 30 — so depth sawtooths by a frame on a link with no jitter whatsoever.
+ * Draining on the peak of that sawtooth empties the jitter buffer into the gap
+ * it exists to cover, and the next gap starves: measured at 33% of sub-steps
+ * merged and 36% starved over a localhost socket, against a client that was
+ * supplying 0.98 commands per tick. The window is what separates the two
+ * signals, and {@link DRIFT_WINDOW_TICKS} argues its length.
  *
  * ## The rate limit is the actual anti-speedhack
  *
@@ -108,8 +117,12 @@
  * therefore explicit and in the only unit that matters: **commands per
  * wall-clock second**, measured on the server's clock, {@link COMMAND_BUDGET}
  * of them with a {@link COMMAND_BURST} allowance for a batch that arrived in a
- * clump. A client sending 500 Hz of input has 375 of every 500 commands refused
- * at the door and moves at exactly the speed everyone else does.
+ * clump. A client sending 500 Hz of input has the overwhelming majority of them
+ * refused at the door and moves at exactly the speed everyone else does.
+ *
+ * The budget is the tick rate plus the slew an honest client is *asked* to run
+ * at, not the tick rate flat — {@link COMMAND_BUDGET} argues why a budget with
+ * no room for the protocol's own correction starves the host it was protecting.
  *
  * The burst is what makes an honest client at 30 fps indistinguishable from a
  * cheat: it sends four commands per frame in one batch, and a bucket with no
@@ -122,7 +135,13 @@
  * `room.isomorphic.test.ts` fails the build on a `Date.now()` that appears
  * anywhere reachable from `room.ts`.
  */
-import { BUTTON_ATTACK, BUTTON_DASH_MASK, TICK_RATE, type UserCmd } from '@gladiator/sim'
+import {
+  BUTTON_ATTACK,
+  BUTTON_DASH_MASK,
+  MAX_COMMAND_SLEW,
+  TICK_RATE,
+  type UserCmd,
+} from '@gladiator/sim'
 
 import { createTokenBucket } from './rateLimit.ts'
 
@@ -161,13 +180,67 @@ export const MAX_BUFFERED_COMMANDS = 32
 export const MAX_REPEAT_TICKS = 62
 
 /**
- * Commands a peer may have executed per wall-clock second.
+ * How long the buffer has to stay deeper than the target before a take starts
+ * draining it, in ticks.
  *
- * Exactly the tick rate, because that is exactly how many the world has room
- * for. Not a tuned number: a client that needs more than one command per tick
- * is a client asking for more than one tick.
+ * Eight ticks is 64 ms. The number exists because depth is *two* signals wearing
+ * one hat, and only one of them is worth acting on:
+ *
+ * - **Drift** — a client whose clock runs fast. Depth climbs and stays climbed.
+ *   That extra depth is pure latency and draining it is the point.
+ * - **Jitter** — every honest client, all the time. A browser samples input and
+ *   ships commands once per *rendered frame*, and a frame is longer than a
+ *   tick: a 60 fps client hands over two commands every 16 ms, a 30 fps client
+ *   four every 33 ms. Depth therefore sawtooths by a whole frame's worth,
+ *   by construction, on a link with no jitter at all.
+ *
+ * Reacting to the peak of that sawtooth was a self-inflicted wound. The drain
+ * fired on every clump, walked the buffer back to the target immediately, and
+ * so guaranteed that the gap *between* clumps found nothing there — the buffer
+ * was emptied by the correction and then starved by the very jitter it exists
+ * to cover. Measured on the browser smoke test before this window existed: 33%
+ * of sub-steps merged, 36% starved, and only 31% executed one fresh command as
+ * sent, on a localhost socket with the client supplying 0.98 commands per tick.
+ *
+ * So the trigger is the *trough*, not the peak: the buffer must have stayed
+ * above target across a whole window. A clump touches the target on its way
+ * down every frame and never qualifies; a fast clock never touches it and
+ * qualifies within 64 ms — which is well inside the fifth of a second the
+ * client's own slew takes to close a drift of the same size.
+ *
+ * The window has to outlast one frame's worth of commands, which is what sets
+ * the floor: eight ticks is 64 ms, four frames at 60 fps and two at 30, so a
+ * clump's trough lands inside the window whatever the frame rate. It is not
+ * longer than that because every tick of it is a tick of standing latency a
+ * drifting client keeps, and the client's own slew closes a drift of this size
+ * in about the same time.
  */
-export const COMMAND_BUDGET = TICK_RATE
+export const DRIFT_WINDOW_TICKS = 8
+
+/**
+ * Commands a peer may offer per wall-clock second.
+ *
+ * The tick rate plus the slew the protocol asks a client to run at
+ * ({@link MAX_COMMAND_SLEW}), rounded up. Not a tuned number, and the headroom
+ * is not slack — it is the *whole* of the correction `client/net/clockSync.ts`
+ * is built to make.
+ *
+ * It used to be exactly the tick rate, on the reasoning that one command per
+ * tick is all the world has room for. That is true of what a tick *executes*
+ * and false of what a second *carries*: a client that is behind its lead closes
+ * the gap by running its command clock up to 12.5% fast, which is 141 commands
+ * in the second it spends catching up. A budget of exactly 125 refused the
+ * overshoot, so the lead never closed, so the client stayed behind — and the
+ * host spent that second on the missing-command fallback for input the door had
+ * just turned away.
+ *
+ * This is not the speedhack ceiling and never was. What a peer *executes* is
+ * one command per sub-step, whatever it sends: {@link InputQueue.take} applies
+ * exactly one, and the doubling-up below consumes two and applies one on
+ * purpose. A client at 500 Hz still moves at exactly the speed everyone else
+ * does — `inputQueue.test.ts` measures it in units travelled.
+ */
+export const COMMAND_BUDGET = Math.ceil(TICK_RATE * (1 + MAX_COMMAND_SLEW))
 
 /**
  * How far the rate limit lets a client run ahead of its own budget.
@@ -231,6 +304,14 @@ export type InputQueueStats = {
   readonly executed: number
   /** Takes that consumed two commands. Drift being corrected. */
   readonly merged: number
+  /**
+   * Consecutive takes that have left the buffer deeper than the target.
+   *
+   * The drift signal itself, exposed so that a queue draining a clump and a
+   * queue draining a fast clock can be told apart from outside — the counter
+   * sits at zero for the first and climbs for the second.
+   */
+  readonly overTarget: number
   /** Takes that found nothing buffered — the fallback, in either form. */
   readonly starved: number
   /** Commands that arrived below a tick already buffered and were kept. */
@@ -262,6 +343,8 @@ export type InputQueueOptions = {
   readonly target?: number
   readonly capacity?: number
   readonly maxRepeatTicks?: number
+  /** Ticks the buffer must stay over target before a take drains it. */
+  readonly driftWindowTicks?: number
   /** Commands per wall-clock second. Zero turns the limit off. */
   readonly budgetPerSecond?: number
   readonly burst?: number
@@ -315,6 +398,7 @@ export function createInputQueue(options: InputQueueOptions = {}): InputQueue {
   const target = options.target ?? JITTER_BUFFER_TICKS
   const capacity = options.capacity ?? MAX_BUFFERED_COMMANDS
   const maxRepeatTicks = options.maxRepeatTicks ?? MAX_REPEAT_TICKS
+  const driftWindowTicks = options.driftWindowTicks ?? DRIFT_WINDOW_TICKS
   const budgetPerSecond = options.budgetPerSecond ?? COMMAND_BUDGET
   const burst = options.burst ?? COMMAND_BURST
 
@@ -322,6 +406,11 @@ export function createInputQueue(options: InputQueueOptions = {}): InputQueue {
   let executedTick = options.startTick ?? 0
   let last: UserCmd | null = null
   let starving = 0
+  /**
+   * Consecutive takes that have left the buffer over target — how long the
+   * surplus has *lasted*, which is what tells drift from a clump.
+   */
+  let overTarget = 0
 
   // The token bucket. Full to begin with, and its clock starts at the first
   // command rather than at construction: a room may sit empty for a minute
@@ -390,6 +479,9 @@ export function createInputQueue(options: InputQueueOptions = {}): InputQueue {
       if (head === undefined) {
         stats.starved += 1
         starving += 1
+        // A buffer that has run dry has no standing surplus by definition, so
+        // whatever depth it had built up stops counting towards one.
+        overTarget = 0
         if (last === null) return { cmd: null, fill: CommandFill.Empty, consumed: 0 }
         const fill = starving > maxRepeatTicks ? CommandFill.Idle : CommandFill.Repeat
         const cmd = fill === CommandFill.Idle ? idleCommand(last) : repeatCommand(last)
@@ -404,10 +496,17 @@ export function createInputQueue(options: InputQueueOptions = {}): InputQueue {
       stats.executed += 1
       executedTick = head.tick
 
-      // Deeper than the target *after* taking the head means the client is
-      // ahead of us and the extra depth is pure latency. One more is consumed
-      // and merged in, which walks the buffer back down a tick per tick.
-      if (buffer.length > target) {
+      // Deeper than the target *after* taking the head, and it has been for a
+      // whole window: the client is genuinely ahead of us and the extra depth
+      // is pure latency. One more is consumed and merged in, which walks the
+      // buffer back down a tick per tick.
+      //
+      // The window is the whole of the decision. Depth alone cannot tell a fast
+      // clock from a browser handing over a frame's worth of commands at once,
+      // and draining on the second reading empties the jitter buffer into the
+      // gap it exists to cover. See {@link DRIFT_WINDOW_TICKS}.
+      overTarget = buffer.length > target ? overTarget + 1 : 0
+      if (overTarget > driftWindowTicks) {
         const next = buffer.shift()
         if (next !== undefined) {
           executedTick = next.tick
@@ -435,7 +534,7 @@ export function createInputQueue(options: InputQueueOptions = {}): InputQueue {
     },
 
     get stats(): InputQueueStats {
-      return { ...stats }
+      return { ...stats, overTarget }
     },
   }
 }

@@ -294,6 +294,7 @@ export type { WireState } from './netstate.ts'
 export {
   LifecycleEvent,
   MAX_CMDS_PER_BATCH,
+  MAX_COMMAND_SLEW,
   MAX_RESUME_TICKET_CHARS,
   MAX_TICK,
   PROTOCOL_VERSION,

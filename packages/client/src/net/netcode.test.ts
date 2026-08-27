@@ -216,14 +216,20 @@ describe('the containment mechanism', () => {
       // it — and the two worlds now differ by **exactly the input the host has
       // not seen yet** and nothing else.
       //
-      // Not "by nothing": a client running the lead the jitter buffer expects
-      // is *supposed* to be ahead, and a run ends with a handful of commands
-      // the host never got — the tail of a burst the rate limiter refused, or
-      // frames still in the air when the clock stopped. So the bound is the
-      // travel those commands can account for, and it is a tight one: a player
-      // covers about 2.6 units in a sub-step at run speed, and
-      // {@link MAX_TRAVEL_PER_TICK} is comfortably above anything a rocket can
-      // launch them at.
+      // Not "by nothing" in general: a client running the lead the jitter
+      // buffer expects is *supposed* to be ahead, and a run can end with a
+      // handful of commands the host never got — frames still in the air when
+      // the clock stopped. So the bound is the travel those commands can
+      // account for, and it is a tight one: a player covers about 2.6 units in
+      // a sub-step at run speed, and {@link MAX_TRAVEL_PER_TICK} is comfortably
+      // above anything a rocket can launch them at.
+      //
+      // On a link this clean the honest answer is now zero of them, and the
+      // bound says so: `toBeLessThanOrEqual` of `0 * anything` is "the two
+      // worlds are bit-identical", which is the strongest form this claim
+      // takes. It used not to be reachable because the command budget was
+      // exactly the tick rate and refused the tail of every burst the client's
+      // own slew produced — `server/inputQueue.ts`'s {@link COMMAND_BUDGET}.
       //
       // Anything that made the two *simulations* differ — an engine collision
       // routine, a camera read back into the world, a stray `Math.random`, a
@@ -234,7 +240,7 @@ describe('the containment mechanism', () => {
       const outstanding = session.predictor.pending
       expect(outstanding).toBeLessThan(32)
       expect(session.predictor.tick - session.room.tick).toBe(outstanding)
-      expect(distanceToHost(session)).toBeLessThan(outstanding * MAX_TRAVEL_PER_TICK)
+      expect(distanceToHost(session)).toBeLessThanOrEqual(outstanding * MAX_TRAVEL_PER_TICK)
 
       // And the run went somewhere, rather than agreeing about a player who
       // never moved. Path length rather than net displacement: the script turns

@@ -542,6 +542,27 @@ export type ServerMessage =
 /** No round trip has completed yet, so there is nothing to report. */
 export const UNKNOWN_RTT = -1
 
+/**
+ * The most of a frame a client's command clock may be slewed by, as a fraction.
+ *
+ * An eighth: one millisecond per 8 ms tick. It is a term of the client/server
+ * contract rather than a client preference, which is why it lives here beside
+ * {@link UNKNOWN_RTT} and not in whichever end reads it. Both do:
+ *
+ * - `client/net/clockSync.ts` bounds its slew by it, because closing the lead
+ *   by *jumping* is a lurch the player sees.
+ * - `server/inputQueue.ts` sizes its command budget by it. A client running its
+ *   clock this fast is producing commands this much faster than the tick rate,
+ *   and a budget of exactly the tick rate would refuse the very catch-up the
+ *   protocol asks for — leaving the host starved for the input it just turned
+ *   away, which is the one failure mode both ends are built to avoid.
+ *
+ * Raising it does not let anyone move faster. What a peer *executes* is capped
+ * at one command per sub-step by the queue's drain, and the doubling-up it does
+ * to walk a deep buffer down consumes two and applies one on purpose.
+ */
+export const MAX_COMMAND_SLEW = 0.125
+
 /** Pack a command for the wire. */
 export function encodeCmd(cmd: UserCmd): WireCmd {
   return [cmd.forwardMove, cmd.sideMove, cmd.yaw, cmd.pitch, cmd.buttons, cmd.weapon]

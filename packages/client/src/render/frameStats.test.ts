@@ -141,3 +141,35 @@ describe('createFrameMeter', () => {
     expect(meterVerdict(meter, FRAME_BUDGET_MS).ok).toBe(true)
   })
 })
+
+describe('missShare', () => {
+  it('counts the frames that missed, which is what vsync leaves visible', () => {
+    // Three quarters of a window on the refresh and a quarter waiting for the
+    // next one. Every summary statistic reports the refresh interval — the
+    // median *is* 16.7 — and the share is the only reading that says a quarter
+    // of the frames were dropped. `render/engine.ts` argues why the quality
+    // dial has to read this one.
+    const meter = createFrameMeter()
+    for (let i = 0; i < 450; i += 1) meter.record(1000 / 60)
+    for (let i = 0; i < 150; i += 1) meter.record(2000 / 60)
+    expect(summarise(meter.intervals()).medianMs).toBeCloseTo(1000 / 60, 5)
+    expect(meter.missShare(FRAME_BUDGET_MS * 1.15)).toBeCloseTo(0.25, 5)
+  })
+
+  it('is zero on an empty meter and after a reset, rather than a division by it', () => {
+    const meter = createFrameMeter()
+    expect(meter.missShare(1)).toBe(0)
+    meter.record(500)
+    expect(meter.missShare(1)).toBe(1)
+    meter.reset()
+    expect(meter.missShare(1)).toBe(0)
+  })
+
+  it('is taken over the ring, not over everything ever recorded', () => {
+    const meter = createFrameMeter(4)
+    for (let i = 0; i < 4; i += 1) meter.record(100)
+    expect(meter.missShare(50)).toBe(1)
+    for (let i = 0; i < 4; i += 1) meter.record(10)
+    expect(meter.missShare(50)).toBe(0)
+  })
+})

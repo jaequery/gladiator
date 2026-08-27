@@ -763,6 +763,22 @@ TCP connection is. The displaced socket is told (`replaced`, 4008) rather than
 dropped, because from its side those two look identical and only one of them
 means "you are now playing in another tab".
 
+**The seat token survives a reload, in `sessionStorage` and nowhere else.**
+A reload is the commonest way to lose a socket and the one the reservation could
+not serve: the page came back with `?room=CODE` still in the address bar, a
+fresh peer id and an empty memory, and was refused `room-full` by a room that was
+holding a `Vacant` seat open for it. So `client/net/seatStore.ts` keeps the room
+and its token where a reload can find them. `sessionStorage` rather than
+`localStorage` because the token is a **bearer credential** and the question is
+its lifetime and its audience, not its convenience: tab-scoped and cleared when
+the tab closes is the whole of the window in which it means anything, where
+`localStorage` would outlive the match by weeks and be shared with every other
+tab on the origin. The room is stored beside the token and checked on the way
+out, so a token is only ever offered back to the room it was minted for; and the
+store is handed its storage rather than reaching for a global, because both web
+storages *throw* outright where site data is blocked and losing a player to a
+privacy setting would be a silly way to lose a player.
+
 **On the way back in, the client throws away everything it predicted across the
 gap.** The outbox, the pending commands (`predictor.discard()`), the render
 offset and the opponent's history, and then it takes the first snapshot whole.
@@ -1020,22 +1036,54 @@ disagree.
 
 **Drift is corrected by consuming two commands in a tick, never by applying
 two.** A client whose clock runs fast delivers more than one command per tick and
-the buffer grows. When it is deeper than the target after a take, the take
-consumes two and applies one, **merged**: the newer command's angles and axes,
-with the buttons of both OR'd together. Applying both would advance that player
-through two ticks of movement in one tick of the world, which is the speedhack.
-Merging rather than discarding keeps a jump or a shot in the dropped command,
-at worst 8 ms early.
+the buffer grows. When it has been deeper than the target for
+`DRIFT_WINDOW_TICKS` (eight) takes running, the take consumes two and applies
+one, **merged**: the newer command's angles and axes, with the buttons of both
+OR'd together. Applying both would advance that player through two ticks of
+movement in one tick of the world, which is the speedhack. Merging rather than
+discarding keeps a jump or a shot in the dropped command, at worst 8 ms early.
+
+**"Has been deeper", not "is deeper" — and that window is load-bearing.** Depth
+is two signals wearing one hat. Drift climbs and stays climbed. *Jitter* is
+every honest client, all the time: a browser ships a whole frame's worth of
+commands at once — two at 60 fps, four at 30 — so depth sawtooths by a frame on
+a link with no jitter whatsoever. Draining on the peak of that sawtooth empties
+the jitter buffer into the gap it exists to cover, and the next gap starves. It
+measured, on the browser smoke test over a **localhost** socket against a client
+supplying 0.98 commands per tick, at 33% of sub-steps merged and 36% on the
+missing-command fallback. So the trigger is the trough: a clump touches the
+target on its way down every frame and never qualifies, a fast clock never
+touches it and qualifies within 64 ms.
+
+**Read the tally before you theorise about any of this.** The host says what
+every sub-step's command came from — `input.report`, beside `scheduler.report`
+and again in the shutdown line: `fresh / merged / repeat / idle / empty`, plus
+what became of every command offered. The browser smoke test's hash check is a
+direct readout of it, so `fresh` at 99% means the buffer is being fed properly
+and a red hash check is somebody else's bug. It usually is: the client only
+samples input inside `requestAnimationFrame`, so a client whose *frames* stall
+hands the host a clump and then nothing, and that reads here as merges and
+starvation at once. Measured that way, the standing failure everyone kept
+attributing to netcode was the renderer (`docs/renderer.md` §4).
 
 **The rate limit is the actual anti-speedhack**, and it is in the only unit that
-matters: commands per **wall-clock second**, on the server's clock, `TICK_RATE`
-of them with a 32-command burst for a batch that arrived in a clump. Bounding the
-buffer caps how far *ahead* a client can get; it does not by itself cap how much
-of the world's time it can consume, because the drift correction would happily
-keep consuming two per tick. A client sending 500 Hz of input has three of every
-four commands refused at the door and moves at exactly the speed everyone else
-does — `inputQueue.test.ts` measures that in units travelled, against a third
-world simulated with no policy at all so the assertion has something to bite on.
+matters: commands per **wall-clock second**, on the server's clock,
+`COMMAND_BUDGET` of them with a 32-command burst for a batch that arrived in a
+clump. Bounding the buffer caps how far *ahead* a client can get; it does not by
+itself cap how much of the world's time it can consume, because the drift
+correction would happily keep consuming two per tick. A client sending 500 Hz of
+input has the overwhelming majority of them refused at the door and moves at
+exactly the speed everyone else does — `inputQueue.test.ts` measures that in
+units travelled, against a third world simulated with no policy at all so the
+assertion has something to bite on.
+
+The budget is `TICK_RATE` **plus `MAX_COMMAND_SLEW`**, not the tick rate flat.
+One command per tick is all the world has room for to *execute*, and it is not
+all a second has room to *carry*: a client closing its lead runs its command
+clock up to 12.5% fast on purpose (`client/net/clockSync.ts`), and a budget of
+exactly 125 refused the overshoot, so the lead never closed and the host spent
+the second on the fallback for input the door had just turned away. The number
+lives in `sim/src/protocol.ts` because both ends size themselves by it.
 
 ### What a stranger is allowed to do
 

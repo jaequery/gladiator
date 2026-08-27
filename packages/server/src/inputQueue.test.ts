@@ -31,13 +31,16 @@ import {
 import { describe, expect, it } from 'vitest'
 
 import {
+  COMMAND_BUDGET,
   COMMAND_BURST,
   CommandFate,
   CommandFill,
+  DRIFT_WINDOW_TICKS,
   JITTER_BUFFER_TICKS,
   MAX_BUFFERED_COMMANDS,
   MAX_REPEAT_TICKS,
   createInputQueue,
+  mergeCommands,
 } from './inputQueue.ts'
 
 /** A command that is distinguishable from every other one in these tests. */
@@ -182,36 +185,89 @@ describe('the buffer never grows without bound', () => {
     expect(queue.stats.executed).toBe(200)
   })
 
-  it('walks a burst back down to the target depth, one tick at a time', () => {
+  it('walks a standing surplus back down, one tick at a time', () => {
     const queue = createInputQueue()
+    // Twelve deep and *kept* there: one command offered per take, so nothing
+    // the queue does can bring the trough back to the target. That is a clock
+    // running fast rather than a frame arriving, and it is what the drain is
+    // for.
     for (let tick = 1; tick <= 12; tick += 1) queue.offer(tick, SPRINT, 0)
     expect(queue.depth).toBe(12)
 
-    // Every take consumes two while the buffer is over target, so the extra
-    // latency drains at a tick per tick instead of being carried for the match.
+    let next = 13
     const depths: number[] = []
-    for (let i = 0; i < 6; i += 1) {
+    for (let i = 0; i < DRIFT_WINDOW_TICKS + 6; i += 1) {
+      queue.offer(next, SPRINT, next * 8)
+      next += 1
       queue.take()
       depths.push(queue.depth)
     }
-    expect(depths).toEqual([10, 8, 6, 4, 2, 1])
-    expect(queue.stats.merged).toBe(5)
+
+    // Nothing for a whole window — the surplus has not lasted long enough to be
+    // one — and then a tick of it drained per tick.
+    expect(depths.slice(0, DRIFT_WINDOW_TICKS)).toEqual(
+      new Array(DRIFT_WINDOW_TICKS).fill(12),
+    )
+    expect(depths.slice(DRIFT_WINDOW_TICKS)).toEqual([11, 10, 9, 8, 7, 6])
+    expect(queue.stats.merged).toBe(6)
+  })
+
+  it('leaves a frame-sized clump alone, because that is jitter and not drift', () => {
+    // The regression this window exists for. A browser hands over a whole
+    // frame's worth of commands at once — four here, a client at 30 fps — and
+    // the host drains one per sub-step. Depth therefore sawtooths above the
+    // target every single frame on a link with no jitter at all, and draining
+    // on that peak empties the buffer into the gap it exists to cover: measured
+    // on the browser smoke test at 36% of sub-steps on the missing-command
+    // fallback, over a *localhost* socket.
+    const queue = createInputQueue()
+    let next = 1
+    let starved = 0
+    // The lead the client is told to run (`client/net/clockSync.ts`), already
+    // established: without it there is no buffer to drain and nothing to prove.
+    for (let i = 0; i < JITTER_BUFFER_TICKS; i += 1) {
+      queue.offer(next, SPRINT, 0)
+      next += 1
+    }
+    for (let frame = 0; frame < 40; frame += 1) {
+      for (let i = 0; i < 4; i += 1) {
+        queue.offer(next, SPRINT, frame * 32)
+        next += 1
+      }
+      // Four sub-steps per frame, which is what 30 fps costs at 125 Hz.
+      for (let step = 0; step < 4; step += 1) {
+        if (queue.take().consumed === 0) starved += 1
+      }
+    }
+
+    // Not one command doubled up on, and not one sub-step left without one.
+    expect(queue.stats.merged).toBe(0)
+    expect(starved).toBe(0)
+    // And the buffer is still holding what it is supposed to hold, rather than
+    // having been drained to nothing between frames.
+    expect(queue.depth).toBeGreaterThanOrEqual(JITTER_BUFFER_TICKS)
   })
 
   it('merges rather than discards, so a press in the dropped command survives', () => {
     const queue = createInputQueue()
-    queue.offer(1, cmdWith({ buttons: BUTTON_JUMP, yaw: 1 }), 0)
-    queue.offer(2, cmdWith({ buttons: 0, yaw: 2 }), 0)
-    queue.offer(3, SPRINT, 0)
-    queue.offer(4, SPRINT, 0)
+    // Deep, and kept deep for a window, so the drain is armed when the two
+    // commands under test come round.
+    for (let tick = 1; tick <= 8; tick += 1) queue.offer(tick, SPRINT, 0)
+    for (let i = 0; i < DRIFT_WINDOW_TICKS; i += 1) {
+      queue.offer(100 + i, SPRINT, (100 + i) * 8)
+      expect(queue.take().fill).toBe(CommandFill.Fresh)
+    }
 
     const merged = queue.take()
     expect(merged.fill).toBe(CommandFill.Merged)
     expect(merged.consumed).toBe(2)
-    // The newer command's angles — a state value is superseded — and the
-    // buttons of both, because a jump nobody executed is a jump nobody made.
-    expect(merged.cmd?.yaw).toBe(2)
-    expect(merged.cmd?.buttons).toBe(BUTTON_JUMP)
+
+    // And the fold itself: the newer command's angles — a state value is
+    // superseded — and the buttons of both, because a jump nobody executed is a
+    // jump nobody made.
+    expect(mergeCommands(cmdWith({ buttons: BUTTON_JUMP, yaw: 1 }), cmdWith({ yaw: 2 }))).toEqual(
+      cmdWith({ buttons: BUTTON_JUMP, yaw: 2 }),
+    )
   })
 
   it('refuses to hold more than the ceiling, however fast a client sends', () => {
@@ -313,7 +369,7 @@ describe('a client sending 500 Hz of input gains nothing by it', () => {
     expect(honest.queue.stats.rateLimited).toBe(0)
     expect(honest.queue.stats.starved).toBe(0)
     expect(cheat.queue.stats.rateLimited + cheat.queue.stats.overflow).toBeGreaterThan(
-      sentByCheat - TICK_RATE - COMMAND_BURST,
+      sentByCheat - COMMAND_BUDGET - COMMAND_BURST,
     )
 
     // Without the policy the same input stream is four seconds of running.

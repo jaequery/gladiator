@@ -84,6 +84,7 @@ import { type ListenServer, createListenServer } from './net/listenServer.ts'
 import { createPredictor } from './net/prediction.ts'
 import { CorrectionBand, decayMsFor } from './net/reconcile.ts'
 import { createRocketPredictor } from './net/rocketPredict.ts'
+import { createSeatStore, tabStorage } from './net/seatStore.ts'
 import { websocketTransport } from './net/websocketTransport.ts'
 import { type PlayerNetState, playerNetState } from './render/animState.ts'
 import {
@@ -538,6 +539,11 @@ async function boot(): Promise<void> {
   // `ui/settings.ts` says why that is a rule rather than an accident.
   const settings = createSettingsStore(browserStorage())
 
+  // The seat this tab holds, so that pressing reload rejoins the match in the
+  // address bar rather than knocking on the door of a room that is holding a
+  // seat open for it. `net/seatStore.ts` argues where a bearer token may live.
+  const seats = createSeatStore(tabStorage())
+
   const input = createInputController(canvas, {
     degreesPerCount: degreesPerCount(settings.value),
   })
@@ -807,6 +813,10 @@ async function boot(): Promise<void> {
         }
       },
       ...(redial === null ? {} : { redial }),
+      // Where a reload finds its way back in. `net/seatStore.ts` argues the
+      // storage; the decision lives out here because a credential's lifetime is
+      // this file's business and not the socket's.
+      onSeat: (room, token) => seats.remember(room, token),
       // A reconnect lands in a match that carried on without this tab: the body
       // was standing still, rockets were fired at it, rounds may have been
       // decided. So everything this client believed on its own is dropped — the
@@ -887,7 +897,20 @@ async function boot(): Promise<void> {
       session.net.connect()
       return
     }
-    const url = joinUrl(serverUrl, code, queue)
+    // The token this tab was given last time it held a seat in this room, if it
+    // was. A reload keeps `?room=CODE` in the address bar and nothing else, so
+    // without this the page arrives as a stranger at a room that is holding a
+    // seat open for it and is refused `room-full` (`server/lifecycle.ts`).
+    const held = code === null || code === '' ? null : seats.recall(code)
+    const url =
+      held === null
+        ? joinUrl(serverUrl, code, queue)
+        : rejoinUrl(joinUrl(serverUrl, code, queue), {
+            room: code,
+            token: held,
+            resume: null,
+            attempt: 0,
+          })
     // The same URL with the seat's token on it, which is what turns a redial
     // into a *reconnect* rather than a stranger arriving at a full room
     // (GLAD-DVDV6P). Built from the URL this session actually dialled — which is
