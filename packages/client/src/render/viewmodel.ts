@@ -46,13 +46,14 @@ import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial'
 import type { Mesh } from '@babylonjs/core/Meshes/mesh'
 import { TransformNode } from '@babylonjs/core/Meshes/transformNode'
 import type { Scene } from '@babylonjs/core/scene'
-import { TICK_DT, type Vec3, Weapon } from '@gladiator/sim'
+import { EntityFlag, TICK_DT, type Vec3, Weapon } from '@gladiator/sim'
 
 import { type AnimFrame, FIRE_TICKS, type PlayerNetState } from './animState.ts'
 import { STRIDE_DISTANCE } from './playerModel.ts'
 import {
   RAILGUN_VIEW,
   ROCKET_LAUNCHER_VIEW,
+  SHIELD_VIEW,
   buildWeapon,
   finishMaterials,
   weaponFinishes,
@@ -88,6 +89,22 @@ const KICK_BACK = 3.6
 
 /** How far the muzzle rises on a shot, radians. */
 const KICK_PITCH = 0.13
+
+/**
+ * Where the guard sits, as an offset from the weapon's rest pose in the
+ * camera's local frame: in towards the centre of the screen, up, and closer to
+ * the eye. GLAD-ZPE5LN.
+ *
+ * Applied with no ramp, unlike every other term in this pose. The block is a
+ * bit that is either set or clear for a whole tick (`sim/weapons.ts`), and it
+ * is worth 90% of the next hit, so the one thing the animation must not do is
+ * make the player guess: the frame the plate is up is the frame they are
+ * covered. A raise that eased in over 100 ms would be a lie for six ticks.
+ */
+const GUARD_OFFSET: Vec3 = [-3.2, 2.4, 2.2]
+
+/** How far the guard tips the plate back towards the eye, radians. */
+const GUARD_PITCH = -0.12
 
 /** A pose for the viewmodel root, in the camera's local frame. */
 export type ViewmodelPose = {
@@ -133,14 +150,20 @@ export function viewmodelPose(
       ? 1 - ramp(now, net.lastFireTick, FIRE_TICKS)
       : 0
 
+  const guard = (net.flags & EntityFlag.Blocking) !== 0 ? 1 : 0
+
   return {
     position: [
-      VIEWMODEL_REST[0] + bobX + idle,
-      VIEWMODEL_REST[1] + bobY + idle * 0.5 - (frame.airborne ? AIR_DROP : 0),
+      VIEWMODEL_REST[0] + bobX + idle + GUARD_OFFSET[0] * guard,
+      VIEWMODEL_REST[1] +
+        bobY +
+        idle * 0.5 -
+        (frame.airborne ? AIR_DROP : 0) +
+        GUARD_OFFSET[1] * guard,
       // Camera-local `-z` is forward, so recoil is `+z`: towards the eye.
-      VIEWMODEL_REST[2] + KICK_BACK * kick,
+      VIEWMODEL_REST[2] + KICK_BACK * kick + GUARD_OFFSET[2] * guard,
     ],
-    rotation: [KICK_PITCH * kick, bobX * 0.02, -bobX * 0.03],
+    rotation: [KICK_PITCH * kick + GUARD_PITCH * guard, bobX * 0.02, -bobX * 0.03],
   }
 }
 
@@ -170,9 +193,9 @@ function viewmodelMaterial(scene: Scene, name: string, tint: Vec3): StandardMate
 /**
  * Build the viewmodel and hang it off the camera.
  *
- * Both weapons are built once and one is enabled at a time, so a weapon switch
+ * Every weapon is built once and one is enabled at a time, so a weapon switch
  * mid-fight is a boolean rather than a mesh construction — the same reason the
- * opponent's rig carries both (`playerModel.ts`).
+ * opponent's rig carries them all (`playerModel.ts`).
  *
  * What each weapon is *made of* is `weaponModel.ts`, so the launcher you are
  * holding and the launcher pointed at you are one description built twice.
@@ -214,12 +237,20 @@ export function createViewmodel(scene: Scene, camera: TargetCamera): Viewmodel {
     onMesh,
   })
 
+  const shield = new TransformNode('viewmodel:shield', scene)
+  shield.parent = root
+  buildWeapon(scene, SHIELD_VIEW, shield, finishes, {
+    namePrefix: 'viewmodel:shield',
+    onMesh,
+  })
+
   let weapon: Weapon = Weapon.None
   let visible = true
 
   const show = (): void => {
     launcher.setEnabled(visible && weapon === Weapon.RocketLauncher)
     railgun.setEnabled(visible && weapon === Weapon.Railgun)
+    shield.setEnabled(visible && weapon === Weapon.Shield)
   }
   show()
 

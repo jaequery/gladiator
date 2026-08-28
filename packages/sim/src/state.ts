@@ -49,6 +49,22 @@ export const EntityFlag = {
   JumpHeld: 1 << 3,
   /** A dash command has been held since its one launch. */
   DashHeld: 1 << 4,
+  /**
+   * The guard is up: this player is holding the shield with attack down, and
+   * every hit that reaches them costs a tenth of what it would (GLAD-ZPE5LN).
+   *
+   * A flag rather than a field for the reason `JumpHeld` is one, and netstate
+   * for the reason `weapon` is: `applyDamage` never sees a `UserCmd`, so "is
+   * this player blocking" has to be something the *world* knows at the moment
+   * a shot lands, and the opponent has to be able to read a raised guard off
+   * the silhouette one snapshot later. `flags` is already encoded and hashed,
+   * so both come for free.
+   *
+   * Written once per tick for every player, before anybody fires
+   * (`weapons.ts`), so a guard is up or down for the whole tick rather than
+   * for the part of it after its owner's slot came round.
+   */
+  Blocking: 1 << 5,
 } as const
 
 export type EntityFlag = (typeof EntityFlag)[keyof typeof EntityFlag]
@@ -105,7 +121,8 @@ export type EntityState = {
    * Netstate rather than a client-side guess, because an opponent's weapon is
    * something you *read* and change your movement about, and you have to be
    * able to read it one snapshot after the server changed it. Written every
-   * tick by the fire phase (`weapons.ts`); drawn by the renderer.
+   * tick by the hold phase (`weapons.ts`), just before the fire phase; drawn by
+   * the renderer.
    */
   weapon: Weapon
   /**

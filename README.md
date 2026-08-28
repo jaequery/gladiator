@@ -1,8 +1,9 @@
 # Gladiator
 
 A browser-native recreation of the 1996 Quake mod *Rocket Arena*. Round-based
-1v1 duels on one small map: spawn at full health, no pickups, two weapons —
-rocket launcher and railgun — both with unlimited ammo. Play a friend over a
+1v1 duels on one small map: spawn at full health, no pickups, three weapons —
+rocket launcher, railgun and a shield that takes 90% off a hit while you hold
+its guard up — all with unlimited ammo. Play a friend over a
 room code, or a bot that plays by the same rules you do.
 
 The game is played on **Crucible** (`maps/arena1.ts`): a small sealed arena with
@@ -69,8 +70,8 @@ pnpm run acceptance  # the game's acceptance criteria, in a real browser
 ```
 
 Where `e2e` proves the *platform*, `acceptance` proves the **game**: the arena
-renders, exactly two weapons are reachable and neither runs out over a sustained
-burst, single-player seats a bot that moves and hunts, and two independent
+renders, both weapons that fire are reachable and neither runs out over a
+sustained burst, single-player seats a bot that moves and hunts, and two independent
 browser contexts join one room by code and see each other move in real time. It
 writes `artifacts/acceptance-arena.png` so the arena can be looked at rather
 than only asserted about.

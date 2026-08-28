@@ -117,6 +117,7 @@ describe('the opponent rig', () => {
     const { scene, rig } = rigged()
     const launcher = scene.getTransformNodeByName('player7:rocket') as TransformNode
     const railgun = scene.getTransformNodeByName('player7:rail') as TransformNode
+    const shield = scene.getTransformNodeByName('player7:shield') as TransformNode
 
     draw(rig, playerNetState(entity({ weapon: Weapon.RocketLauncher })))
     expect(rig.weapon).toBe(Weapon.RocketLauncher)
@@ -128,12 +129,43 @@ describe('the opponent rig', () => {
     expect(rig.weapon).toBe(Weapon.Railgun)
     expect(launcher.isEnabled()).toBe(false)
     expect(railgun.isEnabled()).toBe(true)
+
+    // And so is the shield, on the same terms. GLAD-ZPE5LN.
+    draw(rig, playerNetState(entity({ weapon: Weapon.Shield })), 2)
+    expect(rig.weapon).toBe(Weapon.Shield)
+    expect(railgun.isEnabled()).toBe(false)
+    expect(shield.isEnabled()).toBe(true)
+  })
+
+  it('locks the shield arm across the chest while the guard is up', () => {
+    // The one pose in this rig that comes from a flag rather than from motion,
+    // and it has to be visible on an opponent: a raised guard is worth 90% of
+    // the next hit (`sim/match/selfDamage.ts`). GLAD-ZPE5LN.
+    const { scene, rig } = rigged()
+    const shoulder = scene.getTransformNodeByName('player7:shoulder.r') as TransformNode
+
+    draw(rig, playerNetState(entity({ weapon: Weapon.Shield })))
+    const idle = shoulder.rotation.x
+
+    draw(
+      rig,
+      playerNetState(
+        entity({ weapon: Weapon.Shield, flags: EntityFlag.OnGround | EntityFlag.Blocking }),
+      ),
+      1,
+    )
+    expect(shoulder.rotation.x).not.toBeCloseTo(idle, 3)
+
+    // And it comes down again, on the snapshot that says so.
+    draw(rig, playerNetState(entity({ weapon: Weapon.Shield })), 2)
+    expect(shoulder.rotation.x).toBeCloseTo(idle, 9)
   })
 
   it('shows nothing when the netstate says empty hands', () => {
     const { scene, rig } = rigged()
     const launcher = scene.getTransformNodeByName('player7:rocket') as TransformNode
     const railgun = scene.getTransformNodeByName('player7:rail') as TransformNode
+    const shield = scene.getTransformNodeByName('player7:shield') as TransformNode
 
     draw(rig, playerNetState(entity({ weapon: Weapon.RocketLauncher })))
     draw(rig, playerNetState(entity({ weapon: Weapon.None })), 1)
@@ -141,6 +173,7 @@ describe('the opponent rig', () => {
     expect(rig.weapon).toBe(Weapon.None)
     expect(launcher.isEnabled()).toBe(false)
     expect(railgun.isEnabled()).toBe(false)
+    expect(shield.isEnabled()).toBe(false)
   })
 
   it('keeps the body inside the simulation box, which owns the hitbox', () => {
@@ -151,8 +184,9 @@ describe('the opponent rig', () => {
     // The weapon is *held out*, and so is the arm holding it, exactly the way
     // Quake's models have always been: what a player shoots at is the body, and
     // the body is what has to agree with the box. The rest is a hand and a gun
-    // sticking out in front of it.
-    const held = [':rocket', ':rail', ':arm.r']
+    // sticking out in front of it — or, for the shield, a plate held out across
+    // it, which is wider than either gun and just as much not the hitbox.
+    const held = [':rocket', ':rail', ':shield', ':arm.r']
 
     for (const mesh of rig.root.getChildMeshes()) {
       if (held.some((part) => mesh.name.includes(part))) continue

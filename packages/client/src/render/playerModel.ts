@@ -51,6 +51,7 @@ import { CreateBox } from '@babylonjs/core/Meshes/Builders/boxBuilder'
 import { TransformNode } from '@babylonjs/core/Meshes/transformNode'
 import type { Scene } from '@babylonjs/core/scene'
 import {
+  EntityFlag,
   PLAYER_HEIGHT,
   TICK_DT,
   type Vec3,
@@ -72,6 +73,7 @@ import {
 import {
   RAILGUN_WORLD,
   ROCKET_LAUNCHER_WORLD,
+  SHIELD_WORLD,
   buildWeapon,
   finishMaterials,
   weaponFinishes,
@@ -145,6 +147,18 @@ const AIM = Math.PI / 2
  * whatever direction the body happens to be facing.
  */
 const GRASP = -Math.PI / 2
+
+/**
+ * Where the shield arm locks while the guard is up, radians about the
+ * shoulder's `x`. GLAD-ZPE5LN.
+ *
+ * It replaces the arm swing outright rather than adding to it, because a guard
+ * that still swung with the stride would say "running" at a moment when the
+ * only thing an opponent needs to read is "covered". It is the one pose in this
+ * rig that comes from a flag rather than from motion, and it is netstate for
+ * exactly that reason (`sim/state.ts`).
+ */
+const GUARD_ARM = -1.45
 
 /** How far the hips drop at the bottom of a landing, in Quake units. */
 const LAND_DIP = 9
@@ -435,7 +449,7 @@ export function createPlayerRig(scene: Scene, options: PlayerRigOptions): Player
     skin,
   )
 
-  // The hand, and what is in it. Both weapons are built once and one of them is
+  // The hand, and what is in it. Every weapon is built once and one of them is
   // enabled: switching is then a boolean rather than a mesh construction in the
   // middle of a fight, which is the difference between a weapon switch and a
   // hitch. See `setWeapon`.
@@ -458,6 +472,12 @@ export function createPlayerRig(scene: Scene, options: PlayerRigOptions): Player
     namePrefix: `${name}:rail`,
   })
 
+  const shield = new TransformNode(`${name}:shield`, scene)
+  shield.parent = hand
+  buildWeapon(scene, SHIELD_WORLD, shield, weapons, {
+    namePrefix: `${name}:shield`,
+  })
+
   let weapon: Weapon = Weapon.None
   let visible = true
 
@@ -466,10 +486,12 @@ export function createPlayerRig(scene: Scene, options: PlayerRigOptions): Player
     weapon = next
     launcher.setEnabled(visible && next === Weapon.RocketLauncher)
     railgun.setEnabled(visible && next === Weapon.Railgun)
+    shield.setEnabled(visible && next === Weapon.Shield)
   }
 
   launcher.setEnabled(false)
   railgun.setEnabled(false)
+  shield.setEnabled(false)
 
   return {
     root,
@@ -485,6 +507,7 @@ export function createPlayerRig(scene: Scene, options: PlayerRigOptions): Player
       root.setEnabled(next)
       launcher.setEnabled(next && weapon === Weapon.RocketLauncher)
       railgun.setEnabled(next && weapon === Weapon.Railgun)
+      shield.setEnabled(next && weapon === Weapon.Shield)
     },
 
     update(net, frame, tick, alpha) {
@@ -506,7 +529,13 @@ export function createPlayerRig(scene: Scene, options: PlayerRigOptions): Player
       torso.rotation.set(pose.torsoPitch, 0, 0)
       neck.rotation.set(pose.headPitch, 0, 0)
       shoulderLeft.rotation.set(pose.leftArm, 0, 0)
-      shoulderRight.rotation.set(pose.rightArm, 0, 0)
+      // The guard overrides the swing rather than riding on top of it: see
+      // {@link GUARD_ARM}. Read off the flag every frame, so it goes up and
+      // comes down on the frame after the snapshot that changed it — the same
+      // latency as the weapon in the hand, which is the number the player is
+      // already reading this silhouette at.
+      const guarding = (net.flags & EntityFlag.Blocking) !== 0
+      shoulderRight.rotation.set(guarding ? GUARD_ARM : pose.rightArm, 0, 0)
       // Back along the arm, which is where the barrel points: the hand sits at
       // `-y` from the shoulder, so recoil is towards `+y`. See `GRASP`.
       hand.position.set(HAND[0], HAND[1] + pose.weaponRecoil, HAND[2])

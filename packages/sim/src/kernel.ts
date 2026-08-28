@@ -61,7 +61,7 @@ import type { EntityState, GameState } from './state.ts'
 import { MAX_HOST_FRAME_MS, TICK_DT, TICK_INTERVAL_MS } from './tick.ts'
 import { NULL_CMD } from './usercmd.ts'
 import type { UserCmd } from './usercmd.ts'
-import { fireWeapons } from './weapons.ts'
+import { fireWeapons, holdWeapons } from './weapons.ts'
 
 /**
  * The commands for one sub-step, indexed by player slot.
@@ -238,13 +238,16 @@ export function advanceHost(
  * The phase order is the contract. It is fixed, and it is the reason two peers
  * running different builds of the *renderer* still agree about the world.
  *
- * One ordering in it is a game mechanic rather than bookkeeping: **players move
- * before they fire, and rockets move after both**. Firing after moving is what
- * makes a rocket jump work at all — `PM_CheckJump` *assigns* `velocity[2]`, so
- * splash that landed before the movement phase would simply be overwritten by
- * the jump it was meant to add to. And rockets moving last is what lets a
- * rocket fired this tick detonate on this tick, which is what the 50 ms
- * trajectory prestep is for (`projectile.ts`).
+ * Two orderings in it are game mechanics rather than bookkeeping. The first:
+ * **every player's guard is settled before anybody fires** — a shield raised
+ * this tick blocks a shot fired this tick, in either slot, rather than in the
+ * slot that happened to be iterated second (`weapons.ts`). The second:
+ * **players move before they fire, and rockets move after both**. Firing after
+ * moving is what makes a rocket jump work at all — `PM_CheckJump` *assigns*
+ * `velocity[2]`, so splash that landed before the movement phase would simply
+ * be overwritten by the jump it was meant to add to. And rockets moving last is
+ * what lets a rocket fired this tick detonate on this tick, which is what the
+ * 50 ms trajectory prestep is for (`projectile.ts`).
  *
  * The round rules run **last**, after damage has landed and rockets have been
  * removed, so a death is visible to them on the tick it happened rather than
@@ -274,6 +277,11 @@ export function tick(
   const steering = acceptsCommands(state.match)
 
   movePlayers(state, inputs, world, steering)
+  // Every guard is up or down before the first shot leaves a muzzle, which is
+  // why raising the shield is a phase of its own rather than two lines inside
+  // the one below (GLAD-ZPE5LN). It runs even when nobody is steering, because
+  // that is when guards have to come *down*.
+  holdWeapons(state, inputs, steering)
   if (steering) fireWeapons(state, inputs, world, hooks)
   moveProjectiles(state, world, hooks)
   expire(state)

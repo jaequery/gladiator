@@ -1,12 +1,11 @@
 /**
- * The crosshair: two weapons, two shapes, and the refire timer drawn around
- * them.
+ * The crosshair: one shape per weapon, and the refire timer drawn around them.
  *
  * Pure geometry in a fixed 64x64 box, so the shapes are asserted in a test
  * rather than eyeballed in a screenshot. The view (`hud.ts`) turns a spec into
  * SVG elements and never invents a line of its own.
  *
- * ## Why the two weapons look different
+ * ## Why the weapons look different
  *
  * They are aimed at different things. The rocket launcher is mostly *not*
  * pointed at a player — you shoot the floor under them, the wall beside them,
@@ -17,6 +16,12 @@
  * distance an opponent is a few dozen pixels and a dot would cover the part of
  * them you are trying to hit.
  *
+ * The shield is aimed at nothing at all, and its crosshair says so by opening
+ * up: short arms pushed out to the edge of the group, no dot, nothing marking
+ * the centre. It is the one weapon whose crosshair is *not* an aiming aid, and
+ * the shape a player sees while they cannot shoot should not look like one
+ * (GLAD-ZPE5LN).
+ *
  * A player who cannot tell at a glance which weapon is up has to look at the
  * corner of the screen to find out, which is exactly the look away this whole
  * ticket exists to remove.
@@ -24,7 +29,9 @@
  * ## The ring is the rail's ammunition
  *
  * There is no ammunition in this game (`sim/weapons.ts`), so the only resource
- * either weapon has is time: 800 ms for the launcher, 1500 ms for the rail. A
+ * a weapon that fires has is time: 800 ms for the launcher, 1500 ms for the
+ * rail — the shield has neither a shot nor a wait, so its ring is never drawn
+ * turning. A
  * rail shot missed is a second and a half of being unarmed, and that is a
  * tactical fact the player is managing whether or not the HUD tells them. So
  * the wait is drawn as an arc *around the crosshair* — where the eye already
@@ -96,6 +103,15 @@ const RAIL_CROSSHAIR: CrosshairSpec = {
   dotRadius: 0,
 }
 
+/** Wide open, nothing in the middle: you are guarding, not aiming. */
+const SHIELD_CROSSHAIR: CrosshairSpec = {
+  weapon: Weapon.Shield,
+  key: 'shield',
+  lines: cross(9, 4),
+  strokeWidth: 1.6,
+  dotRadius: 0,
+}
+
 /** Holding nothing — a corpse, a spectator. A dot, so the centre is still marked. */
 const EMPTY_CROSSHAIR: CrosshairSpec = {
   weapon: Weapon.None,
@@ -114,6 +130,7 @@ const EMPTY_CROSSHAIR: CrosshairSpec = {
 export function crosshairFor(weapon: Weapon): CrosshairSpec {
   if (weapon === Weapon.RocketLauncher) return ROCKET_CROSSHAIR
   if (weapon === Weapon.Railgun) return RAIL_CROSSHAIR
+  if (weapon === Weapon.Shield) return SHIELD_CROSSHAIR
   return EMPTY_CROSSHAIR
 }
 

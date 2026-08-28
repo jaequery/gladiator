@@ -20,7 +20,7 @@ import {
   sanitizeUserCmd,
 } from './usercmd.ts'
 import type { UserCmd } from './usercmd.ts'
-import { Weapon } from './weapon.ts'
+import { NEVER_FIRED, Weapon } from './weapon.ts'
 import { AMMO_UNLIMITED, MUZZLE_FORWARD, WEAPONS, muzzlePoint, refireTicksOf } from './weapons.ts'
 
 /**
@@ -87,25 +87,33 @@ function apexOver(
 }
 
 describe('the weapon table', () => {
-  it('has exactly two entries, and always will', () => {
-    expect(WEAPONS).toHaveLength(2)
-    expect(WEAPONS.map((w) => w.id)).toEqual([Weapon.RocketLauncher, Weapon.Railgun])
+  it('has exactly three entries, and a door that names all three', () => {
+    expect(WEAPONS).toHaveLength(3)
+    expect(WEAPONS.map((w) => w.id)).toEqual([
+      Weapon.RocketLauncher,
+      Weapon.Railgun,
+      Weapon.Shield,
+    ])
 
-    // The table is a two-element tuple type, so a third entry is a type error
-    // rather than a review comment. And the door agrees with it: a command can
-    // only ever name one of these two, whatever arrives on the wire.
-    for (const junk of [Weapon.None, 3, -1, 1.5, 'railgun', null]) {
+    // The table is a three-element tuple type, so a fourth entry is a type
+    // error rather than a review comment. And the door agrees with it: a
+    // command can only ever name one of these three, whatever arrives on the
+    // wire.
+    for (const junk of [Weapon.None, 4, -1, 1.5, 'railgun', null]) {
       const held = sanitizeUserCmd({ weapon: junk }).weapon
-      expect(WEAPONS.some((w) => w.id === held)).toBe(true)
+      expect(held).toBe(Weapon.RocketLauncher)
+    }
+    for (const id of WEAPONS.map((w) => w.id)) {
+      expect(sanitizeUserCmd({ weapon: id }).weapon).toBe(id)
     }
   })
 
-  it('gives both weapons unlimited ammo', () => {
+  it('gives every weapon unlimited ammo', () => {
     for (const weapon of WEAPONS) expect(weapon.ammo).toBe(AMMO_UNLIMITED)
   })
 
-  it('carries Quake 3s numbers', () => {
-    const [rocket, rail] = WEAPONS
+  it('carries Quake 3s numbers, and zero for the shield', () => {
+    const [rocket, rail, shield] = WEAPONS
     expect(rocket).toMatchObject({
       damage: 100,
       splashDamage: 100,
@@ -114,6 +122,16 @@ describe('the weapon table', () => {
       speed: 900,
     })
     expect(rail).toMatchObject({ damage: 100, splashDamage: 0, refireMs: 1500, range: 8192 })
+    // Every offensive number, including the refire it would need to have one.
+    expect(shield).toMatchObject({
+      damage: 0,
+      splashDamage: 0,
+      splashRadius: 0,
+      refireMs: 0,
+      refireTicks: 0,
+      speed: 0,
+      range: 0,
+    })
   })
 
   it('rounds a refire interval up to whole sub-steps', () => {
@@ -364,15 +382,131 @@ describe('refire', () => {
   })
 })
 
+describe('the shield', () => {
+  /**
+   * Two players 200 units apart along +x, both standing on the floor.
+   * `shooterSlot` says which of them does the shooting, because the whole point
+   * of one of these tests is that the answer must not matter.
+   *
+   * `aim` is the yaw that points the shooter at the other one, and it has to be
+   * carried on the *command*: the movement phase assigns `angles` from every
+   * command it is handed, so a yaw written into the entity at spawn is gone by
+   * the time the first shot is fired.
+   */
+  function duel(shooterSlot: 0 | 1): {
+    state: GameState
+    shooter: EntityState
+    blocker: EntityState
+    aim: number
+  } {
+    const state = createGameState(1)
+    const at = (x: number, slot: number): EntityState =>
+      spawnEntity(state, {
+        kind: EntityKind.Player,
+        slot,
+        origin: vec3(x, 0, SURFACE_CLIP_EPSILON),
+        health: 100,
+      })
+
+    // Spawned in slot order, so the entity array is [slot 0, slot 1] and a
+    // slot-order bug has somewhere to hide.
+    const first = at(0, 0)
+    const second = at(200, 1)
+    const facingBack = Math.round(180 * ANGLE_UNITS_PER_DEGREE)
+
+    return shooterSlot === 0
+      ? { state, shooter: first, blocker: second, aim: 0 }
+      : { state, shooter: second, blocker: first, aim: facingBack }
+  }
+
+  it('raises the guard while the shield is held and the trigger is down', () => {
+    const { state, player } = standing()
+
+    tick(state, [cmd({ weapon: Weapon.Shield, buttons: BUTTON_ATTACK })], WORLD)
+    expect(player.weapon).toBe(Weapon.Shield)
+    expect(player.flags & EntityFlag.Blocking).not.toBe(0)
+
+    // Holding the shield is not blocking with it. The button is the guard.
+    tick(state, [cmd({ weapon: Weapon.Shield })], WORLD)
+    expect(player.flags & EntityFlag.Blocking).toBe(0)
+
+    // And switching away drops it on the tick of the switch, trigger or no.
+    tick(state, [cmd({ weapon: Weapon.Shield, buttons: BUTTON_ATTACK })], WORLD)
+    tick(state, [cmd({ weapon: Weapon.Railgun, buttons: BUTTON_ATTACK })], WORLD)
+    expect(player.flags & EntityFlag.Blocking).toBe(0)
+  })
+
+  it('fires nothing, and does not spend or delay a shot', () => {
+    const { state, player } = standing()
+
+    for (let i = 0; i < 200; i += 1) {
+      tick(state, [cmd({ weapon: Weapon.Shield, buttons: BUTTON_ATTACK, pitch: DOWN })], WORLD)
+    }
+
+    // No rocket, no trace, no muzzle flash, and above all no rocket at the
+    // player's own feet: a shield that fired would kill the player holding it.
+    expect(state.entities.some((e) => e.kind === EntityKind.Projectile)).toBe(false)
+    expect(player.lastFireTick).toBe(NEVER_FIRED)
+    expect(player.health).toBe(100)
+
+    // The refire timer is untouched, so lowering the guard shoots immediately.
+    expect(player.nextFireTick).toBe(0)
+    tick(state, [cmd({ weapon: Weapon.Railgun, buttons: BUTTON_ATTACK })], WORLD)
+    expect(player.lastFireTick).toBe(state.tick)
+  })
+
+  it('takes a tenth of a rail, whichever slot the blocker is in', () => {
+    // The ordering test, and the reason raising the guard is a phase of its own
+    // (`holdWeapons`). Both guards are settled before the first shot of the
+    // tick, so a shield raised on the same tick as the shot that hits it blocks
+    // that shot — in either slot. Written the tick the button goes down,
+    // because that is the tick a per-entity write would get wrong for exactly
+    // one of the two arrangements.
+    for (const shooterSlot of [0, 1] as const) {
+      const { state, shooter, blocker, aim } = duel(shooterSlot)
+      const inputs: UserCmd[] = []
+      inputs[shooter.slot] = cmd({ weapon: Weapon.Railgun, buttons: BUTTON_ATTACK, yaw: aim })
+      inputs[blocker.slot] = cmd({ weapon: Weapon.Shield, buttons: BUTTON_ATTACK })
+
+      tick(state, inputs, WORLD)
+
+      expect(shooter.lastFireTick).toBe(state.tick)
+      expect(blocker.health).toBe(90)
+    }
+  })
+
+  it('costs the full hit again the moment the shield is put away', () => {
+    const { state, shooter, blocker, aim } = duel(0)
+    const shooting = cmd({ weapon: Weapon.Railgun, buttons: BUTTON_ATTACK, yaw: aim })
+
+    const inputs: UserCmd[] = []
+    inputs[shooter.slot] = shooting
+    inputs[blocker.slot] = cmd({ weapon: Weapon.Shield, buttons: BUTTON_ATTACK })
+    tick(state, inputs, WORLD)
+    expect(blocker.health).toBe(90)
+
+    // A rail every 1500 ms, so the second shot needs the timer to come round.
+    inputs[blocker.slot] = cmd({ weapon: Weapon.Railgun })
+    for (let i = 0; i < 200; i += 1) tick(state, inputs, WORLD)
+
+    expect(blocker.weapon).toBe(Weapon.Railgun)
+    expect(blocker.flags & EntityFlag.Blocking).toBe(0)
+    expect(blocker.health).toBe(-10)
+  })
+})
+
 describe('ammo', () => {
-  it('never runs out over a match-length burst from either weapon', () => {
+  it('never runs out over a match-length burst from either weapon that fires', () => {
     // Ten minutes of holding the trigger, which is longer than any match will
     // be. There is no ammunition state to decrement, so the only thing that can
     // stop a shot is the refire interval — and the assertion is that the
     // cadence at the end is exactly the cadence at the start.
     const MATCH_TICKS = 75_000
 
-    for (const weapon of WEAPONS) {
+    // The shield is skipped rather than special-cased: it has no refire
+    // interval because it has no shot, so "the cadence never changes" is not a
+    // question that can be asked of it.
+    for (const weapon of WEAPONS.filter((w) => w.refireTicks > 0)) {
       const { state, player } = standing()
       // Facing a wall 1024 away, so the player's own splash never reaches them
       // and they stay alive for the whole burst.

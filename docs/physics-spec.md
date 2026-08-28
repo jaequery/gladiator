@@ -704,38 +704,40 @@ whose inputs are not committed is a different test every time it runs.
 
 ## §3 Weapons
 
-Two of them, and there will never be a third. Rocket Arena took the item
-scramble out of deathmatch so a duel would be decided by movement and aim; a
-third weapon is a third thing to balance in exchange for no skill anybody
-learns.
+Three of them, and two of them shoot. Rocket Arena took the item scramble out of
+deathmatch so a duel would be decided by movement and aim; a third *gun* would
+be a third set of numbers to balance in exchange for no skill anybody learns.
+The shield is not one — it fires nothing, and what it adds is a timing decision
+played against an opponent's refire interval (§3.6).
 
 Code: `packages/sim/src/weapon.ts` (which weapon an entity is *holding* — an
 identity small enough to cross the network, which the renderer reads),
-`weapons.ts` (what the weapons *do*: the table, the muzzle, the fire phase and
-the railgun), `projectile.ts` (a rocket in flight), `damage.ts` (what a hit
-does).
+`weapons.ts` (what the weapons *do*: the table, the hold phase, the muzzle, the
+fire phase and the railgun), `projectile.ts` (a rocket in flight), `damage.ts`
+(what a hit does), `match/selfDamage.ts` (what a hit *costs*).
 
 ### §3.1 The table
 
-| | Rocket launcher | Railgun |
-| --- | --- | --- |
-| delivery | `TR_LINEAR` projectile, 900 qu/s | hitscan, 8192 qu |
-| direct damage | 100 | 100 |
-| splash | 100 falling off linearly over 120 qu | none |
-| refire | 800 ms (100 sub-steps) | 1500 ms (188 sub-steps) |
-| knockback | 5 x damage, biased upward | 500 qu/s along the shot |
-| ammo | unlimited | unlimited |
+| | Rocket launcher | Railgun | Shield |
+| --- | --- | --- | --- |
+| delivery | `TR_LINEAR` projectile, 900 qu/s | hitscan, 8192 qu | nothing leaves it |
+| direct damage | 100 | 100 | none |
+| splash | 100 falling off linearly over 120 qu | none | none |
+| refire | 800 ms (100 sub-steps) | 1500 ms (188 sub-steps) | never fires |
+| knockback | 5 x damage, biased upward | 500 qu/s along the shot | deals none, blocks none |
+| ammo | unlimited | unlimited | unlimited |
 
 **There is no ammunition state.** Not a large number — none: `GameState` carries
 no count, nothing decrements, and the only thing between two shots is the
 refire timer. A match cannot end because somebody ran out, and the bot cannot
 be accused of having more shots than a human.
 
-Both weapons are fully automatic and share **one** refire timer
+Both weapons that fire are fully automatic and share **one** refire timer
 (`EntityState.nextFireTick`, Quake 3's `ps->weaponTime`), so switching weapons
 is never a way to fire sooner than either weapon allows. There is no raise or
-drop delay: with two weapons and a shared timer, the switch already costs
-whatever is left of the last shot's interval.
+drop delay: with a shared timer, the switch already costs whatever is left of
+the last shot's interval. Raising the shield neither spends the timer nor delays
+it — what blocking costs is the shot you did not take while the guard was up.
 
 Refire is stated in milliseconds — Quake's numbers — and converted to whole
 sub-steps by rounding **up**. The two directions are not equally harmless:
@@ -901,10 +903,11 @@ closed form. Crucible's 512 ceiling says the same thing from the other end: a
 The tick phase order (`kernel.ts`) is:
 
 ```
-advance the PRNG -> move players -> fire weapons -> move rockets -> expire
+advance the PRNG -> move players -> hold weapons -> fire weapons
+                 -> move rockets -> expire
 ```
 
-Two of those adjacencies are mechanics rather than bookkeeping.
+Three of those adjacencies are mechanics rather than bookkeeping.
 
 **Players move before they fire.** `PM_CheckJump` *assigns* `velocity[2]`
 (§1.5), so splash that landed before the movement phase would simply be
@@ -912,8 +915,52 @@ overwritten by the jump it was meant to add to, and there would be no such thing
 as a rocket jump. Quake's order is the same: `PM_Weapon` raises the fire event
 inside `Pmove`, and `ClientEvents` acts on it immediately afterwards.
 
+**Every guard is settled before anybody fires.** The hold phase writes both the
+weapon in each player's hands and `EntityFlag.Blocking`, for every player, in
+one pass. Writing the flag inside the firing loop instead would make a block
+depend on *slot order* — the shot from slot 0 would resolve against slot 1's
+flag from the previous tick, while slot 1's shot resolved against slot 0's
+current one. The rule this buys is the one a player can state: a shield raised
+on the tick a shot lands blocks that shot, whichever slot either of you is in.
+
 **Rockets move after both.** A rocket fired this tick is swept this tick, which
 is what the 50 ms prestep (§3.2) is for.
+
+### §3.6 The shield
+
+Held on 3 like the other two, encoded in the same byte, and drawn from the same
+kind of part list. It has no shot: the fire phase skips it, and `fireWeapon`
+refuses it even when called directly.
+
+**Blocking is the shield held with the attack button down.** It reuses the
+attack bit rather than claiming a new one — no `UserCmd` change and no protocol
+change — and the shape of the trade is stated in that reuse: the button that
+would have fired is the button that raises the guard, so a player behind their
+shield is a player not shooting.
+
+**What it does is take 90% off what a hit costs.** The scale is
+`BLOCK_DAMAGE_SCALE = 0.1` in `match/selfDamage.ts`, applied before the armour
+is consulted, so a blocked hit costs a tenth *in total* rather than a tenth of
+whatever the armour left. 100 points of anything costs 10.
+
+Three things it deliberately does **not** do:
+
+- **It does not change the knockback.** The push is derived from the full figure
+  before any cost rule is consulted (§3.3), exactly as it is for the four
+  self-damage modes (§7.2). A blocked player is thrown just as far, so a guard
+  never wins back the map position the shove took.
+- **It does not discount your own splash.** `resolveDamage` applies the scale
+  only when the hit came from somebody else. Otherwise the guard would be a
+  rocket jump at a tenth of the price with the launch unchanged, which is a
+  movement exploit wearing a defensive rule.
+- **It does not touch the refire timer.** Blocking neither spends a shot nor
+  delays the next one.
+
+**It is netstate, not input.** `EntityFlag.Blocking` lives on the entity because
+`applyDamage` — the one gate every hit passes through — never sees a `UserCmd`,
+and because an opponent has to be able to read a raised guard off your
+silhouette one snapshot later. `flags` is already encoded and hashed, so it
+costs nothing on the wire. GLAD-ZPE5LN.
 
 ---
 
@@ -1351,11 +1398,16 @@ Every mode runs the same pipeline, and the *order* is Quake's:
 ```
 knockback  <- 5 * min(damage, 200)          from the FULL figure, always
 take       <- damage * 0.5                  if self-inflicted
+take       <- take * 0.1                    if blocking AND not self-inflicted (§3.6)
 take       <- max(take, 1)                  Quake's `if (damage < 1) damage = 1`
 save       <- min(ceil(take * 0.66), armor) Quake's `CheckArmor`, skipped by health_only
 armor      -= save
 health     -= take - save                   unless the mode says otherwise
 ```
+
+The block sits in the same pipeline as the modes and above the armour, because
+it is the same kind of rule: a discount on the bill rather than a change to the
+hit. It is exempt from self-inflicted damage for the reason §3.6 gives.
 
 | mode | a full-power rocket jump costs | notes |
 | ---- | ------------------------------ | ----- |
@@ -1367,7 +1419,8 @@ health     -= take - save                   unless the mode says otherwise
 **Knockback is identical in all four, at 500 qu/s**, because it is derived
 before any of this — §3.3. Switching mode changes the price of a rocket jump
 without changing the jump, which is the property that makes the choice a
-*rules* decision rather than a movement one.
+*rules* decision rather than a movement one. A raised shield does not change it
+either, for the same reason and by the same ordering.
 
 `ceil` and `0.66` are both load-bearing in the three modes that consult the
 armour. `ceil(50 · 0.66)` is 33; `ceil(50 · 2/3)` is 34, and one point of armour

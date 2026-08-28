@@ -89,10 +89,20 @@ export function dashButtonForTap(
  */
 const ATTACK_KEYS = ['Mouse0']
 
-/** Weapon select. Two weapons, two keys, and there will never be a third. */
+/**
+ * Weapon select. One key each, in the order the number row is under the hand.
+ *
+ * The shield is on 3 and is selected exactly like the other two, because it
+ * *is* one of the other two as far as everything downstream is concerned —
+ * `sim/weapon.ts` has the argument for why a defensive item is a weapon here
+ * and not an inventory of its own (GLAD-ZPE5LN). Note that holding it is not
+ * blocking with it: the guard goes up when the attack button does, which is
+ * why nothing here needs a fourth binding.
+ */
 const WEAPON_KEYS: readonly (readonly [string, Weapon])[] = [
   ['Digit1', Weapon.RocketLauncher],
   ['Digit2', Weapon.Railgun],
+  ['Digit3', Weapon.Shield],
 ]
 
 /** Nothing held at all — what {@link InputController.sample} reads when the

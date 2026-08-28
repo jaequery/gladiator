@@ -245,7 +245,9 @@ its own depth range. `docs/renderer.md` §11.
 tubes with a position, a size and one of three finishes, in a frame where `-z`
 is down the barrel. One list per weapon per scale — the detailed one you hold
 and the fatter one an opponent does — and the viewmodel and the player rig both
-build from it, so there is one launcher and not two.
+build from it, so there is one launcher and not two. The shield is a part list
+like the guns, and its silhouette is deliberately their inverse: wide and flat
+rather than long and narrow.
 `packages/client/src/render/weaponModel.ts`; `docs/renderer.md` §11.
 
 ---
@@ -302,7 +304,8 @@ pinned to the attacker as the player turns. `ui/feedback.ts`.
 
 **Cooldown ring** — the refire interval drawn round the crosshair. Scaled by
 `nextFireTick - lastFireTick`, which is the interval of the weapon that *fired*
-rather than the one now in hand — the two weapons share one timer.
+rather than the one now in hand — the weapons share one timer, and raising the
+shield neither spends it nor delays it.
 
 **HUD box** — an element marked `data-hud-box`: part of the set the browser test
 measures at 16:9, 21:9 and 4:3 and requires to be on screen and not overlapping
@@ -582,12 +585,27 @@ whose flight stayed more than 32 units clear of every opponent hitbox
 server-only, which is what Quake 3 does for every rocket. The client's half is
 `packages/client/src/net/rocketPredict.ts`. GLAD-5QGO11.
 
-**Weapon** — which of the two an entity is holding, as a netstate field
+**Weapon** — which of the three an entity is holding, as a netstate field
 (`packages/sim/src/weapon.ts`). What they *do* is `weapons.ts` and
 `docs/physics-spec.md` §3; the field exists because an opponent's weapon is
 something you *read*, one snapshot after the server changed it. Paired with
 **`lastFireTick`** — the tick they last fired on, carried as state rather than
 sent as an event so it survives a dropped snapshot.
+
+**Shield** — the third weapon: it fires nothing, and while its guard is up every
+hit somebody else lands on you costs a tenth of what it would.
+`packages/sim/src/weapons.ts`; the arithmetic is `match/selfDamage.ts`.
+GLAD-ZPE5LN.
+
+**Guard / blocking** — holding the shield *with the attack button down*. Holding
+the shield alone does nothing. It is `EntityFlag.Blocking` on the entity rather
+than a fact about the current command, because the one function every hit passes
+through (`applyDamage`) never sees a command, and because an opponent has to be
+able to read a raised guard off your silhouette. Settled for every player before
+anybody fires, so a guard raised on the same tick as the shot that hits it blocks
+that shot whichever slot each player is in. Blocking changes what a hit *costs*
+and never the knockback, and it does not apply to your own splash — a shield is
+not a cheaper rocket jump.
 
 **Netstate / snapshot** — the state the server sends a client: a **wire state**
 plus the last command of that client's the world has executed

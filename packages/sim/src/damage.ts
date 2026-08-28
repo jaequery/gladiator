@@ -19,15 +19,17 @@
  *    jumping exists in the gap: the push comes off the full 100, and only then
  *    is it decided what that 100 costs you. Which is why all four self-damage
  *    modes (`match/selfDamage.ts`) launch you at the same 500 qu/s and differ
- *    only in the bill.
+ *    only in the bill — and why a shield takes 90% off the bill and nothing at
+ *    all off the shove.
  *
  * Knockback is always **added** to the velocity, never assigned. Two rockets
  * landing on the same tick throw you twice as far, and a rocket you jump into
  * keeps the jump.
  *
- * What a hit *costs* — how it is split between armour and health, and what your
- * own splash costs you — is not decided here. `match/selfDamage.ts` owns that,
- * as a pure function of numbers, and this file applies its answer.
+ * What a hit *costs* — how it is split between armour and health, what your own
+ * splash costs you, and what a raised shield takes off it — is not decided
+ * here. `match/selfDamage.ts` owns that, as a pure function of numbers, and
+ * this file applies its answer.
  */
 
 import type { Vec3 } from './axis.ts'
@@ -271,7 +273,8 @@ let damageObserver: ((event: DamageEvent) => void) | null = null
  *
  * Returns the points the target actually absorbed — armour plus health — which
  * is zero for a hit that spawn protection or a self-damage mode threw away, and
- * is *not* `points` whenever either armour or the halving got involved.
+ * is *not* `points` whenever the armour, the halving or a raised guard got
+ * involved.
  *
  * `cause` is carried for {@link onDamage} and for nothing else — no branch in
  * this function or below it reads it. It defaults to `'direct'` because that is
@@ -318,7 +321,14 @@ export function applyDamage(
   }
 
   const selfInflicted = target.id === attackerId
-  const split = resolveDamage(mode, selfInflicted, points, target.armor)
+
+  // Read off the entity rather than off a command, because this function is the
+  // one gate every hit passes through and none of its callers has a `UserCmd`
+  // to hand. `weapons.ts` settles the bit for every player before the first
+  // shot of the tick, so it says the same thing to both slots. GLAD-ZPE5LN.
+  const blocking = (target.flags & EntityFlag.Blocking) !== 0
+
+  const split = resolveDamage(mode, selfInflicted, points, target.armor, blocking)
   target.armor -= split.armor
   target.health -= split.health
   const fatal = target.health <= 0

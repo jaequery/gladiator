@@ -2,7 +2,7 @@
  * What a hit costs, and the four answers to "what does your own rocket cost
  * *you*". `docs/physics-spec.md` §7.2.
  *
- * Two rules meet in this file, and they are separable on purpose.
+ * Three rules meet in this file, and they are separable on purpose.
  *
  * **Armour absorbs 66% of any damage, rounded up, until it runs out.** Quake
  * 3's `CheckArmor`, and it applies to every hit from every source — it is not a
@@ -21,11 +21,21 @@
  * | {@link SelfDamage.None} | nothing |
  * | {@link SelfDamage.HealthOnly} (default) | 50 health, no armour |
  *
- * **Knockback is identical in all four.** It is not decided here at all:
- * `damage.ts` derives the push from the *full* figure before this function is
- * consulted, which is Quake's own ordering and the reason a rocket jump is
- * worth what it costs. A rocket at your feet is 500 qu/s in every mode, and
- * switching mode changes the price of a jump without changing the jump.
+ * **A raised shield takes 90% off an incoming hit** ({@link BLOCK_DAMAGE_SCALE},
+ * GLAD-ZPE5LN). It lands here, and not at the top of `damage.ts`, for the same
+ * reason the modes below do: this file is what a hit *costs*, and the block is
+ * a discount on the bill rather than a change to the hit. It applies before the
+ * armour is consulted, so a blocked rocket in the chest costs 10 points in
+ * total whether they come off armour, health, or both.
+ *
+ * **Knockback is identical in all four modes, and blocking does not change it
+ * either.** It is not decided here at all: `damage.ts` derives the push from
+ * the *full* figure before this function is consulted, which is Quake's own
+ * ordering and the reason a rocket jump is worth what it costs. A rocket at
+ * your feet is 500 qu/s in every mode, and switching mode changes the price of
+ * a jump without changing the jump. A player behind a raised shield is thrown
+ * exactly as far as one caught in the open — the guard is not cover, and it
+ * does not win back the map position the shove took.
  *
  * ## Why `health_only` is the default
  *
@@ -108,6 +118,36 @@ export function isSelfDamageMode(value: number): value is SelfDamageMode {
 export const SELF_DAMAGE_SCALE = 0.5
 
 /**
+ * The fraction of a hit you pay for with the guard up. **A tenth** — the 90%
+ * reduction GLAD-ZPE5LN asked for, stated as what you pay rather than as what
+ * you save, because paying is what the arithmetic below does.
+ *
+ * A multiplication, and not rounded to whole points afterwards. A blocked
+ * 100-point rocket costs 10 and a blocked 72-point splash costs 7.2, and the
+ * fraction is left alone for the same reason {@link SELF_DAMAGE_SCALE}'s halves
+ * are: health has never been an integer in this game, and rounding the discount
+ * would make it 90%-ish in exactly the hits a player is most likely to be
+ * counting.
+ *
+ * ## Why your own splash is exempt
+ *
+ * The scale is applied only to a hit somebody *else* dealt you. A rocket at
+ * your own feet is not blockable, and letting it be would not be a shield — it
+ * would be a rocket jump at a tenth of the price, with the launch unchanged,
+ * because the push has already been taken off the full figure by the time this
+ * function is called. That is a movement exploit wearing a defensive rule, and
+ * it would quietly undo the whole of the `health_only` argument in the header:
+ * the point of the default mode is that mobility is paid for where a player can
+ * see it.
+ *
+ * There is nothing to lose by the exemption. Blocking requires the shield in
+ * your hands, and the shield cannot fire, so the only way to arrive at your own
+ * splash with the guard up is to shoot the floor, switch, and raise — three
+ * commands to buy back a jump the game already charges an honest price for.
+ */
+export const BLOCK_DAMAGE_SCALE = 0.1
+
+/**
  * The fraction of a hit armour absorbs. Quake 3's `ARMOR_PROTECTION`, **0.66**.
  *
  * Not two-thirds. Quake wrote 0.66 and the difference is visible: `ceil(50 *
@@ -154,25 +194,35 @@ export function armorAbsorbed(take: number, armor: number): number {
 /**
  * Split `points` of incoming damage between a target's armour and its health.
  *
- * The one place all four modes are stated, as a pure function of numbers, so
- * that the rules can be read and tested without a world around them.
- * `damage.ts` applies the result and does the knockback, which happens *before*
- * this is called and is deliberately not a function of the mode.
+ * The one place all four modes and the block are stated, as a pure function of
+ * numbers, so that the rules can be read and tested without a world around
+ * them. `damage.ts` applies the result and does the knockback, which happens
+ * *before* this is called and is deliberately a function of neither.
  *
- * `selfInflicted` rather than a pair of entity ids, because "did this player
- * damage themselves" is the only thing the modes turn on, and passing the
- * question rather than the entities is what keeps this file free of the world.
+ * `selfInflicted` and `blocking` rather than a pair of entity ids and an entity,
+ * because "did this player damage themselves" and "was their guard up" are the
+ * only things the rules turn on, and passing the questions rather than the
+ * world is what keeps this file free of it.
  */
 export function resolveDamage(
   mode: SelfDamageMode,
   selfInflicted: boolean,
   points: number,
   armor: number,
+  blocking = false,
 ): DamageSplit {
   if (points <= 0) return NOTHING
   if (selfInflicted && mode === SelfDamage.None) return NOTHING
 
   let take = selfInflicted ? points * SELF_DAMAGE_SCALE : points
+
+  // The guard, and only against what the other player did to you — see
+  // {@link BLOCK_DAMAGE_SCALE}. Before the armour rather than after it, so that
+  // a blocked hit costs a tenth *in total* rather than a tenth of whatever the
+  // armour left, which would make the discount depend on how much armour you
+  // happened to be standing on.
+  if (blocking && !selfInflicted) take *= BLOCK_DAMAGE_SCALE
+
   if (take < MIN_DAMAGE) take = MIN_DAMAGE
 
   // The whole of `health_only`, and the reason it returns before `armorAbsorbed`

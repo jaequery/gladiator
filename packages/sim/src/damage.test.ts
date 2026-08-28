@@ -13,7 +13,7 @@ import {
   radiusDamage,
 } from './damage.ts'
 import { lengthVec3, vec3 } from './math.ts'
-import { SELF_DAMAGE_SCALE, SelfDamage } from './match/selfDamage.ts'
+import { BLOCK_DAMAGE_SCALE, SELF_DAMAGE_SCALE, SelfDamage } from './match/selfDamage.ts'
 import { isSpawnProtected } from './match/spawn.ts'
 import { EntityFlag, EntityKind, NO_ENTITY, createGameState, spawnEntity } from './state.ts'
 import type { EntityState, GameState } from './state.ts'
@@ -110,6 +110,69 @@ describe('applyDamage', () => {
     player.knockbackTicks = 3
     applyDamage(state, player, NO_ENTITY, [0, 0, 1], 100)
     expect(player.knockbackTicks).toBe(3)
+  })
+
+  it('charges a tenth for a hit taken behind a raised guard', () => {
+    // Check 2 of GLAD-ZPE5LN, at the gate every hit passes through: 100 points
+    // of anything cost 10 while `Blocking` is set, and the return value — what
+    // the hit actually cost — says so too.
+    const { state, player } = worldWithPlayer()
+    player.flags |= EntityFlag.Blocking
+
+    const absorbed = applyDamage(state, player, NO_ENTITY, [0, 0, 1], 100)
+
+    expect(absorbed).toBe(100 * BLOCK_DAMAGE_SCALE)
+    expect(player.health).toBe(90)
+  })
+
+  it('shoves a blocking player exactly as far as an unguarded one', () => {
+    // The invariant the whole design hangs off: the guard changes the bill and
+    // never the push, for the same reason the self-damage modes do not.
+    const { state, player } = worldWithPlayer()
+    const { player: guarded } = worldWithPlayer()
+    guarded.flags |= EntityFlag.Blocking
+
+    applyDamage(state, player, NO_ENTITY, [0, 0, 1], 100)
+    applyDamage(state, guarded, NO_ENTITY, [0, 0, 1], 100)
+
+    expect(guarded.velocity[2]).toBe(player.velocity[2])
+    expect(guarded.knockbackTicks).toBe(player.knockbackTicks)
+  })
+
+  it('takes the tenth off the whole hit, not off what the armour left', () => {
+    // 10 points in total, however they are split: 7 off the armour (`ceil(10 *
+    // 0.66)`) and 3 off the health. Blocking after the armour instead would
+    // make the discount depend on how much armour you happened to be standing
+    // on, which is a rule nobody could count in their head.
+    const { state, player } = worldWithPlayer()
+    player.armor = 100
+    player.flags |= EntityFlag.Blocking
+
+    expect(applyDamage(state, player, NO_ENTITY, [0, 0, 1], 100)).toBe(10)
+    expect(player.armor).toBe(93)
+    expect(player.health).toBe(97)
+  })
+
+  it('does not let a guard discount your own splash', () => {
+    // A raised shield is not a cheaper rocket jump. The push has already come
+    // off the full 100 by this point, so blocking your own splash would buy the
+    // launch for a tenth of its price — see `match/selfDamage.ts`.
+    const { state, player } = worldWithPlayer()
+    player.flags |= EntityFlag.Blocking
+
+    applyDamage(state, player, player.id, [0, 0, 1], 100, SelfDamage.Full)
+
+    expect(player.velocity[2]).toBe(550)
+    expect(player.health).toBe(100 - 100 * SELF_DAMAGE_SCALE)
+  })
+
+  it('charges the full hit again once the guard comes down', () => {
+    // Check 3 of GLAD-ZPE5LN. The same hit on the same body, with the one bit
+    // cleared, is the number it has always been.
+    const { state, player } = worldWithPlayer()
+
+    expect(applyDamage(state, player, NO_ENTITY, [0, 0, 1], 100)).toBe(100)
+    expect(player.health).toBe(0)
   })
 
   it('marks a player dead at zero health and then leaves them alone', () => {

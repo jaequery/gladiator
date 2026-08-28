@@ -178,20 +178,22 @@ function wrapAngle(value: unknown): number {
  * | `yaw` | **wrapped** into `[0, ANGLE_UNITS)` — see {@link wrapAngle} |
  * | `pitch` | clamped to +/-{@link MAX_PITCH_UNITS}, which is +/-89 degrees |
  * | `buttons` | masked to {@link BUTTON_MASK} |
- * | `weapon` | one of the two, or the launcher |
+ * | `weapon` | one of the three, or the launcher |
  *
  * Anything that is not an integer — a float, a `NaN`, an `Infinity`, a string, a
  * missing field — is zero. GLAD-V7M6PQ.
  */
 export function sanitizeUserCmd(value: unknown): UserCmd {
   const raw = (value ?? {}) as Partial<Record<keyof UserCmd, unknown>>
-  // Anything that is not one of the two weapons becomes the launcher — the one
-  // a player spawns holding. `Weapon.None` is a legal *entity* state (a corpse,
-  // a rocket) and is not something a command may ask for: a player with empty
-  // hands is not a thing this game has.
+  // Anything that is not one of the three weapons becomes the launcher — the
+  // one a player spawns holding. `Weapon.None` is a legal *entity* state (a
+  // corpse, a rocket) and is not something a command may ask for: a player with
+  // empty hands is not a thing this game has, and the shield is what asking for
+  // them looks like here (GLAD-ZPE5LN).
   const weapon = raw.weapon
   const held =
-    typeof weapon === 'number' && (weapon === Weapon.RocketLauncher || weapon === Weapon.Railgun)
+    typeof weapon === 'number' &&
+    (weapon === Weapon.RocketLauncher || weapon === Weapon.Railgun || weapon === Weapon.Shield)
       ? weapon
       : Weapon.RocketLauncher
 

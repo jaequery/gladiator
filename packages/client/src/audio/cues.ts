@@ -90,7 +90,11 @@ export const INITIAL_MEMORY: CueMemory = {
   step: 0,
 }
 
-/** The fire sound for a weapon, or `null` for one that makes none. */
+/**
+ * The fire sound for a weapon, or `null` for one that makes none — a corpse
+ * holding nothing, and the shield, which has no shot to make a sound for
+ * (`sim/weapons.ts`).
+ */
 export function fireSound(weapon: Weapon): SoundId | null {
   if (weapon === Weapon.RocketLauncher) return SoundId.RocketFire
   if (weapon === Weapon.Railgun) return SoundId.RailFire
