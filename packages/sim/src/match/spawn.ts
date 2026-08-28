@@ -97,10 +97,12 @@ export const SPAWN_ARMOR = 100
 /**
  * The weapon in a player's hands when the round starts.
  *
- * Rocket Arena hands you both weapons at full ammo, so this is not a *pickup*
- * — it is which of the two you are holding on frame one. The launcher, because
- * the rocket jump is the first thing a player has to learn and the railgun
- * rewards a position you have not had time to take. Switching is GLAD-0QWRYK's.
+ * Rocket Arena hands you the whole arsenal at full ammo, so this is not a
+ * *pickup* — it is which of the three you are holding on frame one. The
+ * launcher, because the rocket jump is the first thing a player has to learn,
+ * the railgun rewards a position you have not had time to take, and a shield
+ * raised before anybody can shoot at you is a guard against nothing. Switching
+ * is GLAD-0QWRYK's.
  */
 export const SPAWN_WEAPON = Weapon.RocketLauncher
 

@@ -1,8 +1,9 @@
 # AGENTS.md — conventions for working in this repo
 
 Gladiator is a browser-native recreation of the Quake mod *Rocket Arena*:
-round-based 1v1 duels, full health on spawn, no pickups, a rocket launcher and
-a railgun. It runs the same simulation in the browser and on the server. Almost
+round-based 1v1 duels, full health on spawn, no pickups, a rocket launcher, a
+railgun and a shield. It runs the same simulation in the browser and on the
+server. Almost
 every convention below exists to protect that one sentence.
 
 Vocabulary is in [`CONTEXT.md`](./CONTEXT.md). Physics numbers are in
@@ -305,14 +306,20 @@ and measured in `pmove/pmove.test.ts`.
 
 `packages/sim/src/weapon.ts` (which weapon an entity holds, and when it last
 fired — netstate, because you read an opponent's weapon off their silhouette),
-`weapons.ts` (the table, the muzzle, the fire phase, the railgun),
-`projectile.ts` (a rocket in flight), `damage.ts` (what a hit does). Numbers and
-reasoning: `docs/physics-spec.md` §3.
+`weapons.ts` (the table, the hold phase, the muzzle, the fire phase, the
+railgun), `projectile.ts` (a rocket in flight), `damage.ts` (what a hit does).
+Numbers and reasoning: `docs/physics-spec.md` §3.
 
-**Two weapons, and there is never a third.** `WEAPONS` is a two-element *tuple*
-type, so a third entry is a type error rather than a review comment. Neither has
+**Three weapons, and two of them shoot.** `WEAPONS` is a three-element *tuple*
+type, so a fourth entry is a type error rather than a review comment. None has
 ammunition — no count in `GameState`, nothing to decrement — and the only thing
-between two shots is `EntityState.nextFireTick`, one timer shared by both.
+between two shots is `EntityState.nextFireTick`, one timer shared by all of
+them. The shield is the third: it fires nothing, and while its guard is up
+(shield held, attack down) a hit somebody else lands costs a tenth of what it
+would. Two rules about it are load-bearing and are stated where the code is —
+the guard is settled for every player *before* anybody fires, so it cannot
+depend on slot order, and it changes what a hit costs and never the knockback,
+which is the same separation the four self-damage modes rely on.
 
 Two things in here look like details and are mechanics:
 
@@ -1023,8 +1030,8 @@ candidates and what each costs:
 Two clauses in that sentence are the whole decision. **The trigger is cleared**
 because firing is an *edge* and movement is a *state*: repeating "still holding
 forward" reproduces an intent the player still has, while repeating "still
-holding fire" invents rockets they never asked for — and both weapons are fully
-automatic, so it would keep inventing one every refire interval. Jump is left
+holding fire" invents rockets they never asked for — and both weapons that fire
+are fully automatic, so it would keep inventing one every refire interval. Jump is left
 alone, because `PM_CheckJump` latches on a held button and a repeat can only
 preserve the state the player was in. **The repeat is bounded** because
 repeat-last otherwise means a disconnected player keeps running; at half a second

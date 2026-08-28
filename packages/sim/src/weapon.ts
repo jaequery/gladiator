@@ -1,16 +1,17 @@
 /**
  * Which weapon an entity is holding, and when it last fired.
  *
- * Gladiator ships two weapons and no pickups, so "which one is in your hands"
+ * Gladiator ships three weapons and no pickups, so "which one is in your hands"
  * is a single small integer that never has to be reconciled against an
  * inventory. What the weapons *do* — damage, splash, fire rate, the rail's
- * instant trace — is GLAD-0QWRYK's; this file is only their identity, because
- * identity is what crosses the network.
+ * instant trace, the shield's guard — is GLAD-0QWRYK's and GLAD-ZPE5LN's; this
+ * file is only their identity, because identity is what crosses the network.
  *
  * ## Why the renderer needs this and why it lives here
  *
  * In a duel you read the opponent's weapon off their silhouette and change what
- * you do about it: you strafe differently against a rail than against a rocket.
+ * you do about it: you strafe differently against a rail than against a rocket,
+ * and you do not waste a rocket on somebody who is behind a raised shield.
  * That makes the weapon part of the *netstate*, not part of the shooting code —
  * the client has to know it for an opponent it does not control, one snapshot
  * after the server changed it. So it is a field on `EntityState` (`state.ts`),
@@ -33,6 +34,13 @@ export const Weapon = {
   None: 0,
   RocketLauncher: 1,
   Railgun: 2,
+  /**
+   * A shield. Deals no damage; held up, it takes 90% off what a hit costs
+   * you (GLAD-ZPE5LN). Deliberately a *weapon* and not an item category:
+   * there is no inventory here, and "what is in your hands" is already one
+   * byte on the wire that both clients read to draw a silhouette.
+   */
+  Shield: 3,
 } as const
 
 export type Weapon = (typeof Weapon)[keyof typeof Weapon]
@@ -42,5 +50,10 @@ export const NEVER_FIRED = -1
 
 /** Whether `value` is one of the weapons. The door for anything off the wire. */
 export function isWeapon(value: number): value is Weapon {
-  return value === Weapon.None || value === Weapon.RocketLauncher || value === Weapon.Railgun
+  return (
+    value === Weapon.None ||
+    value === Weapon.RocketLauncher ||
+    value === Weapon.Railgun ||
+    value === Weapon.Shield
+  )
 }

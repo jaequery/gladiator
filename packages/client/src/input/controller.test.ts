@@ -51,13 +51,23 @@ describe('commandFrom', () => {
     expect(commandFrom(new Set(['Space']), LEVEL).buttons).toBe(BUTTON_JUMP)
   })
 
-  it('maps the left mouse button onto attack, and 1 and 2 onto the weapons', () => {
+  it('maps the left mouse button onto attack, and the number row onto the weapons', () => {
     expect(commandFrom(new Set(['Mouse0']), LEVEL).buttons).toBe(BUTTON_ATTACK)
     expect(commandFrom(new Set(['Mouse0', 'Space']), LEVEL).buttons).toBe(
       BUTTON_ATTACK | BUTTON_JUMP,
     )
     expect(commandFrom(new Set(), LEVEL).weapon).toBe(Weapon.RocketLauncher)
     expect(commandFrom(new Set(), LEVEL, Weapon.Railgun).weapon).toBe(Weapon.Railgun)
+    expect(commandFrom(new Set(), LEVEL, Weapon.Shield).weapon).toBe(Weapon.Shield)
+  })
+
+  it('sends the same attack bit for the shield, because the guard is the trigger', () => {
+    // Nothing in the client decides what blocking *is* — it puts the shield and
+    // the attack button on the wire and the simulation reads the pair
+    // (`sim/weapons.ts`). GLAD-ZPE5LN.
+    const cmd = commandFrom(new Set(['Mouse0']), LEVEL, Weapon.Shield)
+    expect(cmd.weapon).toBe(Weapon.Shield)
+    expect(cmd.buttons & BUTTON_ATTACK).toBe(BUTTON_ATTACK)
   })
 
   it('cancels opposing keys instead of letting one win', () => {

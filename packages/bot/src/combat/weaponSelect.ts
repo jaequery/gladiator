@@ -1,9 +1,9 @@
 /**
- * Which of the two. GLAD-HK3ATM.
+ * Which weapon to shoot with. GLAD-HK3ATM.
  *
- * There is no third weapon and there never will be (`weapons.ts`), and there is
- * no ammunition, so the choice is not about resources — it is about which
- * delivery mechanism suits the target. Three rules, in the order they are asked:
+ * There is no ammunition (`weapons.ts`), so the choice is not about resources —
+ * it is about which delivery mechanism suits the target. Three rules, in the
+ * order they are asked:
  *
  * 1. **A target the bot cannot see gets a rocket.** A railgun is a line drawn
  *    instantly to a point, and pointing one at a remembered position is firing
@@ -21,9 +21,21 @@
  *
  * Everything else is a rocket, which is most of a duel.
  *
+ * ## The bot does not raise the shield, and that is a decision
+ *
+ * There is a third weapon now (GLAD-ZPE5LN) and this function never returns it.
+ * Blocking is worth 90% of an incoming hit and costs you every shot you could
+ * have taken while the guard was up, so using it well is a read on *when the
+ * other player is about to fire* — a prediction this bot has nowhere to make.
+ * The pieces it would need are the ones `combat/railDiscipline.ts` already
+ * shows the shape of: an opponent's refire timer is in the netstate, and their
+ * weapon is too. Until that read exists, a bot that guessed would spend the
+ * duel behind a plate not shooting, which is a worse opponent rather than a
+ * more interesting one.
+ *
  * ## Switching is free, and that is why this can be re-asked every decision
  *
- * Both weapons share one refire timer and there is no raise animation
+ * The weapons share one refire timer and there is no raise animation
  * (`weapons.ts`), so changing your mind costs nothing but whatever is left of
  * the last shot's interval. The weapon rides on every `UserCmd` rather than
  * being a switch event, so the bot asks the question again at 20 Hz and the

@@ -49,10 +49,11 @@ function assertSymmetric(spec: CrosshairSpec): void {
   expect(vertical.filter(([, y1]) => y1 < C)).toHaveLength(1)
 }
 
-describe('the two crosshairs', () => {
-  it('is symmetric about the centre, for both weapons', () => {
+describe('the crosshairs', () => {
+  it('is symmetric about the centre, for every weapon that has arms', () => {
     assertSymmetric(crosshairFor(Weapon.RocketLauncher))
     assertSymmetric(crosshairFor(Weapon.Railgun))
+    assertSymmetric(crosshairFor(Weapon.Shield))
   })
 
   it('gives the launcher a placing dot and the rail a clear centre', () => {
@@ -71,13 +72,21 @@ describe('the two crosshairs', () => {
     expect(rail.strokeWidth).toBeLessThan(rocket.strokeWidth)
   })
 
-  it('is distinguishable at a glance — the two are not the same shape', () => {
-    expect(crosshairFor(Weapon.Railgun).key).not.toBe(
-      crosshairFor(Weapon.RocketLauncher).key,
-    )
-    expect(crosshairFor(Weapon.Railgun).lines).not.toEqual(
-      crosshairFor(Weapon.RocketLauncher).lines,
-    )
+  it('is distinguishable at a glance — no two are the same shape', () => {
+    const specs = [Weapon.RocketLauncher, Weapon.Railgun, Weapon.Shield].map(crosshairFor)
+    expect(new Set(specs.map((s) => s.key)).size).toBe(specs.length)
+    expect(new Set(specs.map((s) => JSON.stringify(s.lines))).size).toBe(specs.length)
+  })
+
+  it('opens the shield crosshair up and leaves its centre unmarked', () => {
+    // The shield cannot shoot, so its crosshair is not an aiming aid: nothing
+    // in the middle, and arms further out than either weapon that can.
+    const shield = crosshairFor(Weapon.Shield)
+    const rocketArm = armOf(crosshairFor(Weapon.RocketLauncher).lines[0] ?? [0, 0, 0, 0])
+    const shieldArm = armOf(shield.lines[0] ?? [0, 0, 0, 0])
+
+    expect(shield.dotRadius).toBe(0)
+    expect(shieldArm.gap).toBeGreaterThan(rocketArm.gap)
   })
 
   it('draws a bare dot for a body holding nothing', () => {
@@ -91,7 +100,7 @@ describe('the two crosshairs', () => {
   })
 
   it('keeps everything inside the box, ring included', () => {
-    for (const weapon of [Weapon.None, Weapon.RocketLauncher, Weapon.Railgun]) {
+    for (const weapon of [Weapon.None, Weapon.RocketLauncher, Weapon.Railgun, Weapon.Shield]) {
       const spec = crosshairFor(weapon)
       for (const [x1, y1, x2, y2] of [...spec.lines, ...HIT_MARKER_LINES]) {
         for (const value of [x1, y1, x2, y2]) {

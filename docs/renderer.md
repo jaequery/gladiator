@@ -436,7 +436,8 @@ obvious from the trajectory and the shot is what is about to hurt you.
 Both firing poses are distinct states rather than one `fire`, and the run
 carries a direction relative to *facing*, because at arena distance an opponent
 is a few dozen pixels and what you need off them is which way they are moving
-and which weapon just went off.
+and which weapon just went off. The shield has no firing pose, because it never
+fires; what it has instead is the guard, below.
 
 ### Silhouette over fidelity, and no asset licence
 
@@ -455,8 +456,9 @@ boxes and octagonal tubes with positions, sizes and one of three finishes — an
 value with no Babylon in it, `weaponModel.test.ts` can assert the *silhouette*
 without a GPU: the bore is the widest thing on the launcher and it is at the
 front, the body is a tube longer than it is wide, the sight is above it and the
-grip below and behind, and the launcher is at least twice the rail's width so
-the two cannot be confused at arena distance.
+grip below and behind, the launcher is at least twice the rail's width, and the
+shield is wider than it is deep — so no two of them can be confused at arena
+distance.
 
 The rocket launcher is Quake's rocket launcher: an octagonal tube for a body, a
 flared bore at the muzzle with a rocket sitting in it, a sight rail along the
@@ -465,6 +467,24 @@ squared-off breech, and a raked pistol grip. Eight sides and not a smooth
 cylinder, because the flat facets catching the light at different angles are
 what make it read as machined rather than inflated. The railgun is the boxes it
 always was — long, thin, and carrying a scope.
+
+The **shield** (GLAD-ZPE5LN) is a plate, a dark rim, and one accent-coloured
+boss in the middle of its face. Its silhouette is deliberately the inverse of
+both guns: they are long down the barrel and narrow across it, and the shield is
+wide and tall and almost nothing deep, which the same tests assert. That is a
+gameplay requirement rather than a taste — what a raised shield says across the
+arena is "shooting me right now is nearly free for me", and a player who reads
+it as a rail loses the exchange.
+
+**The guard is drawn from a flag, not from motion.** `EntityFlag.Blocking` is
+netstate (`docs/physics-spec.md` §3.6), so both rigs read it every frame: the
+viewmodel moves the plate in towards the centre of the screen and up, and the
+opponent's right arm locks across the chest instead of swinging with the stride.
+Both are applied with **no easing**, which is the opposite of every other term in
+either pose. The block is a bit that is set or clear for a whole tick and it is
+worth 90% of the next hit, so a raise that eased in over 100 ms would be a lie
+for six ticks — the frame the plate is up has to be the frame the player is
+covered.
 
 Each weapon has two lists rather than one scaled: held 25 units from the eye it
 is read in detail, and across the arena it is a few dozen pixels where detail is

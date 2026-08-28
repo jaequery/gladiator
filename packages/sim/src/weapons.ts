@@ -1,17 +1,31 @@
 /**
- * The two weapons. `docs/physics-spec.md` §3.
+ * The three weapons. `docs/physics-spec.md` §3.
  *
  * Which weapon an entity is *holding* is `weapon.ts` — an identity small
  * enough to cross the network, which is why it lives apart from this file
  * (GLAD-PWCON8 reads it to draw an opponent). This file is what the weapons
  * **do**.
  *
- * A rocket launcher and a railgun, both with unlimited ammo, and **nothing
- * else, ever**. That is not a scope note that will age out — it is the design.
- * Rocket Arena removed the item scramble so that a duel is decided by movement
- * and aim, and a third weapon would be a third thing to balance for no skill
- * anyone learns. {@link WEAPONS} is typed as a two-element tuple so that
- * "exactly two" is a fact the typechecker enforces rather than a comment.
+ * A rocket launcher, a railgun and a shield, all with unlimited ammo, and
+ * **nothing else**. The first two decide the duel; the third is the only thing
+ * you can hold that does not shoot.
+ *
+ * ## The shield is not the third gun this file used to forbid
+ *
+ * This header used to say "two weapons, and nothing else, ever", and the reason
+ * it gave still stands: Rocket Arena removed the item scramble so that a duel
+ * is decided by movement and aim, and a third *gun* would be a third set of
+ * numbers to balance for no skill anyone learns. GLAD-ZPE5LN did not add a gun.
+ * The shield deals no damage of any kind — it has no projectile, no trace and
+ * no refire — and holding the guard up costs you every shot you could have
+ * taken while it was up. What it buys is 90% off what a hit costs
+ * (`match/selfDamage.ts`), and only for as long as the button is down, so it is
+ * a timing decision played against an opponent's refire interval rather than a
+ * stat to tune. That is the only kind of thing this arsenal is open to.
+ *
+ * {@link WEAPONS} is a three-element tuple for the reason it was a two-element
+ * one: "exactly this many" should be a fact the typechecker enforces rather
+ * than a comment that quietly stops being true.
  *
  * ## There is no ammo
  *
@@ -21,15 +35,20 @@
  * match cannot end because somebody ran out, and the fairness question the bot
  * raises later ("does it have more shots than I do?") has no room to exist.
  *
- * ## The two of them, side by side
+ * ## The three of them, side by side
  *
- * |              | Rocket launcher | Railgun |
- * | ------------ | --------------- | ------- |
- * | delivery     | 900 qu/s projectile | hitscan, 8192 qu |
- * | direct       | 100             | 100     |
- * | splash       | 100 over 120 qu | none    |
- * | refire       | 800 ms          | 1500 ms |
- * | knockback    | 5 x damage, splash-biased upward | 500 qu/s along the shot |
+ * |              | Rocket launcher | Railgun | Shield |
+ * | ------------ | --------------- | ------- | ------ |
+ * | delivery     | 900 qu/s projectile | hitscan, 8192 qu | nothing leaves it |
+ * | direct       | 100             | 100     | none   |
+ * | splash       | 100 over 120 qu | none    | none   |
+ * | refire       | 800 ms          | 1500 ms | never fires |
+ * | knockback    | 5 x damage, splash-biased upward | 500 qu/s along the shot | deals none, and blocks none |
+ *
+ * The shield's last cell is the one worth reading twice: a blocked hit still
+ * pushes you the full distance. The guard changes what a hit *costs*, never
+ * where it puts you, for the same reason the four self-damage modes do not
+ * change a rocket jump — see {@link fireWeapons} and `damage.ts`.
  *
  * The railgun having knockback at all is the entry most often got wrong. It is
  * in `Weapon_Railgun_Fire`: the shot is passed `forward` as its damage
@@ -128,14 +147,15 @@ export const ROCKET_LIFETIME_MS = 15000
 export const RAILGUN_RANGE = 8192
 
 /**
- * The weapon table. Exactly two entries, and the tuple type is the enforcement.
+ * The weapon table. Exactly three entries, and the tuple type is the
+ * enforcement.
  *
  * Not indexed by {@link Weapon} — `Weapon.None` is a real value there (a
  * corpse, a projectile, a spectator) and has no entry here, so the lookup goes
  * through {@link weaponDef} rather than through a subscript that would be
- * wrong for exactly one of the three.
+ * wrong for exactly one of the four.
  */
-export const WEAPONS: readonly [WeaponDef, WeaponDef] = [
+export const WEAPONS: readonly [WeaponDef, WeaponDef, WeaponDef] = [
   {
     id: Weapon.RocketLauncher,
     name: 'rocket launcher',
@@ -164,6 +184,25 @@ export const WEAPONS: readonly [WeaponDef, WeaponDef] = [
     lifetimeTicks: 0,
     ammo: AMMO_UNLIMITED,
   },
+  {
+    // Every offensive number is zero, and that is the entry rather than an
+    // omission: the shield is held like a weapon, encoded like a weapon and
+    // drawn like a weapon, and the one thing it does not do is deal damage.
+    // What it *does* is `EntityFlag.Blocking` and `match/selfDamage.ts`, both
+    // reached without this table. GLAD-ZPE5LN.
+    id: Weapon.Shield,
+    name: 'shield',
+    damage: 0,
+    splashDamage: 0,
+    splashRadius: 0,
+    refireMs: 0,
+    refireTicks: 0,
+    speed: 0,
+    range: 0,
+    lifetimeMs: 0,
+    lifetimeTicks: 0,
+    ammo: AMMO_UNLIMITED,
+  },
 ]
 
 /**
@@ -171,7 +210,9 @@ export const WEAPONS: readonly [WeaponDef, WeaponDef] = [
  * the rocket launcher, which is what a player spawns holding.
  */
 export function weaponDef(weapon: number): WeaponDef {
-  return weapon === Weapon.Railgun ? WEAPONS[1] : WEAPONS[0]
+  if (weapon === Weapon.Railgun) return WEAPONS[1]
+  if (weapon === Weapon.Shield) return WEAPONS[2]
+  return WEAPONS[0]
 }
 
 /* --------------------------------------------------------------------------
@@ -206,6 +247,72 @@ export function muzzlePoint(out: MutVec3, entity: EntityState, forward: Vec3): M
 }
 
 /* --------------------------------------------------------------------------
+ * The hold phase
+ * ----------------------------------------------------------------------- */
+
+/**
+ * Write what every player is *holding*, and whether their guard is up. One
+ * tick's worth, before anybody fires.
+ *
+ * ## Why this is its own pass and not two lines inside {@link fireWeapons}
+ *
+ * That is where the weapon write used to live, and moving it out is the whole
+ * of GLAD-ZPE5LN's ordering. A raised guard is state that another player's shot
+ * reads *in the same tick*: the rail fired by slot 0 resolves damage against
+ * slot 1's flags. If the flag were written in the firing loop, slot 1's guard
+ * would still be last tick's when slot 0's shot landed, and slot 0's would be
+ * current when slot 1's landed — the block would work for the player in the
+ * higher slot and half-work for the other, which is exactly the sort of rule
+ * nobody can see and everybody feels. Every guard is therefore up or down for
+ * the whole tick before the first shot leaves a muzzle.
+ *
+ * Hoisting the weapon write along with it is behaviourally neutral: nothing
+ * between the movement phase and the fire phase reads `EntityState.weapon`.
+ *
+ * ## What counts as blocking
+ *
+ * The shield in your hands **and** the attack button down. It reuses the attack
+ * bit rather than claiming a new one, because holding a guard and pulling a
+ * trigger are the same gesture from the player's side — you press the button
+ * and the thing in your hands does its one job — and because a new button bit
+ * would be a `UserCmd` change and a protocol change for a thing the existing
+ * bit already says. The cost is stated in the same place: a player behind their
+ * guard is a player not shooting.
+ *
+ * A corpse keeps the weapon it died holding, because the renderer draws it, and
+ * loses its guard — you cannot block from the floor. So does everyone while
+ * `steering` is false: nobody is taking commands between rounds, and a flag
+ * left set there would still be set on the tick the next round's damage starts
+ * landing.
+ */
+export function holdWeapons(state: GameState, inputs: TickInputs, steering: boolean): void {
+  for (const entity of state.entities) {
+    if (entity.kind !== EntityKind.Player) continue
+
+    if (!steering || (entity.flags & EntityFlag.Dead) !== 0) {
+      entity.flags &= ~EntityFlag.Blocking
+      continue
+    }
+
+    const cmd = (entity.slot < 0 ? null : inputs[entity.slot]) ?? NULL_CMD
+
+    // The held weapon follows the command every tick, and this is the only
+    // place `EntityState.weapon` is written for a player — the renderer reads
+    // it from there for both players (GLAD-PWCON8). There is no switch
+    // animation and no raise delay: with one shared refire timer, a switch
+    // already costs whatever is left of the last shot's interval, which is the
+    // only cost that changes what a player can do. Dropping the guard to shoot
+    // is therefore free, and paid for in the shot you did not take.
+    entity.weapon =
+      isWeapon(cmd.weapon) && cmd.weapon !== Weapon.None ? cmd.weapon : Weapon.RocketLauncher
+
+    const guardUp = entity.weapon === Weapon.Shield && (cmd.buttons & BUTTON_ATTACK) !== 0
+    if (guardUp) entity.flags |= EntityFlag.Blocking
+    else entity.flags &= ~EntityFlag.Blocking
+  }
+}
+
+/* --------------------------------------------------------------------------
  * The fire phase
  * ----------------------------------------------------------------------- */
 
@@ -237,17 +344,14 @@ export function fireWeapons(
 
     const cmd = (entity.slot < 0 ? null : inputs[entity.slot]) ?? NULL_CMD
 
-    // The held weapon follows the command every tick, and this is the only
-    // place `EntityState.weapon` is written for a player — the renderer reads
-    // it from there for both players (GLAD-PWCON8). There is no switch
-    // animation and no raise delay: with two weapons and one shared refire
-    // timer, a switch already costs whatever is left of the last shot's
-    // interval, which is the only cost that changes what a player can do.
-    entity.weapon = isWeapon(cmd.weapon) && cmd.weapon !== Weapon.None
-      ? cmd.weapon
-      : Weapon.RocketLauncher
-
     if ((cmd.buttons & BUTTON_ATTACK) === 0) continue
+
+    // The shield has no trigger. The same button that would have fired has
+    // already raised the guard in {@link holdWeapons}, and it deliberately
+    // leaves the refire timer alone: blocking neither spends a shot nor delays
+    // the next one, so the only thing it costs is the time it takes up.
+    if (entity.weapon === Weapon.Shield) continue
+
     if (state.tick < entity.nextFireTick) continue
 
     fireWeapon(state, world, entity, entity.weapon, hooks)
@@ -288,6 +392,12 @@ export function fireWeapon(
   weapon: number,
   hooks: TickHooks | null = null,
 ): void {
+  // Nothing leaves a shield. Stated here as well as in the fire phase because
+  // this is exported: the bot's aim tests and the netcode's replay both call it
+  // directly, and a shot from a shield would otherwise be a muzzle flash and a
+  // refire timer for a weapon that has neither.
+  if (weapon === Weapon.Shield) return
+
   const def = weaponDef(weapon)
 
   // Both halves of the same event: `lastFireTick` looks back, for the muzzle

@@ -5,13 +5,13 @@
  * `scripts/e2e.mjs` proves the *platform* — that the page loads, that the
  * pointer locks, that the client and the server agree on a hash. This proves
  * the **game**: that the thing the platform is carrying is a Rocket Arena duel
- * with two weapons in it, playable alone against a bot and playable against
+ * with three weapons in it, playable alone against a bot and playable against
  * another person over a socket.
  *
  *   1. the arena renders — a WebGL2 or WebGPU context, `arena1` loaded, frames
  *      drawn, and a screenshot written so a human can look at it
- *   2. exactly two weapons, and no third one reachable from an input
- *   3. neither weapon's ammo depletes over a sustained burst
+ *   2. exactly three weapons, and no fourth one reachable from an input
+ *   3. neither weapon that fires depletes its ammo over a sustained burst
  *   4. two independent browser contexts join one room by code and duel
  *   5. single-player seats a bot that moves, arms itself and hunts — the
  *      both-weapons half of that criterion is asserted deterministically over a
@@ -317,18 +317,18 @@ try {
   check('the first client connects over WebSocket', hostLive)
 
   /* ---------------------------------------------------------------------- *
-   * 2 and 3. Two weapons, and neither runs out
+   * 2 and 3. Three weapons, and none of them runs out
    *
    * On this page rather than the single-player one, because here the second
    * seat is still empty: nobody is shooting back, so a burst that runs the full
    * ten seconds is a burst that was not cut short by dying.
    * ---------------------------------------------------------------------- */
-  console.log('\nacceptance: 2, 3 — two weapons, unlimited ammo')
+  console.log('\nacceptance: 2, 3 — three weapons, unlimited ammo')
   check('the pointer locks so input reaches the game', await enterArena(host))
 
-  // Every digit a player could press. Only 1 and 2 name a weapon
-  // (`input/controller.ts`), so anything beyond those two turning up here is a
-  // third weapon somebody can reach — which is exactly the check.
+  // Every digit a player could press. Only 1, 2 and 3 name a weapon
+  // (`input/controller.ts`), so anything beyond those three turning up here is
+  // a fourth weapon somebody can reach — which is exactly the check.
   const held = new Set()
   for (const key of ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0']) {
     await host.keyboard.press(key)
@@ -337,8 +337,11 @@ try {
     if (s?.hud?.self?.present) held.add(s.hud.self.weaponName)
   }
   check(
-    'exactly two weapons are reachable from an input',
-    held.size === 2 && held.has('rocket launcher') && held.has('railgun'),
+    'exactly three weapons are reachable from an input',
+    held.size === 3 &&
+      held.has('rocket launcher') &&
+      held.has('railgun') &&
+      held.has('shield'),
     [...held].join(', '),
   )
 
@@ -352,7 +355,9 @@ try {
   // just as fast at the end of a burst as at the start, which is exactly what a
   // magazine, a reserve or a regenerating pool would each break in its own way.
   // The exhaustive version — ten simulated minutes of held trigger, cadence
-  // asserted tick for tick — is `packages/sim/src/weapons.test.ts`.
+  // asserted tick for tick — is `packages/sim/src/weapons.test.ts`. The shield
+  // is not in the loop below because it has no shot to run out of; that it
+  // fires nothing at all is asserted in the same file.
   const BURST_MS = 12_000
   for (const [key, name] of [
     ['1', 'rocket launcher'],

@@ -205,6 +205,7 @@ export type { MatchScore } from './match/round.ts'
 
 export {
   ARMOR_PROTECTION,
+  BLOCK_DAMAGE_SCALE,
   DEFAULT_SELF_DAMAGE,
   MIN_DAMAGE,
   SELF_DAMAGE_SCALE,
@@ -468,6 +469,7 @@ export {
   WEAPONS,
   fireWeapon,
   fireWeapons,
+  holdWeapons,
   muzzlePoint,
   refireTicksOf,
   spawnProjectile,

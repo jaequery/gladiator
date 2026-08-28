@@ -22,6 +22,8 @@ import {
   RAILGUN_WORLD,
   ROCKET_LAUNCHER_VIEW,
   ROCKET_LAUNCHER_WORLD,
+  SHIELD_VIEW,
+  SHIELD_WORLD,
   TUBE_SIDES,
   type WeaponPart,
   buildWeapon,
@@ -133,7 +135,34 @@ describe.each(LAUNCHERS)('the rocket launcher (%s)', (_which, parts) => {
   })
 })
 
-describe('the two weapons', () => {
+describe.each([
+  ['first person', SHIELD_VIEW],
+  ['world', SHIELD_WORLD],
+] as const)('the shield (%s)', (_which, parts) => {
+  it('is a plate: wider than it is deep, which is the inverse of a gun', () => {
+    // The one silhouette requirement. Both guns are long down the barrel and
+    // narrow across it; the shield has to be the other way round, or an
+    // opponent cannot tell at a glance that shooting them is nearly free.
+    const plate = named(parts, 'plate')
+    const [front, back] = partSpan(plate)
+    expect(partWidth(plate)).toBeGreaterThan((back - front) * 3)
+  })
+
+  it('holds its face out in front, not edge-on', () => {
+    const [front] = outline(parts)
+    // Local `-z` is forward, so the whole thing sits ahead of the grip.
+    expect(front).toBeLessThan(-5)
+  })
+
+  it('spends its one accent on the boss in the middle of the face', () => {
+    const accents = parts.filter((part) => part.finish === 'accent')
+    expect(accents.map((part) => part.name)).toEqual(['boss'])
+    expect(accents[0]?.at[0]).toBe(0)
+    expect(accents[0]?.at[1]).toBe(0)
+  })
+})
+
+describe('the weapons together', () => {
   it('cannot be confused: one is a fat tube, the other a thin rod', () => {
     for (const [launcher, rail] of [
       [ROCKET_LAUNCHER_VIEW, RAILGUN_VIEW],
@@ -150,7 +179,7 @@ describe('the two weapons', () => {
     // A sanity bound rather than a design claim: a weapon that has grown by an
     // order of magnitude is a typo, and a typo here is invisible until somebody
     // looks at an opponent.
-    for (const parts of [ROCKET_LAUNCHER_WORLD, RAILGUN_WORLD]) {
+    for (const parts of [ROCKET_LAUNCHER_WORLD, RAILGUN_WORLD, SHIELD_WORLD]) {
       for (const part of parts) expect(partWidth(part)).toBeLessThan(20)
     }
   })

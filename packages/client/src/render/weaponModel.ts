@@ -1,5 +1,5 @@
 /**
- * What the two weapons are made of.
+ * What the weapons are made of.
  *
  * A weapon is drawn twice, in two places, at two sizes: in your own hands
  * (`viewmodel.ts`) and in your opponent's (`playerModel.ts`). Before this
@@ -45,6 +45,18 @@
  * always were — long, thin, and carrying a scope, so the two outlines still
  * cannot be confused at arena distance. It is here because the builder has to
  * be one code path or this module's whole argument goes away.
+ *
+ * ## The shield is the one that is not a gun
+ *
+ * GLAD-ZPE5LN. It is a broad flat plate with a rim and a boss, and its
+ * silhouette is deliberately the *inverse* of both guns: they are long down the
+ * barrel and narrow across it, and the shield is wide and tall and almost
+ * nothing deep. That is the whole readability requirement, because what the
+ * shield says across the arena is "shooting me right now is nearly free for
+ * me", and a player who mistakes it for a rail loses the exchange. Its accent
+ * part is the boss at the centre of the face, for the same reason the launcher
+ * spends its accent on the warhead: the warmest colour goes on the end of the
+ * thing that matters, and on a shield that is the face pointed at you.
  *
  * ## Two sizes, one weapon
  *
@@ -367,6 +379,35 @@ export const RAILGUN_VIEW: readonly WeaponPart[] = [
 export const RAILGUN_WORLD: readonly WeaponPart[] = [
   { kind: 'box', name: 'body', finish: 'metal', size: [4.5, 4.5, 34], at: [0, 0, -14] },
   { kind: 'box', name: 'scope', finish: 'metal', size: [3, 7, 12], at: [0, 5, -6] },
+]
+
+/**
+ * The shield: a plate, a rim around it, a boss in the middle of it, and a grip
+ * behind. GLAD-ZPE5LN.
+ *
+ * Held out in front rather than edge-on, because the guard is a thing the
+ * player raises deliberately and has to see they have raised. The rim is `dark`
+ * on all four sides so the plate reads as a plate and not as a floating
+ * rectangle of the same steel as the wall behind it, and the plate is a couple
+ * of units deep rather than a plane so it catches a different light on its edge
+ * as the view turns.
+ */
+export const SHIELD_VIEW: readonly WeaponPart[] = [
+  { kind: 'box', name: 'plate', finish: 'metal', size: [17, 23, 2], at: [0, 0, -9] },
+  { kind: 'box', name: 'rim.left', finish: 'dark', size: [2, 25, 3.4], at: [-8.5, 0, -9] },
+  { kind: 'box', name: 'rim.right', finish: 'dark', size: [2, 25, 3.4], at: [8.5, 0, -9] },
+  { kind: 'box', name: 'rim.top', finish: 'dark', size: [17, 2, 3.4], at: [0, 11.5, -9] },
+  { kind: 'box', name: 'rim.bottom', finish: 'dark', size: [17, 2, 3.4], at: [0, -11.5, -9] },
+  { kind: 'tube', name: 'boss', finish: 'accent', diameter: 7, length: 2.6, at: [0, 0, -11] },
+  { kind: 'box', name: 'grip', finish: 'dark', size: [2.4, 6, 3], at: [0, -2, -5] },
+]
+
+/** The same plate, fewer parts, for an opponent a few dozen pixels across. */
+export const SHIELD_WORLD: readonly WeaponPart[] = [
+  { kind: 'box', name: 'plate', finish: 'metal', size: [15, 21, 2.5], at: [0, 0, -8] },
+  { kind: 'box', name: 'rim.left', finish: 'dark', size: [2, 23, 4], at: [-7.5, 0, -8] },
+  { kind: 'box', name: 'rim.right', finish: 'dark', size: [2, 23, 4], at: [7.5, 0, -8] },
+  { kind: 'tube', name: 'boss', finish: 'accent', diameter: 6.5, length: 3, at: [0, 0, -10] },
 ]
 
 /* --------------------------------------------------------------------------

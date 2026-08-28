@@ -3,8 +3,8 @@
  * in. `docs/physics-spec.md` §7.1.
  *
  * The Rocket Arena format in one paragraph. A **round** is one life each: both
- * players stand up at 100 health and 100 armour, holding both weapons, and the
- * round ends when one of them dies. A **match** is a sequence of rounds, first
+ * players stand up at 100 health and 100 armour, holding the whole arsenal, and
+ * the round ends when one of them dies. A **match** is a sequence of rounds, first
  * to {@link MatchRules.roundsToWin}. Nothing is picked up, nothing regenerates,
  * and nothing carries from one round to the next except the score.
  *
